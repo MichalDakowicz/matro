@@ -185,3 +185,5 @@ body:not(:has(#detail-overlay)) .dock-back{width:0;margin-right:0;border-width:0
 /* Skip button rests near the bottom while the controls are hidden and rises above the seeker when they appear. */
 .segment-tools{transition:bottom .4s cubic-bezier(.2,.75,.15,1),opacity .2s}.stage.idle .segment-tools{bottom:40px}body.reduce-motion .segment-tools{transition:opacity .2s}
 .key-hint{margin-left:10px;padding:2px 7px;border-radius:6px;border:1px solid #ffffff59;font:600 11px/1.4 Geist,'Segoe UI',system-ui,sans-serif;color:#ffffffd9;background:#ffffff14}
+/* A fuller seek bar: 6px track, larger handle; skip ranges sit on the same track. */
+input[type=range].seek::-webkit-slider-runnable-track{height:6px;border-radius:6px}input[type=range].seek::-webkit-slider-thumb{width:13px;height:13px;margin-top:-3.5px}.seek-marks{height:6px;margin-top:-3px}.seek-marks span{height:6px;border-radius:3px}

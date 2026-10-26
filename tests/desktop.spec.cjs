@@ -351,3 +351,49 @@ test('scanner remains active in gentle mode while video keeps playing', async ()
     await expect.poll(() => page.evaluate(() => window.matro.scannerStatus()).then(s => s.playback)).toBe(false);
   } finally { await app.close(); }
 });
+
+test('leaving during an outro marks the episode watched and moves Continue watching on', async () => {
+  const f = await fixtures(), next = path.join(f.dir, 'Northbound.S01E04.Outro.mkv'); await fs.copyFile(f.mkv, next);
+  const items = [f.mkv, next].map(file => describe(file)), profile = path.join(f.dir, `outro-profile-${Date.now()}`); await fs.mkdir(profile);
+  // Outro from 7 s of a 12 s episode: well before the usual end-of-file threshold, so only the outro rule can complete it.
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items, folders: [], queue: [], progress: {}, markers: { [items[0].id]: [{ type: 'outro', start: 7, end: 11, source: 'manual' }] }, preferences: { autoplay: false, volume: .3, motion: 'off' } }));
+  const app = await electron.launch(launchOptions(profile)), page = await app.firstWindow();
+  try {
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: 'Play now', exact: true }).click();
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.1);
+    await page.getByRole('button', { name: 'Pause', exact: true }).click();
+    await page.locator('#seek').evaluate(el => { el.value = '8'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+    await expect(page.locator('#position')).toHaveText('0:08');
+    await expect.poll(() => page.locator('video').evaluate(v => v.readyState)).toBeGreaterThanOrEqual(2);
+    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    expect((await page.evaluate(() => window.matro.load())).progress[items[0].id].completed).toBe(true);
+    await expect(page.locator('.continue-card [data-play]')).toHaveAttribute('data-play', items[1].id);
+  } finally { await app.close(); }
+});
+
+test('subtitles stay right after seeks and 5-second skips, paused or playing', async () => {
+  const f = await fixtures(), items = [describe(f.mkv)], profile = path.join(f.dir, `subtitle-seek-profile-${Date.now()}`); await fs.mkdir(profile);
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items, folders: [], queue: [], progress: {}, preferences: { autoplay: false, volume: .3, motion: 'off' } }));
+  const app = await electron.launch(launchOptions(profile)), page = await app.firstWindow();
+  const active = () => page.locator('video').evaluate(v => [...(v.textTracks[0]?.activeCues || [])].map(c => c.text).join('|'));
+  try {
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: 'Play now', exact: true }).click();
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.3);
+    await page.getByRole('button', { name: 'Pause', exact: true }).click();
+    await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
+    await page.locator('[data-subtitle="3"]').click();
+    await expect.poll(active).toBe('A place for your collection.');
+    await page.getByRole('button', { name: 'Close audio and subtitles' }).click();
+    // Paused: a seek that restarts the stream must show the line for the new moment without pressing play.
+    await page.locator('#seek').evaluate(el => { el.value = '6'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+    await expect.poll(active).toBe('Subtitles after a seek.');
+    await page.getByRole('button', { name: 'Back 5 seconds' }).click();
+    await expect.poll(active).toBe('A place for your collection.');
+    // Playing: after a forward skip only the current line shows, not the one that ended before the jump.
+    await page.getByRole('button', { name: 'Play', exact: true }).click();
+    await page.getByRole('button', { name: 'Forward 5 seconds' }).click();
+    await expect.poll(active).toBe('Subtitles after a seek.');
+  } finally { await app.close(); }
+});
