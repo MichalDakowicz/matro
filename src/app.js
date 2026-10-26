@@ -143,7 +143,10 @@ function remember() {
   const old = library.progress[current.id] || {};
   const position = Math.min(info.duration || Infinity, offset + video.currentTime);
   if (!position && !old.position) return;
-  library.progress[current.id] = { ...old, position, duration: info.duration, completed: !!old.completed || (info.duration > 0 && position >= info.duration - finishMargin(info.duration)), hidden: false, updated: Date.now() };
+  // Reaching an outro (skipping it, or leaving during the credits) counts as watched, so Continue watching moves to the next episode.
+  // Only outros in the second half count, so a mis-detected early marker can't complete an episode.
+  const pastOutro = info.duration > 0 && (library.markers?.[current.id] || []).some(s => s.type === 'outro' && s.start > info.duration / 2 && position >= s.start);
+  library.progress[current.id] = { ...old, position, duration: info.duration, completed: !!old.completed || pastOutro || (info.duration > 0 && position >= info.duration - finishMargin(info.duration)), hidden: false, updated: Date.now() };
 }
 function groups(kind) {
   const map = new Map();
@@ -647,7 +650,8 @@ async function loadStream(position, shouldPlay = true, token = generation) {
   const result = await api.stream({ id: current.id, offset: position, audio, bitmapSubtitle: bitmapTrack()?.index ?? null, subtitleDelay: delay }); if (token !== generation) return;
   offset = result.offset; video.src = result.url; video.load(); applySubtitle(); updateTime();
   if (playIntent) { try { await video.play(); } catch (error) { if (token === generation && error.name !== 'AbortError') { loading = false; playbackError = error.message; showMessage(); } } }
-  else { video.addEventListener('loadeddata', () => { loading = false; showMessage(); }, { once: true }); }
+  // A paused stream only gets its first frame now; re-apply cue timings so the subtitle for this moment appears without pressing play.
+  else { video.addEventListener('loadeddata', () => { loading = false; showMessage(); adjustCues(); }, { once: true }); }
 }
 async function seek(position) {
   if (!info.duration || !current) return;
@@ -758,14 +762,35 @@ function renderTracks() {
     ${info.chapters.length ? `<div class="player-chapters">${info.chapters.map((c, index) => `<button class="chapter-button" data-chapter="${index}">${esc(c.title)} · ${fmt(c.start)}</button>`).join('')}</div>` : ''}</section>`;
 }
 function applySubtitle() {
-  $('#subtitle-track')?.remove(); if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); subtitleUrl = null; trackCues = [];
+  $('#subtitle-track')?.remove(); if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); subtitleUrl = null; trackCues = []; cueTrack = null;
   if (!subtitleText || !video) return;
   subtitleUrl = URL.createObjectURL(new Blob([subtitleText], { type: 'text/vtt' }));
   const track = document.createElement('track'); track.id = 'subtitle-track'; track.kind = 'subtitles'; track.label = 'Selected subtitles'; track.src = subtitleUrl; track.default = true;
-  track.addEventListener('load', () => { track.track.mode = 'showing'; trackCues = [...track.track.cues].map(cue => { cue.line = -5; return { cue, start: cue.startTime, end: cue.endTime }; }); adjustCues(); });
+  // A track replaced by a quicker seek may still finish loading; only the current one may take over the cues.
+  track.addEventListener('load', () => { if (!track.isConnected) return; track.track.mode = 'showing'; cueTrack = track.track; trackCues = [...cueTrack.cues].map(cue => { cue.line = -5; return { cue, start: cue.startTime, end: cue.endTime }; }); adjustCues(); });
   video.append(track);
 }
-function adjustCues() { for (const { cue, start, end } of trackCues) { const endTime = end - offset + delay; cue.startTime = Math.max(0, start - offset + delay); cue.endTime = Math.max(.001, endTime); } }
+// Cue times are relative to the current stream, which starts at `offset`. Every timing change (a new stream after a seek
+// or skip, or a delay change) rebuilds the track's cue list: lines that ended before the stream start are left off, so
+// they can't flash up on the first frame, and adding cues makes Chromium re-check what is on screen even while paused.
+let cueTrack = null;
+function adjustCues() {
+  if (!cueTrack) return;
+  for (const { cue, start, end } of trackCues) {
+    if (cue.track) cueTrack.removeCue(cue);
+    const from = start - offset + delay, to = end - offset + delay;
+    if (to <= 0) continue;
+    cue.startTime = Math.max(0, from); cue.endTime = to; cueTrack.addCue(cue);
+  }
+  refreshCues();
+}
+// Paused, Chromium only re-checks the on-screen cue when a seek happens. A same-time seek forces it, but only inside the
+// seekable range: these streams report little or none, and seeking outside it would snap playback back to the stream start.
+function refreshCues() {
+  if (!video || !video.paused || video.readyState < 1) return;
+  const time = video.currentTime;
+  for (let i = 0; i < video.seekable.length; i++) if (time >= video.seekable.start(i) && time <= video.seekable.end(i)) { video.currentTime = time; return; }
+}
 async function pickSubtitle(value) {
   const token = ++subtitleGeneration; const id = current.id;
   const wasBitmap = !!bitmapTrack();
