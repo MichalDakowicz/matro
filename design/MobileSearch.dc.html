@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Matro mobile search</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0A0A0B}
+a{color:#F3F1EC}a:hover{color:#FFFFFF}
+.scroller::-webkit-scrollbar{display:none}
+.chip{border:0;font:inherit;font-size:14px;font-weight:600;height:40px;padding:0 16px;border-radius:999px;cursor:pointer;flex:none}
+.ib{width:44px;height:44px;border-radius:999px;border:0;background:rgba(255,255,255,0.08);color:#F3F1EC;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;flex:none}
+.navbtn{flex:1;height:52px;border:0;background:transparent;border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;text-decoration:none}
+.row{display:flex;align-items:center;gap:14px;width:100%;border:0;background:transparent;color:#F3F1EC;font:inherit;text-align:left;cursor:pointer;padding:8px;border-radius:18px;text-decoration:none}
+.row:hover{background:rgba(255,255,255,0.05)}
+</style>
+</helmet>
+<div style="position: relative; width: 390px; height: 844px; background: #0A0A0B; color: #F3F1EC; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; overflow: hidden; border-radius: 44px">
+
+  <div class="scroller" style="position: absolute; inset: 0; overflow-y: auto; scrollbar-width: none; padding: 24px 0 120px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px">
+
+    <h1 style="margin: 0; padding: 0 20px; font-size: 28px; font-weight: 700; letter-spacing: -0.03em">Search</h1>
+
+    <div style="padding: 0 20px">
+      <label style="display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 8px 0 18px; border-radius: 999px; background: rgba(255,255,255,0.08); color: #A9A59D">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="M20 20l-4-4"></path></svg>
+        <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Search your server</span>
+        <input type="text" placeholder="Titles on your server" value="{{q}}" onChange="{{onSearch}}" style="flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: #F3F1EC; font: inherit; font-size: 16px">
+        <sc-if value="{{hasQ}}" hint-placeholder-val="{{ false }}">
+          <button class="ib" aria-label="Clear search" onClick="{{clearQ}}" style="width: 36px; height: 36px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+        </sc-if>
+      </label>
+    </div>
+
+    <div class="scroller" style="display: flex; gap: 8px; padding: 0 20px; overflow-x: auto; scrollbar-width: none">
+      <sc-for list="{{kinds}}" as="k" hint-placeholder-count="3">
+        <button class="chip" onClick="{{k.pick}}" aria-pressed="{{k.sel}}" style="background: {{k.bg}}; color: {{k.fg}}">{{k.label}}</button>
+      </sc-for>
+      <span style="flex: none; width: 1px; background: rgba(255,255,255,0.12); margin: 8px 4px"></span>
+      <sc-for list="{{filters}}" as="f" hint-placeholder-count="4">
+        <button class="chip" onClick="{{f.pick}}" aria-pressed="{{f.sel}}" style="background: {{f.bg}}; color: {{f.fg}}">{{f.label}}</button>
+      </sc-for>
+    </div>
+
+    <!-- idle: recent -->
+    <sc-if value="{{idle}}" hint-placeholder-val="{{ true }}">
+      <section style="display: flex; flex-direction: column; gap: 6px; padding: 0 12px">
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 8px">
+          <h2 style="margin: 0; font-size: 17px; font-weight: 700">Recent</h2>
+          <button onClick="{{clearRecent}}" style="border: 0; background: transparent; color: #A9A59D; font: inherit; font-size: 13px; cursor: pointer; padding: 8px 10px; border-radius: 999px">Clear</button>
+        </div>
+        <sc-for list="{{recent}}" as="r" hint-placeholder-count="3">
+          <button class="row" onClick="{{r.use}}">
+            <span style="width: 44px; height: 44px; border-radius: 999px; background: rgba(255,255,255,0.06); display: flex; align-items: center; justify-content: center; color: #A9A59D; flex: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><path d="M12 8v4l3 2"></path></svg></span>
+            <span style="font-size: 15px; font-weight: 600">{{r.text}}</span>
+          </button>
+        </sc-for>
+        <p style="margin: 14px 8px 0; font-size: 13px; line-height: 1.5; color: #8E8A83">Search looks through titles, file names and track languages on your server.</p>
+      </section>
+    </sc-if>
+
+    <!-- results -->
+    <sc-if value="{{showResults}}" hint-placeholder-val="{{ false }}">
+      <section style="display: flex; flex-direction: column; gap: 4px; padding: 0 12px">
+        <p style="margin: 0 8px 6px; font-size: 13px; color: #A9A59D">{{resultLabel}}</p>
+        <sc-for list="{{results}}" as="it" hint-placeholder-count="5">
+          <a href="MobileLibrary.dc.html" class="row">
+            <span style="flex: none; width: 56px; height: 84px; border-radius: 14px; background: {{it.tone}}"></span>
+            <span style="display: flex; flex-direction: column; gap: 3px; min-width: 0">
+              <span style="font-size: 15px; font-weight: 700">{{it.title}}</span>
+              <span style="font-size: 12px; color: #A9A59D">{{it.meta}}</span>
+              <span style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 2px">
+                <sc-for list="{{it.tags}}" as="t" hint-placeholder-count="2">
+                  <span style="font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: rgba(255,255,255,0.08); color: #D6D2CA">{{t}}</span>
+                </sc-for>
+              </span>
+            </span>
+          </a>
+        </sc-for>
+        <sc-if value="{{noResults}}" hint-placeholder-val="{{ false }}">
+          <p style="margin: 32px 8px; text-align: center; font-size: 15px; color: #A9A59D">Nothing on your server matches.</p>
+        </sc-if>
+      </section>
+    </sc-if>
+  </div>
+
+  <nav aria-label="Main" style="position: absolute; left: 20px; right: 20px; bottom: 28px; height: 64px; padding: 6px; box-sizing: border-box; border-radius: 999px; background: rgba(28,28,31,0.92); backdrop-filter: blur(20px); box-shadow: 0 16px 40px rgba(0,0,0,0.5); display: flex; gap: 4px">
+    <a href="MobileLibrary.dc.html" class="navbtn" aria-label="Library" style="color: #A9A59D"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11l8-6.5 8 6.5V19a1.5 1.5 0 0 1-1.5 1.5h-4V15h-5v5.5h-4A1.5 1.5 0 0 1 4 19z"></path></svg></a>
+    <a href="MobileSearch.dc.html" class="navbtn" aria-label="Search" aria-current="page" style="background: #F3F1EC; color: #0A0A0B"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="M20 20l-4-4"></path></svg></a>
+    <a href="MobileQueue.dc.html" class="navbtn" aria-label="Queue" style="color: #A9A59D"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h12M4 12h12M4 18h8"></path><path d="M17 15v6l4.5-3z"></path></svg></a>
+    <a href="MobileServer.dc.html" class="navbtn" aria-label="Server" style="color: #A9A59D"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2.5"></rect><rect x="3" y="13" width="18" height="7" rx="2.5"></rect><path d="M7 7.5h.01M7 16.5h.01"></path></svg></a>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { q: '', kind: 'all', f: {}, recent: ['harbour', 'cartographers', 'Varna'] };
+  }
+  items() {
+    return [
+      { title: 'Northbound', kind: 'show', meta: 'Series · 2025 · 2 seasons', tone: '#3A332B', k4: false, pl: true, unwatched: false, isNew: true },
+      { title: 'Low Tide', kind: 'show', meta: 'Series · 2024 · 1 season', tone: '#24323A', k4: false, pl: false, unwatched: false },
+      { title: 'The Cartographers', kind: 'show', meta: 'Series · 2021 · 3 seasons', tone: '#2F3A2C', k4: true, pl: true, unwatched: true },
+      { title: 'Static Hour', kind: 'show', meta: 'Series · 2023 · 1 season', tone: '#3A2630', k4: false, pl: false, unwatched: true, isNew: true },
+      { title: 'Glass Orchard', kind: 'show', meta: 'Series · 2020 · 2 seasons', tone: '#2C2A3D', k4: false, pl: true, unwatched: true },
+      { title: 'Fieldline', kind: 'show', meta: 'Series · 2022 · 1 season', tone: '#3B2E22', k4: true, pl: false, unwatched: true },
+      { title: 'The Quiet Harbour', kind: 'movie', meta: 'Movie · 2024 · 1 h 52 m', tone: '#2A3530', k4: true, pl: true, unwatched: false, isNew: true },
+      { title: 'Paper Lanterns', kind: 'movie', meta: 'Movie · 2019 · 1 h 38 m', tone: '#372B33', k4: false, pl: false, unwatched: true },
+      { title: 'Last Train to Varna', kind: 'movie', meta: 'Movie · 2021 · 2 h 04 m', tone: '#3A3024', k4: true, pl: true, unwatched: true },
+      { title: 'Saltwater', kind: 'movie', meta: 'Movie · 2017 · 1 h 46 m', tone: '#22323A', k4: false, pl: false, unwatched: false },
+      { title: 'Nine Bridges', kind: 'movie', meta: 'Movie · 2023 · 2 h 11 m', tone: '#30283A', k4: true, pl: false, unwatched: true },
+      { title: 'Afterglow', kind: 'movie', meta: 'Movie · 2022 · 1 h 41 m', tone: '#3A2A26', k4: false, pl: true, unwatched: true }
+    ];
+  }
+  renderVals() {
+    const S = this.state;
+    const q = S.q.trim().toLowerCase();
+    const FIL = [
+      { id: 'k4', label: '4K' }, { id: 'pl', label: 'Polish audio' },
+      { id: 'unwatched', label: 'Unwatched' }, { id: 'isNew', label: 'New' }
+    ];
+    const active = FIL.filter((x) => S.f[x.id]);
+    const anyFilter = active.length > 0 || S.kind !== 'all';
+    const list = this.items().filter((it) =>
+      (S.kind === 'all' || it.kind === S.kind) &&
+      (!q || it.title.toLowerCase().indexOf(q) >= 0) &&
+      active.every((x) => it[x.id])
+    ).map((it) => {
+      const tags = ['MKV'];
+      if (it.k4) tags.push('4K HDR'); else tags.push('1080p');
+      tags.push(it.pl ? 'EN · PL audio' : 'EN audio');
+      if (it.unwatched) tags.push('Unwatched');
+      return { title: it.title, meta: it.meta, tone: it.tone, tags };
+    });
+    const pill = (sel) => ({ bg: sel ? '#F3F1EC' : 'rgba(255,255,255,0.08)', fg: sel ? '#0A0A0B' : '#F3F1EC' });
+    const searching = !!q || anyFilter;
+    return {
+      q: S.q, hasQ: !!S.q,
+      onSearch: (e) => this.setState({ q: e.target.value }),
+      clearQ: () => this.setState({ q: '' }),
+      kinds: [{ id: 'all', label: 'All' }, { id: 'show', label: 'Shows' }, { id: 'movie', label: 'Movies' }].map((k) =>
+        Object.assign({ label: k.label, sel: S.kind === k.id, pick: () => this.setState({ kind: k.id }) }, pill(S.kind === k.id))),
+      filters: FIL.map((x) => Object.assign({
+        label: x.label, sel: !!S.f[x.id],
+        pick: () => this.setState((s) => ({ f: Object.assign({}, s.f, { [x.id]: !s.f[x.id] }) }))
+      }, pill(!!S.f[x.id]))),
+      idle: !searching,
+      recent: S.recent.map((r) => ({ text: r, use: () => this.setState({ q: r }) })),
+      clearRecent: () => this.setState({ recent: [] }),
+      showResults: searching,
+      results: list,
+      resultLabel: list.length + (list.length === 1 ? ' title' : ' titles'),
+      noResults: searching && list.length === 0
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
+contextBridge.exposeInMainWorld('matro', {
+  load: () => ipcRenderer.invoke('library:load'),
+  addFolder: () => ipcRenderer.invoke('library:folder'),
+  openFiles: () => ipcRenderer.invoke('library:files'),
+  importDrop: files => ipcRenderer.invoke('library:import', Array.from(files, file => webUtils.getPathForFile(file))),
+  rescan: () => ipcRenderer.invoke('library:rescan'),
+  searchMetadata: options => ipcRenderer.invoke('metadata:search', options),
+  assignMetadata: options => ipcRenderer.invoke('metadata:assign', options),
+  removeFolder: root => ipcRenderer.invoke('library:remove-folder', root),
+  inspect: id => ipcRenderer.invoke('media:inspect', id),
+  segments: id => ipcRenderer.invoke('media:segments', id),
+  scannerStatus: () => ipcRenderer.invoke('media:scanner'),
+  playbackState: playing => ipcRenderer.invoke('media:playback-state', playing),
+  removeMarker: options => ipcRenderer.invoke('media:remove-marker', options),
+  onSegments: callback => { const listener = (_event, update) => callback(update); ipcRenderer.on('media:segments-progress', listener); return () => ipcRenderer.removeListener('media:segments-progress', listener); },
+  stream: options => ipcRenderer.invoke('media:stream', options),
+  preview: options => ipcRenderer.invoke('media:preview', options),
+  subtitles: options => ipcRenderer.invoke('media:subtitles', options),
+  loadSubtitle: () => ipcRenderer.invoke('media:subtitle-file'),
+  stop: () => ipcRenderer.invoke('media:stop'),
+  save: state => ipcRenderer.invoke('library:save', state),
+  window: action => ipcRenderer.invoke('window:action', action),
+  onMetadata: callback => { const listener = (_event, metadata) => callback(metadata); ipcRenderer.on('library:metadata', listener); return () => ipcRenderer.removeListener('library:metadata', listener); },
+  onFullscreen: callback => { const listener = (_event, fullscreen) => callback(fullscreen); ipcRenderer.on('window:fullscreen', listener); return () => ipcRenderer.removeListener('window:fullscreen', listener); }
+});

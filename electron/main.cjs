@@ -1,0 +1,127 @@
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, session } = require('electron');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+const { scan, describe, groupFolders, extensions, probe, run, ffmpeg } = require('./media.cjs');
+const { createStreamServer } = require('./stream.cjs');
+const { createPreviews } = require('./previews.cjs');
+const { createSegments } = require('./segments.cjs');
+const { createSegmentScheduler } = require('./segment-scheduler.cjs');
+const { readEnv, credentials, createMetadata } = require('./metadata.cjs');
+const previews = createPreviews();
+protocol.registerSchemesAsPrivileged([{ scheme: 'matro', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
+let win, streams, storage, segments, scanner, metadata;
+if (!app.isPackaged && process.env.MATRO_USER_DATA) app.setPath('userData', path.resolve(process.env.MATRO_USER_DATA));
+let state = { folders: [], items: [], progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 } };
+let writeQueue = Promise.resolve();
+function persist() { const contents = JSON.stringify(state); writeQueue = writeQueue.catch(() => {}).then(async () => { await fs.writeFile(storage + '.tmp', contents); await fs.rename(storage + '.tmp', storage); }); return writeQueue; }
+const find = id => { const item = state.items.find(i => i.id === id); if (!item) throw new Error('Media is no longer in the library.'); return item; };
+function handle(channel, fn) { ipcMain.handle(channel, (event, ...args) => { if (event.sender !== win.webContents || !event.senderFrame?.url.startsWith('matro://app/')) throw new Error('Untrusted caller'); return fn(...args); }); }
+async function importFiles(files) {
+  for (const file of files) {
+    if (typeof file !== 'string' || !extensions.has(path.extname(file).slice(1).toLowerCase())) continue;
+    if (!(await fs.stat(file)).isFile()) continue;
+    const item = describe(path.resolve(file));
+    if (!state.items.some(i => i.id === item.id)) state.items.push(item);
+  }
+  await persist(); scanner?.invalidate(); void metadata?.sync(state.items); return state;
+}
+async function rescan() {
+  const results = await Promise.all(state.folders.map(async root => { try { return { root, items: await scan(root) }; } catch { return { root, error: 'Folder unavailable. Check the drive or network connection.' }; } }));
+  for (const result of results) if (result.items) state.items = state.items.filter(i => i.root !== result.root).concat(result.items);
+  state.items = groupFolders([...new Map(state.items.map(item => [item.id, item])).values()]);
+  state.libraryVersion = 2;
+  await persist(); scanner?.invalidate(); void metadata?.sync(state.items); return { ...state, warnings: results.filter(r => r.error).map(r => `${r.root}: ${r.error}`) };
+}
+app.whenReady().then(async () => {
+  storage = path.join(app.getPath('userData'), 'library.json');
+  segments = createSegments(path.join(app.getPath('userData'), 'fingerprints'));
+  // TMDB lookups are opt-in: they run only when a key is configured in .env (project or user-data folder) or the environment.
+  const env = { ...readEnv([path.join(app.getAppPath(), '.env'), path.join(app.getPath('userData'), '.env')]), ...process.env };
+  metadata = createMetadata({ dir: app.getPath('userData'), fetch: (url, options) => net.fetch(url, options), auth: env.MATRO_METADATA === 'off' ? null : credentials(env), onUpdate: snapshot => { if (win && !win.isDestroyed()) win.webContents.send('library:metadata', snapshot); } });
+  try { state = { ...state, ...JSON.parse(await fs.readFile(storage, 'utf8')) }; } catch { /* First launch or damaged state uses a fresh library. */ }
+  if (state.libraryVersion !== 2) await rescan();
+  streams = await createStreamServer();
+  protocol.handle('matro', request => {
+    const url = new URL(request.url);
+    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg','/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
+    const artwork = url.hostname === 'app' && url.pathname.startsWith('/artwork/') && metadata.artworkFile(url.pathname.slice('/artwork/'.length));
+    if (artwork) return net.fetch(pathToFileURL(artwork).href);
+    const file = url.hostname === 'app' && files[url.pathname];
+    return file ? net.fetch(pathToFileURL(path.join(__dirname, '../src', file)).href) : new Response('Not found', { status: 404 });
+  });
+  win = new BrowserWindow({ width: 1440, height: 940, minWidth: 900, minHeight: 640, backgroundColor: '#0a0a0b', title: 'Matro', icon: path.join(__dirname, '../assets/icon.png'), frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false } });
+  // Open maximized, shown only once the first frame is ready so the window never flashes at its default size.
+  win.once('ready-to-show', () => { win.maximize(); win.show(); });
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', event => event.preventDefault());
+  win.on('enter-full-screen', () => win.webContents.send('window:fullscreen', true));
+  win.on('leave-full-screen', () => win.webContents.send('window:fullscreen', false));
+  session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  scanner = createSegmentScheduler({ getState: () => state, engine: segments, persist, onUpdate: update => { if (!win.isDestroyed()) win.webContents.send('media:segments-progress', update); } });
+  handle('library:load', async () => { await metadata.loaded; return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
+  handle('library:folder', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (result.canceled) return state; const root = result.filePaths[0]; const items = await scan(root); if (!state.folders.includes(root)) state.folders.push(root); const existing = new Map(state.items.map(i => [i.id, i])); for (const item of items) existing.set(item.id, item); state.items = groupFolders([...existing.values()]); await persist(); scanner.invalidate(); void metadata.sync(state.items); return state; });
+  handle('library:files', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Media', extensions: [...extensions] }, { name: 'All files', extensions: ['*'] }] }); return result.canceled ? state : importFiles(result.filePaths); });
+  handle('library:import', files => { if (!Array.isArray(files) || files.length > 5000) throw new Error('Invalid file selection'); return importFiles(files); });
+  handle('library:rescan', rescan);
+  handle('metadata:search', options => metadata.search(options?.kind, options?.query, /^\d{4}$/.test(String(options?.year || '')) ? options.year : null));
+  handle('metadata:assign', async options => {
+    const items = state.items.filter(i => (i.kind === 'show' ? i.groupId || i.group : i.id) === options?.key);
+    if (!items.length) throw new Error('That title is no longer in the library.');
+    const snapshot = await metadata.assign(items, options.tmdbId ?? null);
+    if (!win.isDestroyed()) win.webContents.send('library:metadata', snapshot);
+    return snapshot;
+  });
+  handle('library:remove-folder', async root => { state.folders = state.folders.filter(f => f !== root); state.items = state.items.filter(i => i.root !== root); await persist(); scanner.invalidate(); return state; });
+  handle('library:save', async data => {
+    const ids = new Set(state.items.map(i => i.id));
+    if (data.progress && typeof data.progress === 'object') for (const [id, value] of Object.entries(data.progress)) if (ids.has(id) && value && Number.isFinite(value.position) && Number.isFinite(value.duration)) state.progress[id] = { position: Math.max(0, value.position), duration: Math.max(0, value.duration), updated: Number.isFinite(value.updated) ? value.updated : Date.now(), completed: !!value.completed, hidden: !!value.hidden };
+    if (data.markers && typeof data.markers === 'object') {
+      state.markers ||= {};
+      // The scanner owns automatic markers. A renderer's older library snapshot
+      // must not overwrite matches saved while it was on the library screen.
+      for (const [id, markers] of Object.entries(data.markers)) if (ids.has(id) && Array.isArray(markers)) {
+        const manual = markers.filter(s => s.source !== 'automatic' && ['intro', 'outro', 'recap'].includes(s.type) && Number.isFinite(s.start) && Number.isFinite(s.end) && s.start >= 0 && s.end > s.start).map(s => ({ type: s.type, start: s.start, end: s.end, source: 'manual' }));
+        state.markers[id] = [...manual, ...(state.markers[id] || []).filter(s => s.source === 'automatic' && !manual.some(m => m.start < s.end && m.end > s.start))];
+      }
+    }
+    if (Array.isArray(data.queue)) state.queue = [...new Set(data.queue.filter(id => ids.has(id)))];
+    if (data.preferences) state.preferences = { autoplay: !!data.preferences.autoplay, volume: Math.max(0, Math.min(1, Number(data.preferences.volume) || 0)), tracks: data.preferences.tracks && typeof data.preferences.tracks === 'object' ? data.preferences.tracks : {}, motion: ['on', 'off'].includes(data.preferences.motion) ? data.preferences.motion : 'system' };
+    await persist(); scanner.refresh();
+  });
+  handle('media:inspect', async id => { const item = find(id); scanner.setPlayback(true); scanner.setCurrent(id); try { return await probe(item.path); } catch (error) { scanner.setPlayback(false); throw error; } });
+  handle('media:playback-state', value => {
+    const playing = typeof value === 'boolean' ? value : value?.playing, buffering = typeof value === 'object' && value?.buffering === true;
+    if (typeof playing !== 'boolean') throw new Error('Invalid playback state');
+    scanner.setPlayback(playing, buffering);
+  });
+  handle('media:scanner', () => scanner.snapshot());
+  handle('media:segments', options => scanner.request(typeof options === 'string' ? options : options.id, !!options?.force));
+  handle('media:remove-marker', async ({ id, marker }) => {
+    find(id); state.markers ||= {};
+    if ((state.markers[id] || []).some(s => s.source === 'automatic' && s.type === marker.type && s.start === marker.start && s.end === marker.end)) {
+      state.markerDismissals ||= {}; state.markerDismissals[id] ||= [];
+      state.markerDismissals[id].push({ type: marker.type, start: marker.start, end: marker.end });
+    }
+    state.markers[id] = (state.markers[id] || []).filter(s => !(s.type === marker.type && s.start === marker.start && s.end === marker.end));
+    await persist(); return state.markers[id];
+  });
+  handle('media:stream', async options => {
+    const item = find(options.id); const info = await probe(item.path);
+    const offset = Math.max(0, Math.min(info.duration || 864000, Number(options.offset) || 0));
+    const audio = info.audio.find(a => a.index === options.audio)?.index ?? info.audio.find(a => a.default)?.index ?? info.audio[0]?.index ?? null;
+    const bitmapSubtitle = info.video ? info.subtitles.find(s => s.index === options.bitmapSubtitle && s.bitmap)?.index ?? null : null;
+    const subtitleDelay = Math.max(-60, Math.min(60, Number(options.subtitleDelay) || 0));
+    return { url: streams.create({ file: item.path, offset, audio, hasVideo: !!info.video, bitmapSubtitle, subtitleDelay }), offset };
+  });
+  handle('media:preview', async ({ id, time }) => { const item = find(id); if (!Number.isFinite(time) || time < 0) throw new Error('Invalid preview time'); return previews.frame(item.path, time); });
+  handle('media:subtitles', async ({ id, index }) => { const item = find(id); const info = await probe(item.path); if (!info.subtitles.some(s => s.index === index && s.text)) throw new Error('This subtitle format is not supported yet. Load an SRT, ASS, or VTT file.'); return run(ffmpeg, ['-v', 'error', '-nostdin', '-i', item.path, '-map', `0:${index}`, '-f', 'webvtt', 'pipe:1']); });
+  handle('media:subtitle-file', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'Subtitles', extensions: ['srt', 'vtt', 'ass', 'ssa'] }] }); if (result.canceled) return null; return run(ffmpeg, ['-v', 'error', '-nostdin', '-i', result.filePaths[0], '-f', 'webvtt', 'pipe:1']); });
+  handle('media:stop', () => { streams.stop(); scanner.setPlayback(false); scanner.setCurrent(null); });
+  handle('window:action', action => { if (action === 'minimize') win.minimize(); if (action === 'maximize') win.isMaximized() ? win.unmaximize() : win.maximize(); if (action === 'close') win.close(); if (action === 'fullscreen') win.setFullScreen(!win.isFullScreen()); });
+  await win.loadURL('matro://app/');
+  scanner.refresh();
+  void metadata.sync(state.items);
+});
+app.on('window-all-closed', () => app.quit());
+app.on('before-quit', () => { streams?.close(); previews.close(); scanner?.close(); });

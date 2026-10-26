@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Matro mobile queue</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0A0A0B}
+a{color:#F3F1EC}a:hover{color:#FFFFFF}
+.scroller::-webkit-scrollbar{display:none}
+.ib{width:44px;height:44px;border-radius:999px;border:0;background:rgba(255,255,255,0.08);color:#F3F1EC;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;flex:none}
+.navbtn{flex:1;height:52px;border:0;background:transparent;border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;text-decoration:none}
+.qplay{flex:1;min-width:0;display:flex;align-items:center;gap:12px;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer;font:inherit;padding:0}
+.txtbtn{border:0;background:transparent;color:#A9A59D;font:inherit;font-size:13px;cursor:pointer;padding:8px 12px;border-radius:999px;min-height:36px}
+</style>
+</helmet>
+<div style="position: relative; width: 390px; height: 844px; background: #0A0A0B; color: #F3F1EC; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; overflow: hidden; border-radius: 44px">
+
+  <div class="scroller" style="position: absolute; inset: 0; overflow-y: auto; scrollbar-width: none; padding: 24px 0 120px; box-sizing: border-box; display: flex; flex-direction: column; gap: 22px">
+
+    <div style="display: flex; align-items: flex-end; justify-content: space-between; padding: 0 20px">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <h1 style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.03em">Queue</h1>
+        <span style="font-size: 13px; color: #A9A59D">{{queueMeta}}</span>
+      </div>
+      <button class="txtbtn" onClick="{{clearAll}}">Clear</button>
+    </div>
+
+    <!-- now playing -->
+    <sc-if value="{{hasNow}}" hint-placeholder-val="{{ true }}">
+      <div style="margin: 0 20px; border-radius: 28px; overflow: hidden; background: #18181B">
+        <div style="position: relative; height: 190px; background: {{now.tone}}">
+          <span aria-hidden="true" style="position: absolute; top: 16px; right: 18px; font-size: 12px; color: rgba(255,255,255,0.45)">[backdrop art]</span>
+          <span style="position: absolute; top: 14px; left: 14px; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 999px; background: rgba(0,0,0,0.55)">
+            <span style="width: 7px; height: 7px; border-radius: 999px; background: #F3F1EC"></span>{{nowState}}
+          </span>
+        </div>
+        <div style="padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 12px">
+          <div style="display: flex; flex-direction: column; gap: 2px">
+            <span style="font-size: 13px; color: #A9A59D">{{now.kicker}}</span>
+            <span style="font-size: 20px; font-weight: 700; letter-spacing: -0.02em">{{now.title}}</span>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <div style="height: 5px; border-radius: 999px; background: rgba(255,255,255,0.18); overflow: hidden">
+              <div style="height: 100%; border-radius: 999px; background: #F3F1EC; width: 47%"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; color: #A9A59D; font-variant-numeric: tabular-nums"><span>24:12</span><span>−27:28</span></div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px">
+            <button onClick="{{togglePlay}}" aria-label="{{playLabel}}" style="width: 52px; height: 52px; border-radius: 999px; border: 0; background: #F3F1EC; color: #0A0A0B; cursor: pointer; display: flex; align-items: center; justify-content: center; flex: none">
+              <sc-if value="{{playing}}" hint-placeholder-val="{{ true }}"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg></sc-if>
+              <sc-if value="{{paused}}" hint-placeholder-val="{{ false }}"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5l11 7-11 7z"></path></svg></sc-if>
+            </button>
+            <button class="ib" aria-label="Next in queue" onClick="{{next}}"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 5v14"></path><path d="M6 6l9 6-9 6z"></path></svg></button>
+            <a href="Main.dc.html" style="margin-left: auto; height: 44px; padding: 0 16px; border-radius: 999px; background: rgba(255,255,255,0.08); display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; text-decoration: none">Open player</a>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- up next -->
+    <section style="display: flex; flex-direction: column; gap: 6px; padding: 0 12px">
+      <h2 style="margin: 0 8px 4px; font-size: 17px; font-weight: 700">Up next</h2>
+      <sc-for list="{{upNext}}" as="q" hint-placeholder-count="4">
+        <div style="display: flex; align-items: center; gap: 4px; padding: 8px; border-radius: 20px">
+          <button class="qplay" onClick="{{q.play}}" aria-label="Play {{q.title}}">
+            <span style="flex: none; width: 96px; height: 54px; border-radius: 14px; display: flex; align-items: center; justify-content: center; background: {{q.tone}}">
+              <span style="font-size: 13px; font-weight: 700; color: rgba(255,255,255,0.75)">{{q.code}}</span>
+            </span>
+            <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+              <span style="font-size: 12px; font-weight: 600; color: #A9A59D">{{q.kicker}}</span>
+              <span style="font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{q.title}}</span>
+              <span style="font-size: 12px; color: #A9A59D">{{q.length}}</span>
+            </span>
+          </button>
+          <button class="ib" aria-label="Remove {{q.title}} from queue" onClick="{{q.remove}}" style="background: transparent; color: #A9A59D"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+        </div>
+      </sc-for>
+      <sc-if value="{{empty}}" hint-placeholder-val="{{ false }}">
+        <div style="margin: 8px; padding: 28px 20px; border-radius: 24px; background: rgba(255,255,255,0.04); display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center">
+          <span style="font-size: 15px; font-weight: 700">Nothing up next</span>
+          <span style="font-size: 13px; color: #A9A59D">Add episodes or movies from your library.</span>
+          <a href="MobileLibrary.dc.html" style="height: 44px; padding: 0 18px; border-radius: 999px; background: #F3F1EC; color: #0A0A0B; display: flex; align-items: center; font-size: 14px; font-weight: 700; text-decoration: none">Browse library</a>
+        </div>
+      </sc-if>
+    </section>
+
+    <div style="margin: 0 20px; padding: 14px 16px; border-radius: 22px; background: rgba(255,255,255,0.05); display: flex; align-items: center; justify-content: space-between; gap: 12px">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 14px; font-weight: 600">Autoplay next</span>
+        <span style="font-size: 12px; color: #A9A59D">Keeps your audio &amp; subtitle picks</span>
+      </div>
+      <button onClick="{{toggleAuto}}" aria-pressed="{{autoplay}}" aria-label="Autoplay next" style="width: 48px; height: 28px; border-radius: 999px; border: 0; cursor: pointer; position: relative; padding: 0; flex: none; background: {{autoBg}}">
+        <span style="position: absolute; top: 3px; width: 22px; height: 22px; border-radius: 999px; background: {{autoKnobBg}}; left: {{autoKnob}}px"></span>
+      </button>
+    </div>
+  </div>
+
+  <nav aria-label="Main" style="position: absolute; left: 20px; right: 20px; bottom: 28px; height: 64px; padding: 6px; box-sizing: border-box; border-radius: 999px; background: rgba(28,28,31,0.92); backdrop-filter: blur(20px); box-shadow: 0 16px 40px rgba(0,0,0,0.5); display: flex; gap: 4px">
+    <a href="MobileLibrary.dc.html" class="navbtn" aria-label="Library" style="color: #A9A59D"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11l8-6.5 8 6.5V19a1.5 1.5 0 0 1-1.5 1.5h-4V15h-5v5.5h-4A1.5 1.5 0 0 1 4 19z"></path></svg></a>
+    <a href="MobileSearch.dc.html" class="navbtn" aria-label="Search" style="color: #A9A59D"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="M20 20l-4-4"></path></svg></a>
+    <a href="MobileQueue.dc.html" class="navbtn" aria-label="Queue" aria-current="page" style="background: #F3F1EC; color: #0A0A0B"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h12M4 12h12M4 18h8"></path><path d="M17 15v6l4.5-3z"></path></svg></a>
+    <a href="MobileServer.dc.html" class="navbtn" aria-label="Server" style="color: #A9A59D"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2.5"></rect><rect x="3" y="13" width="18" height="7" rx="2.5"></rect><path d="M7 7.5h.01M7 16.5h.01"></path></svg></a>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { now: 'e3', queue: ['e4', 'e5', 'm1', 'm2'], playing: true, autoplay: true };
+  }
+  items() {
+    return {
+      e3: { kicker: 'Northbound · S1 E3', code: 'E3', title: 'The Long Thaw', dur: 3100, tone: '#33302B' },
+      e4: { kicker: 'Northbound · S1 E4', code: 'E4', title: 'Signal Fire', dur: 2962, tone: '#3A2A26' },
+      e5: { kicker: 'Northbound · S1 E5', code: 'E5', title: 'Ice Road', dur: 3190, tone: '#26303A' },
+      m1: { kicker: 'Movie · 2024', code: 'QH', title: 'The Quiet Harbour', dur: 6720, tone: '#2A3530' },
+      m2: { kicker: 'Movie · 2019', code: 'PL', title: 'Paper Lanterns', dur: 5880, tone: '#372B33' }
+    };
+  }
+  hm(t) {
+    const h = Math.floor(t / 3600), m = Math.round((t % 3600) / 60);
+    return h ? h + ' h ' + m + ' m' : m + ' min';
+  }
+  renderVals() {
+    const S = this.state;
+    const I = this.items();
+    const now = S.now ? I[S.now] : null;
+    let total = now ? 1648 : 0;
+    const upNext = S.queue.map((id) => {
+      const it = I[id];
+      total += it.dur;
+      return {
+        title: it.title, kicker: it.kicker, code: it.code, tone: it.tone, length: this.hm(it.dur),
+        play: () => this.setState((s) => ({ now: id, queue: s.queue.filter((x) => x !== id), playing: true })),
+        remove: () => this.setState((s) => ({ queue: s.queue.filter((x) => x !== id) }))
+      };
+    });
+    return {
+      hasNow: !!now, now: now || { title: '', kicker: '', tone: '#18181B' },
+      nowState: S.playing ? 'Playing' : 'Paused',
+      playing: S.playing, paused: !S.playing, playLabel: S.playing ? 'Pause' : 'Play',
+      togglePlay: () => this.setState((s) => ({ playing: !s.playing })),
+      next: () => this.setState((s) => s.queue.length ? { now: s.queue[0], queue: s.queue.slice(1) } : {}),
+      upNext, empty: S.queue.length === 0,
+      queueMeta: S.queue.length + ' up next · ' + this.hm(total) + ' left',
+      clearAll: () => this.setState({ queue: [] }),
+      autoplay: S.autoplay,
+      toggleAuto: () => this.setState((s) => ({ autoplay: !s.autoplay })),
+      autoBg: S.autoplay ? '#F3F1EC' : 'rgba(255,255,255,0.18)',
+      autoKnob: S.autoplay ? 23 : 3,
+      autoKnobBg: S.autoplay ? '#0A0A0B' : '#FFFFFF'
+    };
+  }
+}
+</script>
+</body>
+</html>

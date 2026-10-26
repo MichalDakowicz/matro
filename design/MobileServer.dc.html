@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Matro mobile server</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0A0A0B}
+a{color:#F3F1EC}a:hover{color:#FFFFFF}
+.scroller::-webkit-scrollbar{display:none}
+.ib{width:44px;height:44px;border-radius:999px;border:0;background:rgba(255,255,255,0.08);color:#F3F1EC;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;flex:none}
+.navbtn{flex:1;height:52px;border:0;background:transparent;border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;text-decoration:none}
+.seg{flex:1;border:0;cursor:pointer;font:inherit;font-size:13px;font-weight:600;height:38px;border-radius:999px}
+.pill{display:flex;align-items:center;justify-content:center;gap:8px;height:50px;padding:0 20px;border-radius:999px;font-size:15px;font-weight:700;text-decoration:none;border:0;cursor:pointer;font-family:inherit}
+.srv{display:flex;align-items:center;gap:12px;width:100%;border:0;font:inherit;color:#F3F1EC;text-align:left;cursor:pointer;padding:12px 14px;border-radius:20px}
+</style>
+</helmet>
+<div style="position: relative; width: 390px; height: 844px; background: #0A0A0B; color: #F3F1EC; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; overflow: hidden; border-radius: 44px">
+
+  <div class="scroller" style="position: absolute; inset: 0; overflow-y: auto; scrollbar-width: none; padding: 24px 0 120px; box-sizing: border-box; display: flex; flex-direction: column; gap: 24px">
+
+    <h1 style="margin: 0; padding: 0 20px; font-size: 28px; font-weight: 700; letter-spacing: -0.03em">Server</h1>
+
+    <!-- active server -->
+    <div style="margin: 0 20px; padding: 20px; border-radius: 28px; background: #18181B; display: flex; flex-direction: column; gap: 16px">
+      <div style="display: flex; align-items: center; gap: 14px">
+        <span style="width: 52px; height: 52px; border-radius: 18px; background: rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: center; flex: none"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2.5"></rect><rect x="3" y="13" width="18" height="7" rx="2.5"></rect><path d="M7 7.5h.01M7 16.5h.01"></path></svg></span>
+        <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+          <span style="font-size: 17px; font-weight: 700">{{active.name}}</span>
+          <span style="font-size: 13px; color: #A9A59D; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{active.address}}</span>
+        </div>
+        <span style="margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,0.08); flex: none"><span style="width: 7px; height: 7px; border-radius: 999px; background: #F3F1EC"></span>Online</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div style="height: 6px; border-radius: 999px; background: rgba(255,255,255,0.12); overflow: hidden">
+          <div style="height: 100%; width: 46%; border-radius: 999px; background: #F3F1EC"></div>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 12px; color: #A9A59D"><span>[used] of [total] storage</span><span>12 titles</span></div>
+      </div>
+    </div>
+
+    <!-- libraries -->
+    <section style="display: flex; flex-direction: column; gap: 8px; padding: 0 20px">
+      <div style="display: flex; align-items: center; justify-content: space-between">
+        <h2 style="margin: 0; font-size: 17px; font-weight: 700">Libraries</h2>
+        <button onClick="{{scan}}" style="border: 0; background: rgba(255,255,255,0.08); color: #F3F1EC; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; height: 36px; padding: 0 14px; border-radius: 999px">{{scanLabel}}</button>
+      </div>
+      <sc-for list="{{libs}}" as="l" hint-placeholder-count="2">
+        <div style="display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 20px; background: rgba(255,255,255,0.04)">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#A9A59D" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z"></path></svg>
+          <div style="display: flex; flex-direction: column; gap: 1px; min-width: 0">
+            <span style="font-size: 15px; font-weight: 600">{{l.name}}</span>
+            <span style="font-size: 12px; color: #A9A59D">{{l.path}}</span>
+          </div>
+          <span style="margin-left: auto; font-size: 13px; color: #A9A59D">{{l.count}}</span>
+        </div>
+      </sc-for>
+    </section>
+
+    <!-- playback -->
+    <section style="display: flex; flex-direction: column; gap: 12px; padding: 0 20px">
+      <h2 style="margin: 0; font-size: 17px; font-weight: 700">Streaming</h2>
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <span style="font-size: 13px; color: #A9A59D">Quality on mobile data</span>
+        <div style="display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: rgba(255,255,255,0.06)">
+          <sc-for list="{{qualities}}" as="z" hint-placeholder-count="4">
+            <button class="seg" onClick="{{z.pick}}" aria-pressed="{{z.sel}}" style="background: {{z.bg}}; color: {{z.fg}}">{{z.label}}</button>
+          </sc-for>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0">
+        <div style="display: flex; flex-direction: column; gap: 2px">
+          <span style="font-size: 14px; font-weight: 600">Play MKV directly</span>
+          <span style="font-size: 12px; color: #A9A59D">Skips re-encoding when your phone supports the file</span>
+        </div>
+        <button onClick="{{toggleDirect}}" aria-pressed="{{direct}}" aria-label="Play MKV directly" style="width: 48px; height: 28px; border-radius: 999px; border: 0; cursor: pointer; position: relative; padding: 0; flex: none; background: {{directBg}}">
+          <span style="position: absolute; top: 3px; width: 22px; height: 22px; border-radius: 999px; background: {{directKnobBg}}; left: {{directKnob}}px"></span>
+        </button>
+      </div>
+    </section>
+
+    <!-- servers -->
+    <section style="display: flex; flex-direction: column; gap: 6px; padding: 0 20px">
+      <h2 style="margin: 0 0 4px; font-size: 17px; font-weight: 700">Your servers</h2>
+      <sc-for list="{{servers}}" as="s" hint-placeholder-count="1">
+        <button class="srv" onClick="{{s.pick}}" aria-pressed="{{s.sel}}" style="background: {{s.bg}}">
+          <span style="flex: none; width: 18px; height: 18px; border-radius: 999px; display: flex; align-items: center; justify-content: center; border: 1.5px solid {{s.ring}}; background: {{s.fill}}">
+            <sc-if value="{{s.sel}}" hint-placeholder-val="{{ true }}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#0A0A0B" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg></sc-if>
+          </span>
+          <span style="display: flex; flex-direction: column; gap: 1px; min-width: 0">
+            <span style="font-size: 15px; font-weight: 600">{{s.name}}</span>
+            <span style="font-size: 12px; color: #A9A59D; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{s.address}}</span>
+          </span>
+        </button>
+      </sc-for>
+      <button class="pill" onClick="{{openLink}}" style="margin-top: 6px; background: rgba(255,255,255,0.08); color: #F3F1EC">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        Link a server
+      </button>
+    </section>
+
+    <p style="margin: 0 20px; font-size: 12px; line-height: 1.5; color: #8E8A83">Matro is open source. Run the Matro server next to your media folders, then link this app to it.</p>
+  </div>
+
+  <nav aria-label="Main" style="position: absolute; left: 20px; right: 20px; bottom: 28px; height: 64px; padding: 6px; box-sizing: border-box; border-radius: 999px; background: rgba(28,28,31,0.92); backdrop-filter: blur(20px); box-shadow: 0 16px 40px rgba(0,0,0,0.5); display: flex; gap: 4px">
+    <a href="MobileLibrary.dc.html" class="navbtn" aria-label="Library" style="color: #A9A59D"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11l8-6.5 8 6.5V19a1.5 1.5 0 0 1-1.5 1.5h-4V15h-5v5.5h-4A1.5 1.5 0 0 1 4 19z"></path></svg></a>
+    <a href="MobileSearch.dc.html" class="navbtn" aria-label="Search" style="color: #A9A59D"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="M20 20l-4-4"></path></svg></a>
+    <a href="MobileQueue.dc.html" class="navbtn" aria-label="Queue" style="color: #A9A59D"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h12M4 12h12M4 18h8"></path><path d="M17 15v6l4.5-3z"></path></svg></a>
+    <a href="MobileServer.dc.html" class="navbtn" aria-label="Server" aria-current="page" style="background: #F3F1EC; color: #0A0A0B"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2.5"></rect><rect x="3" y="13" width="18" height="7" rx="2.5"></rect><path d="M7 7.5h.01M7 16.5h.01"></path></svg></a>
+  </nav>
+
+  <!-- link a server sheet -->
+  <sc-if value="{{linkOpen}}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{closeLink}}" style="position: absolute; inset: 0; background: rgba(0,0,0,0.55)"></div>
+    <div role="dialog" aria-label="Link a server" style="position: absolute; left: 8px; right: 8px; bottom: 8px; border-radius: 36px; background: #18181B; padding: 14px 20px 24px; display: flex; flex-direction: column; gap: 16px">
+      <span style="align-self: center; width: 40px; height: 5px; border-radius: 999px; background: rgba(255,255,255,0.25)"></span>
+      <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px">
+        <div style="display: flex; flex-direction: column; gap: 4px">
+          <h2 style="margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.02em">Link a server</h2>
+          <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #A9A59D">Open your Matro server in a browser and scan its code, or type its address.</p>
+        </div>
+        <button class="ib" aria-label="Close" onClick="{{closeLink}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+      </div>
+      <button class="pill" style="background: #F3F1EC; color: #0A0A0B">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16M8 12h8"></path></svg>
+        Scan QR code
+      </button>
+      <div style="display: flex; align-items: center; gap: 10px; color: #8E8A83; font-size: 12px"><span style="flex: 1; height: 1px; background: rgba(255,255,255,0.1)"></span>or<span style="flex: 1; height: 1px; background: rgba(255,255,255,0.1)"></span></div>
+      <label style="display: flex; flex-direction: column; gap: 8px">
+        <span style="font-size: 13px; font-weight: 600">Server address</span>
+        <input type="text" placeholder="https://media.yourdomain.com" value="{{addr}}" onChange="{{onAddr}}" style="height: 50px; padding: 0 18px; border-radius: 999px; border: 0; outline: none; background: rgba(255,255,255,0.08); color: #F3F1EC; font: inherit; font-size: 15px">
+      </label>
+      <button class="pill" onClick="{{connect}}" style="background: rgba(255,255,255,0.12); color: #F3F1EC">Connect</button>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      quality: 'auto', direct: true, linkOpen: false, addr: '', scanning: false, active: 0,
+      servers: [{ name: '[Server name]', address: '[server address]' }]
+    };
+  }
+  renderVals() {
+    const S = this.state;
+    const pick = (sel) => ({
+      bg: sel ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.03)',
+      ring: sel ? '#F3F1EC' : 'rgba(255,255,255,0.35)',
+      fill: sel ? '#F3F1EC' : 'transparent'
+    });
+    return {
+      active: S.servers[S.active] || S.servers[0],
+      libs: [
+        { name: 'Shows', path: '/media/shows', count: '6 shows' },
+        { name: 'Movies', path: '/media/movies', count: '6 movies' }
+      ],
+      scanLabel: S.scanning ? 'Scanning…' : 'Scan now',
+      scan: () => { this.setState({ scanning: true }); setTimeout(() => this.setState({ scanning: false }), 1600); },
+      qualities: [
+        { id: 'orig', label: 'Original' }, { id: 'auto', label: 'Auto' },
+        { id: '1080', label: '1080p' }, { id: '720', label: '720p' }
+      ].map((z) => ({
+        label: z.label, sel: S.quality === z.id,
+        bg: S.quality === z.id ? '#F3F1EC' : 'transparent',
+        fg: S.quality === z.id ? '#0A0A0B' : '#E7E3DB',
+        pick: () => this.setState({ quality: z.id })
+      })),
+      direct: S.direct,
+      toggleDirect: () => this.setState((s) => ({ direct: !s.direct })),
+      directBg: S.direct ? '#F3F1EC' : 'rgba(255,255,255,0.18)',
+      directKnob: S.direct ? 23 : 3,
+      directKnobBg: S.direct ? '#0A0A0B' : '#FFFFFF',
+      servers: S.servers.map((s, i) => Object.assign({ name: s.name, address: s.address, sel: i === S.active, pick: () => this.setState({ active: i }) }, pick(i === S.active))),
+      linkOpen: S.linkOpen,
+      openLink: () => this.setState({ linkOpen: true }),
+      closeLink: () => this.setState({ linkOpen: false }),
+      addr: S.addr,
+      onAddr: (e) => this.setState({ addr: e.target.value }),
+      connect: () => this.setState((s) => {
+        const a = s.addr.trim();
+        if (!a) return { linkOpen: false };
+        const host = a.replace(/^https?:\/\//, '').split('/')[0];
+        const servers = s.servers.concat([{ name: host, address: a }]);
+        return { servers, active: servers.length - 1, linkOpen: false, addr: '' };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

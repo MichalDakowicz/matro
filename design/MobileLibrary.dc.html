@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Matro mobile library</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0A0A0B}
+a{color:#F3F1EC}a:hover{color:#FFFFFF}
+.scroller::-webkit-scrollbar{display:none}
+.chip{border:0;font:inherit;font-size:14px;font-weight:600;height:40px;padding:0 18px;border-radius:999px;cursor:pointer;flex:none}
+.card{border:0;background:transparent;padding:0;color:inherit;font:inherit;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:8px;flex:none}
+.ib{width:44px;height:44px;border-radius:999px;border:0;background:rgba(255,255,255,0.08);color:#F3F1EC;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;flex:none}
+.navbtn{flex:1;height:52px;border:0;background:transparent;border-radius:999px;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;text-decoration:none}
+.pill{display:flex;align-items:center;justify-content:center;gap:8px;height:50px;padding:0 20px;border-radius:999px;font-size:15px;font-weight:700;text-decoration:none;border:0;cursor:pointer;font-family:inherit}
+.ep{display:flex;align-items:center;gap:12px;padding:8px;border-radius:18px;text-decoration:none;color:#F3F1EC}
+</style>
+</helmet>
+<div style="position: relative; width: 390px; height: 844px; background: #0A0A0B; color: #F3F1EC; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; overflow: hidden; border-radius: 44px">
+
+  <div class="scroller" style="position: absolute; inset: 0; overflow-y: auto; scrollbar-width: none; padding: 24px 0 120px; box-sizing: border-box; display: flex; flex-direction: column; gap: 28px">
+
+    <!-- header -->
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 20px">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 28px; font-weight: 700; letter-spacing: -0.03em">Matro</span>
+        <span style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: #A9A59D"><span style="width: 7px; height: 7px; border-radius: 999px; background: #F3F1EC"></span>Streaming from [server name]</span>
+      </div>
+      <button class="ib" aria-label="Search"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="M20 20l-4-4"></path></svg></button>
+    </div>
+
+    <!-- chips -->
+    <div class="scroller" style="display: flex; gap: 8px; padding: 0 20px; overflow-x: auto; scrollbar-width: none">
+      <sc-for list="{{tabs}}" as="t" hint-placeholder-count="3">
+        <button class="chip" onClick="{{t.pick}}" aria-pressed="{{t.sel}}" style="background: {{t.bg}}; color: {{t.fg}}">{{t.label}}</button>
+      </sc-for>
+    </div>
+
+    <!-- hero -->
+    <sc-if value="{{home}}" hint-placeholder-val="{{ true }}">
+      <div style="padding: 0 20px">
+        <div style="position: relative; height: 420px; border-radius: 28px; overflow: hidden; background: #3A332B">
+          <span aria-hidden="true" style="position: absolute; top: 18px; right: 20px; font-size: 12px; color: rgba(255,255,255,0.45)">[poster art]</span>
+          <div style="position: absolute; inset: 0; background: linear-gradient(rgba(0,0,0,0) 35%, rgba(0,0,0,0.85))"></div>
+          <div style="position: absolute; left: 20px; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 10px">
+            <span style="font-size: 13px; font-weight: 600; color: #D6D2CA">Continue watching</span>
+            <h1 style="margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.05">Northbound</h1>
+            <p style="margin: 0; font-size: 13px; color: #D6D2CA">S1 E3 · The Long Thaw · 27 min left</p>
+            <div style="height: 5px; border-radius: 999px; background: rgba(255,255,255,0.25); overflow: hidden; margin: 2px 0 6px">
+              <div style="height: 100%; width: 47%; border-radius: 999px; background: #F3F1EC"></div>
+            </div>
+            <div style="display: flex; gap: 8px">
+              <a href="Main.dc.html" class="pill" style="flex: 1; background: #F3F1EC; color: #0A0A0B">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5l11 7-11 7z"></path></svg>
+                Resume
+              </a>
+              <button class="pill" onClick="{{openHero}}" style="background: rgba(255,255,255,0.16); color: #F3F1EC">Episodes</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- continue row -->
+    <sc-if value="{{home}}" hint-placeholder-val="{{ true }}">
+      <section style="display: flex; flex-direction: column; gap: 12px">
+        <h2 style="margin: 0; padding: 0 20px; font-size: 19px; font-weight: 700; letter-spacing: -0.01em">Continue watching</h2>
+        <div class="scroller" style="display: flex; gap: 12px; padding: 0 20px; overflow-x: auto; scrollbar-width: none">
+          <sc-for list="{{continueList}}" as="c" hint-placeholder-count="3">
+            <a href="Main.dc.html" class="card" style="width: 240px; text-decoration: none; color: #F3F1EC">
+              <span style="position: relative; display: block; height: 135px; border-radius: 20px; overflow: hidden; background: {{c.tone}}">
+                <span style="position: absolute; left: 14px; top: 12px; font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.7)">{{c.code}}</span>
+                <span style="position: absolute; left: 14px; right: 14px; bottom: 12px; height: 4px; border-radius: 999px; background: rgba(255,255,255,0.25); overflow: hidden">
+                  <span style="display: block; height: 100%; border-radius: 999px; background: #F3F1EC; width: {{c.pct}}%"></span>
+                </span>
+              </span>
+              <span style="display: flex; flex-direction: column; gap: 2px; padding: 0 4px">
+                <span style="font-size: 14px; font-weight: 700">{{c.title}}</span>
+                <span style="font-size: 12px; color: #A9A59D">{{c.meta}}</span>
+              </span>
+            </a>
+          </sc-for>
+        </div>
+      </section>
+    </sc-if>
+
+    <!-- poster rows (home) or grid (filtered) -->
+    <sc-for list="{{rows}}" as="s" hint-placeholder-count="2">
+      <section style="display: flex; flex-direction: column; gap: 12px">
+        <h2 style="margin: 0; padding: 0 20px; font-size: 19px; font-weight: 700; letter-spacing: -0.01em">{{s.title}}</h2>
+        <div class="scroller" style="display: flex; gap: 12px; padding: 0 20px; overflow-x: auto; scrollbar-width: none">
+          <sc-for list="{{s.items}}" as="it" hint-placeholder-count="4">
+            <button class="card" onClick="{{it.open}}" aria-label="Open {{it.title}}" style="width: 128px">
+              <span style="position: relative; display: block; height: 192px; border-radius: 18px; overflow: hidden; background: {{it.tone}}">
+                <span style="position: absolute; left: 12px; right: 12px; bottom: 12px; font-size: 14px; font-weight: 700; line-height: 1.2; color: #FFFFFF">{{it.title}}</span>
+                <sc-if value="{{it.isNew}}" hint-placeholder-val="{{ false }}">
+                  <span style="position: absolute; top: 10px; left: 10px; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; color: #0A0A0B; background: #F3F1EC">New</span>
+                </sc-if>
+              </span>
+              <span style="font-size: 12px; color: #A9A59D; padding: 0 4px">{{it.meta}}</span>
+            </button>
+          </sc-for>
+        </div>
+      </section>
+    </sc-for>
+
+    <sc-if value="{{grid}}" hint-placeholder-val="{{ false }}">
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 12px; padding: 0 20px">
+        <sc-for list="{{gridItems}}" as="it" hint-placeholder-count="6">
+          <button class="card" onClick="{{it.open}}" aria-label="Open {{it.title}}">
+            <span style="position: relative; display: block; aspect-ratio: 2 / 3; border-radius: 20px; overflow: hidden; background: {{it.tone}}">
+              <span style="position: absolute; left: 14px; right: 14px; bottom: 14px; font-size: 16px; font-weight: 700; line-height: 1.2; color: #FFFFFF">{{it.title}}</span>
+              <sc-if value="{{it.isNew}}" hint-placeholder-val="{{ false }}">
+                <span style="position: absolute; top: 10px; left: 10px; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; color: #0A0A0B; background: #F3F1EC">New</span>
+              </sc-if>
+            </span>
+            <span style="font-size: 12px; color: #A9A59D; padding: 0 4px">{{it.meta}}</span>
+          </button>
+        </sc-for>
+      </div>
+    </sc-if>
+  </div>
+
+  <!-- bottom nav -->
+  <nav aria-label="Main" style="position: absolute; left: 20px; right: 20px; bottom: 28px; height: 64px; padding: 6px; box-sizing: border-box; border-radius: 999px; background: rgba(28,28,31,0.92); backdrop-filter: blur(20px); box-shadow: 0 16px 40px rgba(0,0,0,0.5); display: flex; gap: 4px">
+    <a href="MobileLibrary.dc.html" class="navbtn" aria-label="Library" aria-current="page" style="background: #F3F1EC; color: #0A0A0B"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11l8-6.5 8 6.5V19a1.5 1.5 0 0 1-1.5 1.5h-4V15h-5v5.5h-4A1.5 1.5 0 0 1 4 19z"></path></svg></a>
+    <a href="MobileSearch.dc.html" class="navbtn" aria-label="Search" style="color: #A9A59D"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="M20 20l-4-4"></path></svg></a>
+    <a href="MobileQueue.dc.html" class="navbtn" aria-label="Queue" style="color: #A9A59D"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h12M4 12h12M4 18h8"></path><path d="M17 15v6l4.5-3z"></path></svg></a>
+    <a href="MobileServer.dc.html" class="navbtn" aria-label="Server" style="color: #A9A59D"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2.5"></rect><rect x="3" y="13" width="18" height="7" rx="2.5"></rect><path d="M7 7.5h.01M7 16.5h.01"></path></svg></a>
+  </nav>
+
+  <!-- detail sheet -->
+  <sc-if value="{{hasSel}}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{close}}" style="position: absolute; inset: 0; background: rgba(0,0,0,0.55)"></div>
+    <div role="dialog" aria-label="{{sel.title}}" style="position: absolute; left: 8px; right: 8px; bottom: 8px; top: 96px; border-radius: 36px; background: #18181B; overflow-y: auto; display: flex; flex-direction: column">
+      <div style="position: relative; height: 200px; flex: none; background: {{sel.tone}}">
+        <span style="position: absolute; top: 10px; left: 50%; width: 40px; height: 5px; margin-left: -20px; border-radius: 999px; background: rgba(255,255,255,0.4)"></span>
+        <span aria-hidden="true" style="position: absolute; left: 20px; top: 24px; font-size: 12px; color: rgba(255,255,255,0.45)">[backdrop art]</span>
+        <button class="ib" aria-label="Close" onClick="{{close}}" style="position: absolute; top: 16px; right: 16px; background: rgba(0,0,0,0.45)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+      </div>
+      <div style="padding: 20px 20px 28px; display: flex; flex-direction: column; gap: 16px">
+        <div style="display: flex; flex-direction: column; gap: 4px">
+          <h2 style="margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1">{{sel.title}}</h2>
+          <p style="margin: 0; font-size: 13px; color: #A9A59D">{{sel.meta}}</p>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px">
+          <sc-for list="{{sel.chips}}" as="ch" hint-placeholder-count="3">
+            <span style="font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 999px; background: rgba(255,255,255,0.08); color: #D6D2CA">{{ch}}</span>
+          </sc-for>
+        </div>
+        <div style="display: flex; gap: 8px">
+          <a href="Main.dc.html" class="pill" style="flex: 1; background: #F3F1EC; color: #0A0A0B">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5l11 7-11 7z"></path></svg>
+            {{sel.playLabel}}
+          </a>
+          <button class="ib" aria-label="Add to queue" style="width: 50px; height: 50px; background: rgba(255,255,255,0.1)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+        </div>
+        <sc-if value="{{sel.isShow}}" hint-placeholder-val="{{ true }}">
+          <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 4px">
+            <div class="scroller" style="display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none">
+              <sc-for list="{{seasons}}" as="se" hint-placeholder-count="2">
+                <button class="chip" onClick="{{se.pick}}" aria-pressed="{{se.sel}}" style="height: 36px; font-size: 13px; padding: 0 14px; background: {{se.bg}}; color: {{se.fg}}">{{se.label}}</button>
+              </sc-for>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 2px">
+              <sc-for list="{{episodes}}" as="e" hint-placeholder-count="5">
+                <a href="Main.dc.html" class="ep" style="background: {{e.bg}}">
+                  <span style="position: relative; flex: none; width: 100px; height: 56px; border-radius: 14px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: {{sel.tone}}">
+                    <span style="font-size: 13px; font-weight: 700; color: rgba(255,255,255,0.75)">{{e.code}}</span>
+                    <span style="position: absolute; left: 0; bottom: 0; height: 4px; background: {{e.barColor}}; width: {{e.pct}}%"></span>
+                  </span>
+                  <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+                    <span style="font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: {{e.titleColor}}">{{e.title}}</span>
+                    <span style="font-size: 12px; color: #A9A59D">{{e.meta}}</span>
+                  </span>
+                </a>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { tab: 'home', nav: 'home', sel: null, season: 1 };
+  }
+  data() {
+    return {
+      shows: [
+        { id: 'nb', title: 'Northbound', seasons: 2, eps: [10, 8], tone: '#3A332B', year: '2025', isNew: true, resume: { s: 1, e: 3 },
+          names: { 1: ['Pilot', 'Whiteout', 'The Long Thaw', 'Signal Fire', 'Ice Road', 'Crossing', 'Low Light', 'The Pass', 'Snowblind', 'Northbound'] } },
+        { id: 'lt', title: 'Low Tide', seasons: 1, eps: [8], tone: '#24323A', year: '2024', resume: { s: 1, e: 6 } },
+        { id: 'tc', title: 'The Cartographers', seasons: 3, eps: [8, 8, 6], tone: '#2F3A2C', year: '2021' },
+        { id: 'sh', title: 'Static Hour', seasons: 1, eps: [6], tone: '#3A2630', year: '2023', isNew: true },
+        { id: 'go', title: 'Glass Orchard', seasons: 2, eps: [10, 10], tone: '#2C2A3D', year: '2020' },
+        { id: 'fl', title: 'Fieldline', seasons: 1, eps: [7], tone: '#3B2E22', year: '2022' }
+      ],
+      movies: [
+        { id: 'qh', title: 'The Quiet Harbour', year: '2024', len: '1 h 52 m', tone: '#2A3530', isNew: true },
+        { id: 'pl', title: 'Paper Lanterns', year: '2019', len: '1 h 38 m', tone: '#372B33' },
+        { id: 'lv', title: 'Last Train to Varna', year: '2021', len: '2 h 04 m', tone: '#3A3024' },
+        { id: 'sw', title: 'Saltwater', year: '2017', len: '1 h 46 m', tone: '#22323A' },
+        { id: 'nbr', title: 'Nine Bridges', year: '2023', len: '2 h 11 m', tone: '#30283A' },
+        { id: 'ag', title: 'Afterglow', year: '2022', len: '1 h 41 m', tone: '#3A2A26' }
+      ]
+    };
+  }
+  renderVals() {
+    const S = this.state;
+    const D = this.data();
+    const open = (kind, id) => () => this.setState({ sel: { kind, id }, season: 1 });
+
+    const shows = D.shows.map((s) => ({
+      title: s.title, tone: s.tone, isNew: !!s.isNew,
+      meta: s.seasons + (s.seasons > 1 ? ' seasons' : ' season') + ' · ' + s.year,
+      open: open('show', s.id)
+    }));
+    const movies = D.movies.map((m) => ({
+      title: m.title, tone: m.tone, isNew: !!m.isNew,
+      meta: m.year + ' · ' + m.len, open: open('movie', m.id)
+    }));
+
+    const home = S.tab === 'home';
+    const rows = home ? [{ title: 'Shows', items: shows }, { title: 'Movies', items: movies }] : [];
+    const gridItems = S.tab === 'shows' ? shows : (S.tab === 'movies' ? movies : []);
+
+    const tabs = [
+      { id: 'home', label: 'All' }, { id: 'shows', label: 'Shows' }, { id: 'movies', label: 'Movies' }
+    ].map((t) => ({
+      label: t.label, sel: S.tab === t.id,
+      bg: S.tab === t.id ? '#F3F1EC' : 'rgba(255,255,255,0.08)',
+      fg: S.tab === t.id ? '#0A0A0B' : '#F3F1EC',
+      pick: () => this.setState({ tab: t.id })
+    }));
+
+    const navs = [
+      { id: 'home', label: 'Library' }, { id: 'search', label: 'Search' },
+      { id: 'queue', label: 'Queue' }, { id: 'folders', label: 'Folders' }
+    ].map((n) => ({
+      label: n.label, sel: S.nav === n.id,
+      isHome: n.id === 'home', isSearch: n.id === 'search', isQueue: n.id === 'queue', isFolders: n.id === 'folders',
+      bg: S.nav === n.id ? '#F3F1EC' : 'transparent',
+      fg: S.nav === n.id ? '#0A0A0B' : '#A9A59D',
+      pick: () => this.setState({ nav: n.id })
+    }));
+
+    let sel = null, seasons = [], episodes = [];
+    if (S.sel) {
+      if (S.sel.kind === 'show') {
+        const s = D.shows.find((x) => x.id === S.sel.id);
+        const total = s.eps.reduce((a, b) => a + b, 0);
+        sel = {
+          title: s.title, tone: s.tone, isShow: true,
+          meta: 'Series · ' + s.year + ' · ' + total + ' episodes',
+          chips: ['MKV', '1080p', '3 audio', '5 subtitles'],
+          playLabel: s.resume ? 'Resume S' + s.resume.s + ' E' + s.resume.e : 'Play S1 E1'
+        };
+        seasons = s.eps.map((n, i) => ({
+          label: 'Season ' + (i + 1), sel: S.season === i + 1,
+          bg: S.season === i + 1 ? '#F3F1EC' : 'rgba(255,255,255,0.08)',
+          fg: S.season === i + 1 ? '#0A0A0B' : '#F3F1EC',
+          pick: () => this.setState({ season: i + 1 })
+        }));
+        const n = s.eps[S.season - 1] || 0;
+        const names = (s.names && s.names[S.season]) || [];
+        for (let i = 1; i <= n; i++) {
+          const r = s.resume;
+          const before = r && (S.season < r.s || (S.season === r.s && i < r.e));
+          const cur = r && S.season === r.s && i === r.e;
+          episodes.push({
+            code: 'E' + i,
+            title: i + '. ' + (names[i - 1] || 'Episode ' + i),
+            meta: cur ? '27 min left' : (before ? 'Watched' : (44 + ((i * 7) % 12)) + ' min'),
+            pct: before ? 100 : (cur ? 47 : 0),
+            barColor: before ? 'rgba(255,255,255,0.5)' : '#F3F1EC',
+            titleColor: before ? '#8E8A83' : '#F3F1EC',
+            bg: cur ? 'rgba(255,255,255,0.06)' : 'transparent'
+          });
+        }
+      } else {
+        const m = D.movies.find((x) => x.id === S.sel.id);
+        sel = {
+          title: m.title, tone: m.tone, isShow: false,
+          meta: 'Movie · ' + m.year + ' · ' + m.len,
+          chips: ['MKV', '2160p HDR', '4 audio', '6 subtitles', '12 chapters'],
+          playLabel: m.id === 'qh' ? 'Resume · 1 h 27 m left' : 'Play'
+        };
+      }
+    }
+
+    return {
+      tabs, navs, home, rows,
+      grid: !home, gridItems,
+      openHero: open('show', 'nb'),
+      continueList: [
+        { title: 'Northbound', meta: 'S1 E3 · 27 min left', code: 'S1 · E3', pct: 47, tone: '#3A332B' },
+        { title: 'The Quiet Harbour', meta: 'Movie · 1 h 27 m left', code: 'Movie', pct: 22, tone: '#2A3530' },
+        { title: 'Low Tide', meta: 'S1 E6 · 9 min left', code: 'S1 · E6', pct: 80, tone: '#24323A' }
+      ],
+      hasSel: !!sel, sel: sel || { title: '', chips: [] },
+      close: () => this.setState({ sel: null }),
+      seasons, episodes
+    };
+  }
+}
+</script>
+</body>
+</html>

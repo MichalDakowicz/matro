@@ -1,0 +1,39 @@
+const http = require('node:http');
+const { randomBytes } = require('node:crypto');
+const { spawn } = require('node:child_process');
+const { ffmpeg } = require('./media.cjs');
+
+async function createStreamServer() {
+  const sessions = new Map();
+  const children = new Set();
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    const session = sessions.get(url.pathname.slice(1));
+    if (!session || req.method !== 'GET') { res.writeHead(404).end(); return; }
+    for (const child of children) child.kill();
+    const { file, offset, audio, hasVideo, bitmapSubtitle = null, subtitleDelay = 0 } = session;
+    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-protocol_whitelist', 'file,pipe,crypto', '-ss', String(offset), '-i', file];
+    if (hasVideo) {
+      if (bitmapSubtitle !== null) args.push('-filter_complex', `[0:${bitmapSubtitle}]setpts=PTS+${subtitleDelay}/TB[sub];[0:v:0][sub]overlay=eof_action=pass:shortest=0,scale=trunc(iw/2)*2:trunc(ih/2)*2[video]`, '-map', '[video]');
+      else args.push('-map', '0:v:0', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2');
+      args.push('-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-pix_fmt', 'yuv420p', '-g', '48');
+    }
+    else args.push('-vn');
+    args.push('-map', audio === null ? '0:a:0?' : `0:${audio}`, '-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-sn', '-movflags', '+frag_keyframe+empty_moov+default_base_moof', '-frag_duration', '500000', '-f', 'mp4', 'pipe:1');
+    const child = spawn(ffmpeg, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    children.add(child);
+    let errorText = '';
+    child.stderr.on('data', data => { errorText = (errorText + data).slice(-2000); });
+    child.stdout.once('data', data => { res.writeHead(200, { 'Content-Type': 'video/mp4', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': 'matro://app' }); res.write(data); child.stdout.pipe(res); });
+    child.on('error', () => { if (!res.headersSent) res.writeHead(500); res.end(); });
+    child.on('close', code => { children.delete(child); if (!res.headersSent) res.writeHead(code ? 500 : 200); res.end(); if (code && errorText) session.error = errorText; });
+    res.on('close', () => child.kill());
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return {
+    create(session) { sessions.clear(); const token = randomBytes(32).toString('hex'); sessions.set(token, session); return `http://127.0.0.1:${server.address().port}/${token}`; },
+    stop() { for (const child of children) child.kill(); sessions.clear(); },
+    close() { this.stop(); server.close(); }
+  };
+}
+module.exports = { createStreamServer };

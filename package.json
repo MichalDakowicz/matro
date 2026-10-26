@@ -1,0 +1,60 @@
+{
+  "name": "matro",
+  "version": "0.2.0",
+  "description": "A local-first, open-source desktop media player.",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "postinstall": "install-electron --no",
+    "start": "electron .",
+    "test": "node --test --test-concurrency=1 tests/media.test.cjs tests/segments.test.cjs tests/segment-scheduler.test.cjs tests/metadata.test.cjs",
+    "test:e2e": "playwright test",
+    "icons": "node scripts/build-icons.cjs",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0"
+  },
+  "build": {
+    "electronDist": "node_modules/electron/dist",
+    "appId": "org.matro.player",
+    "productName": "Matro",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "assets/icon.png",
+      "assets/icon.ico",
+      "package.json",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**",
+      "node_modules/ffprobe-static/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico"
+    }
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0"
+  }
+}

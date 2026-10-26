@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src http://127.0.0.1:* blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Matro</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="titlebar"></header>
+  <div class="window-zone"><button class="brand" data-tab="home" aria-label="Matro, back to landing"><span>Matro</span><img class="brand-mark" src="assets/logo.svg" alt="" draggable="false"></button><div class="window-actions"><div class="window-buttons" role="group" aria-label="Window"><button data-window="minimize" aria-label="Minimize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6.5 12h11"/></svg></button><button data-window="maximize" aria-label="Maximize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="2.5"/></svg></button><button data-window="close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="m7.5 7.5 9 9M16.5 7.5l-9 9"/></svg></button></div></div></div>
+  <div id="app"></div>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="shortcuts"><form method="dialog"><div class="section-heading"><h2>Make yourself at home.</h2><button class="icon-button" aria-label="Close shortcuts">×</button></div><p class="muted">A few shortcuts for a quieter movie night.</p><dl><dt>Play / pause</dt><dd>Space</dd><dt>Seek 5 seconds</dt><dd>← / →</dd><dt>Browse featured titles</dt><dd>← / → on the poster reel</dd><dt>Search</dt><dd>Ctrl / ⌘ + K</dd><dt>Volume</dt><dd>↑ / ↓</dd><dt>Fullscreen</dt><dd>F</dd><dt>Mute</dt><dd>M</dd><dt>Open files</dt><dd>Ctrl / ⌘ + O</dd><dt>Back to library</dt><dd>Esc</dd></dl><button class="pill primary">Got it</button></form></dialog>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
