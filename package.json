@@ -1,6 +1,6 @@
 {
   "name": "matro",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A local-first, open-source desktop media player.",
   "main": "electron/main.cjs",
   "scripts": {

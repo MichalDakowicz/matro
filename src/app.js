@@ -32,10 +32,10 @@ const SKIP = 5;
 let library = { items: [], folders: [], progress: {}, queue: [], preferences: { autoplay: true, volume: .72 } };
 let metadata = {}, metadataEnabled = false;
 let tab = 'home', query = '', view = 'library', selected = null, folderFilter = null, statusFilter = 'all';
-let current = null, info = null, video = null, offset = 0, audio = null, subtitle = null, subtitleText = null, subtitleUrl = null, delay = 0, subSize = 'M';
+let current = null, info = null, video = null, offset = 0, audio = null, subtitle = null, subtitleText = null, subtitleUrl = null, delay = 0;
 let queueOpen = false, sidePanel = null, generation = 0, lastSave = 0, idleTimer, toastTimer, subtitleGeneration = 0;
 let loading = false, playbackError = '', trackCues = [];
-let playIntent = true;
+let playIntent = true, streamId = null, pendingStream = null;
 let segmentStatus = '', markerDraft = null;
 let scannerSummary = null;
 function renderScannerStatus() {
@@ -65,6 +65,7 @@ function hoverSeek(event) {
   const tooltip = $('#seek-preview'), image = $('#seek-preview-image'), status = $('#seek-preview-status');
   tooltip.hidden = false; tooltip.style.left = `${Math.max(90, Math.min(bounds.width - 90, event.clientX - bounds.left))}px`;
   $('#seek-preview-time').textContent = `${fmt(time)}.${Math.floor(time % 1 * 10)}`;
+  const section = $('#seek-preview-section'); section.textContent = sectionAt(time); section.hidden = !section.textContent;
   image.hidden = true; image.removeAttribute('src'); status.hidden = false; status.textContent = info.video ? 'Loading preview…' : 'Audio';
   clearTimeout(previewTimer); const version = ++previewVersion; const id = current.id;
   if (!info.video) return;
@@ -92,8 +93,9 @@ function matchTrack(tracks, choice) {
 }
 function rememberTracks() {
   library.preferences.tracks ||= {};
-  library.preferences.tracks[titleKey(current)] = { audio: trackChoice(info.audio.find(t => t.index === audio)), subtitle: trackChoice(info.subtitles.find(t => t.index === subtitle)), off: subtitle === null, delay, size: subSize };
-  void attempt(save);
+  library.preferences.tracks[titleKey(current)] = { audio: trackChoice(info.audio.find(t => t.index === audio)), subtitle: trackChoice(info.subtitles.find(t => t.index === subtitle)), off: subtitle === null, delay };
+  // A preloaded next episode used the old choice; prepare it again with this one.
+  discardPrepared(); void attempt(save);
 }
 // Title metadata comes from TMDB when configured; everything falls back to file names.
 const metaKey = item => item.kind === 'show' ? titleKey(item) : item.id;
@@ -138,10 +140,14 @@ async function removeContinue(id) {
   }
   await save(); renderLibrary();
 }
+// Progress is offset + currentTime of the stream that belongs to `current`. While a new stream is being requested (a seek,
+// an audio change, a resume) the target position counts instead, so exiting mid-load or mid-buffer still saves where you were.
 function remember() {
-  if (!current || !video || loading || playbackError) return;
+  if (!current || !video) return;
+  const pending = pendingStream?.id === current.id ? pendingStream.position : null;
+  if (pending === null && streamId !== current.id) return;
   const old = library.progress[current.id] || {};
-  const position = Math.min(info.duration || Infinity, offset + video.currentTime);
+  const position = Math.min(info.duration || Infinity, pending ?? offset + video.currentTime);
   if (!position && !old.position) return;
   // Reaching an outro (skipping it, or leaving during the credits) counts as watched, so Continue watching moves to the next episode.
   // Only outros in the second half count, so a mis-detected early marker can't complete an episode.
@@ -159,7 +165,9 @@ function groups(kind) {
   return [...map.values()].filter(items => searchText(items).includes(words));
 }
 const groupStatus = items => items.every(i => completed(i.id)) ? 'done' : items.some(i => completed(i.id) || library.progress[i.id]?.position > 0) ? 'progress' : 'new';
-const itemMeta = item => item.kind === 'show' ? `Season ${item.season} · Episode ${item.episode}` : item.kind === 'audio' ? `${item.format} · Audio` : `${item.format} · Movie`;
+// A prelude is stored as episode 0 of the first season but is always labelled as the prelude.
+const code = item => item.prelude ? 'Prelude' : `S${item.season} E${item.episode}`;
+const itemMeta = item => item.kind === 'show' ? (item.prelude ? `Season ${item.season} · Prelude` : `Season ${item.season} · Episode ${item.episode}`) : item.kind === 'audio' ? `${item.format} · Audio` : `${item.format} · Movie`;
 const groupMeta = items => { const item = items[0], seasons = new Set(items.map(i => i.season)).size; return item.kind === 'show' ? `${seasons} ${seasons === 1 ? 'season' : 'seasons'} · ${items.length} episodes` : `${meta(item)?.year ? `${meta(item).year} · ` : ''}${itemMeta(item)}`; };
 function cover(item, extra = '') {
   const m = meta(item);
@@ -173,9 +181,9 @@ function poster(items) {
 }
 function continueCard(i) {
   const p = library.progress[i.id] || { position: 0, duration: 0 }, backdrop = meta(i)?.backdrop;
-  return `<div class="continue-card"><button class="cw" data-play="${i.id}"><span class="cw-art ${artFor(i)}" data-frame="${i.kind === 'audio' ? '' : i.id}" data-time="${p.position || 0}">${backdrop ? `<img src="${esc(backdrop)}" alt="">` : ''}<span class="cw-play">${icon('play')}</span><span class="cw-text"><span class="cw-line"><span class="card-name">${esc(displayName(i))}${i.kind === 'show' ? ` · S${i.season} E${i.episode}` : ''}</span><span class="card-meta">${p.duration ? `${fmt(p.duration - p.position)} left` : 'Up next'}</span></span><span class="progress-track"><span class="progress-fill" data-progress="${p.duration ? Math.min(100, p.position / p.duration * 100) : 0}"></span></span></span></span></button><button class="remove-continue" data-remove-continue="${i.id}" aria-label="Remove ${esc(i.group)} from Continue watching">×</button></div>`;
+  return `<div class="continue-card"><button class="cw" data-play="${i.id}"><span class="cw-art ${artFor(i)}" data-frame="${i.kind === 'audio' ? '' : i.id}" data-time="${Math.max(0, (p.position || 0) - 1)}">${backdrop ? `<img src="${esc(backdrop)}" alt="">` : ''}<span class="cw-play">${icon('play')}</span><span class="cw-text"><span class="cw-line"><span class="card-name">${esc(displayName(i))}${i.kind === 'show' ? ` · ${code(i)}` : ''}</span><span class="card-meta">${p.duration ? `${fmt(p.duration - p.position)} left` : 'Up next'}</span></span><span class="progress-track"><span class="progress-fill" data-progress="${p.duration ? Math.min(100, p.position / p.duration * 100) : 0}"></span></span></span></span></button><button class="remove-continue" data-remove-continue="${i.id}" aria-label="Remove ${esc(i.group)} from Continue watching">×</button></div>`;
 }
-// Real frames from where you stopped, fetched one at a time (the preview decoder cancels overlapping requests).
+// Real frames from one second before where you stopped (the moment you left, not a frame mid-cut), fetched one at a time (the preview decoder cancels overlapping requests).
 const frames = new Map();
 let frameRun = 0;
 async function loadFrames() {
@@ -505,7 +513,7 @@ function detail(id, focus = true) {
       ${m?.people?.length ? `<p class="detail-sub">${esc(m.peopleLabel)} <strong>${esc(m.people.slice(0, 3).join(', '))}</strong></p>` : ''}
       <p class="detail-sub">${[...facts, selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie', selected.format].map(esc).join(' <span aria-hidden="true">·</span> ')}</p>
       ${m?.overview ? `<p class="detail-overview">${esc(m.overview)}</p>` : ''}
-      <div class="detail-actions"><button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `S${resume.season} E${resume.episode} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
+      <div class="detail-actions"><button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
       ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
       ${m?.rating ? `<div class="ratings"><div><p><img class="tmdb-logo" src="assets/tmdb.svg" alt="TMDB rating"></p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}
       ${metadataEnabled && selected.kind !== 'audio' ? `<p class="match-line">${m ? `Matched on TMDB as <strong>${esc(m.title)}</strong>${m.year ? ` (${esc(m.year)})` : ''}.` : 'Not matched on TMDB yet.'}<button class="text-button" data-action="fix-match">${icon('search')}${m ? 'Wrong title? Fix match' : 'Find on TMDB'}</button></p>` : ''}</div>
@@ -520,13 +528,22 @@ const episodeInfo = item => meta(item)?.episodes?.[item.season]?.[item.episode] 
 function episodeCard(i, resume) {
   const e = episodeInfo(i), p = library.progress[i.id], done = completed(i.id), now = resume?.id === i.id, pct = p?.duration ? Math.min(100, p.position / p.duration * 100) : 0;
   const facts = [e?.runtime ? `${e.runtime}m` : null, i.format, now ? `${fmt(p.position)} watched` : done ? 'Watched' : p?.position > 0 ? 'In progress' : null].filter(Boolean);
-  return `<div class="episode-entry ${now ? 'current' : ''}"><button class="episode-row" data-play="${i.id}"><span class="episode-still ${artFor(i)}">${e?.still ? `<img src="${esc(e.still)}" alt="" loading="lazy" draggable="false">` : ''}<span class="episode-code">S${i.season} E${i.episode}</span>${done ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : ''}${pct && !done ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}<span class="episode-play">${icon('play')}</span></span><span class="episode-text min"><strong>${i.episode}. ${esc(episodeName(i))}</strong><small>${facts.map(esc).join(' · ')}</small>${e?.overview ? `<span class="episode-overview">${esc(e.overview)}</span>` : ''}</span></button><button class="text-button" data-complete="${i.id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(i.title)}">${done ? 'Completed' : 'Mark complete'}</button></div>`;
+  return `<div class="episode-entry ${now ? 'current' : ''}"><button class="episode-row" data-play="${i.id}"><span class="episode-still ${artFor(i)}">${e?.still ? `<img src="${esc(e.still)}" alt="" loading="lazy" draggable="false">` : ''}<span class="episode-code">${code(i)}</span>${done ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : ''}${pct && !done ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}<span class="episode-play">${icon('play')}</span></span><span class="episode-text min"><strong>${i.prelude ? '' : `${i.episode}. `}${esc(episodeName(i))}</strong><small>${facts.map(esc).join(' · ')}</small>${e?.overview ? `<span class="episode-overview">${esc(e.overview)}</span>` : ''}</span></button><button class="text-button" data-complete="${i.id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(i.title)}">${done ? 'Completed' : 'Mark complete'}</button></div>`;
 }
 function episodesPanel(selected, items, resume, target) {
   const seasons = [...new Set(items.map(i => i.season))], key = titleKey(selected);
   const open = detailSeason?.key === key && seasons.includes(detailSeason.season) ? detailSeason.season : (resume || target).season;
   const stats = s => { const eps = items.filter(i => i.season === s); return { eps, watched: eps.filter(i => completed(i.id)).length }; };
-  return `<section class="panel wide episodes" aria-labelledby="episodes-h"><div class="panel-head"><h3 id="episodes-h">Episodes</h3>${seasons.length > 1 ? `<div class="chip-row season-tabs" role="tablist" aria-label="Seasons">${seasons.map(s => { const { eps, watched } = stats(s); return `<button class="chip" role="tab" data-season-tab="${s}" aria-selected="${s === open}" aria-pressed="${s === open}">Season ${s}<span class="season-count">${watched}/${eps.length}</span></button>`; }).join('')}</div>` : ''}<button class="text-button" data-enqueue-show="${selected.id}">Queue all</button></div>${seasons.map(s => { const { eps, watched } = stats(s); return `<section class="season" data-season-panel="${s}" ${s === open ? '' : 'hidden'}><h3 class="season-heading">Season ${s} · ${eps.length} ${eps.length === 1 ? 'episode' : 'episodes'} · ${watched} watched</h3><div class="episode-grid">${eps.map(i => episodeCard(i, resume)).join('')}</div></section>`; }).join('')}</section>`;
+  return `<section class="panel wide episodes" aria-labelledby="episodes-h"><div class="panel-head"><h3 id="episodes-h">Episodes</h3>${seasons.length > 1 ? `<div class="chip-row season-tabs" role="tablist" aria-label="Seasons">${seasons.map(s => { const { eps, watched } = stats(s); return `<button class="chip" role="tab" data-season-tab="${s}" aria-selected="${s === open}" aria-pressed="${s === open}">Season ${s}<span class="season-count">${watched}/${eps.length}</span></button>`; }).join('')}</div>` : ''}<span class="panel-actions">${preludeActions(items)}<button class="text-button" data-enqueue-show="${selected.id}">Queue all</button></span></div>${seasons.map(s => { const { eps, watched } = stats(s); return `<section class="season" data-season-panel="${s}" ${s === open ? '' : 'hidden'}><h3 class="season-heading">Season ${s} · ${eps.length} ${eps.length === 1 ? 'episode' : 'episodes'} · ${watched} watched</h3><div class="episode-grid">${eps.map(i => episodeCard(i, resume)).join('')}</div></section>`; }).join('')}</section>`;
+}
+// Any file can be the prelude, whatever it is called: the picker opens in the show's folder.
+const preludeActions = items => items.some(i => i.prelude) ? `<button class="text-button" data-action="pick-prelude">Change prelude…</button><button class="text-button" data-action="clear-prelude">Remove prelude</button>` : '<button class="text-button" data-action="pick-prelude">Add prelude…</button>';
+async function setPrelude(clear) {
+  const key = selected?.groupId; if (!key) return;
+  const updated = await api.setPrelude({ key, clear }); if (!updated) return;
+  library = updated; toast(clear ? 'Prelude removed.' : 'Prelude set. It plays before episode 1.');
+  const reopen = library.items.find(i => i.groupId === key && i.kind === 'show' && !i.prelude) || library.items.find(i => i.groupId === key);
+  selected = reopen || null; rerender();
 }
 function showSeason(season) {
   if (!selected) return;
@@ -589,39 +606,87 @@ function enqueue(id, all = false) {
 function ib(name, label, action, extra = '') { return `<button class="icon-button ${extra}" data-action="${action}" aria-label="${label}" title="${label}">${icon(name)}</button>`; }
 async function play(id, keepQueue = false) {
   const item = library.items.find(i => i.id === id); if (!item) return;
-  hidePreview(); remember(); await save(); const token = ++generation; subtitleGeneration++; loading = true; frameRun++; selected = null;
+  // Starting playback from the library always opens with the queue closed; next, previous and autoplay keep it as it was.
+  if (view !== 'player') queueOpen = false;
+  hidePreview(); remember(); await save(); streamId = null; const token = ++generation; subtitleGeneration++; loading = true; frameRun++; selected = null;
+  // A preloaded stream is used only if its track choice still matches what this title would pick now.
+  const fresh = prepared?.id === id && (({ audio: a, subtitle: s, delay: d }) => a === prepared.audio && s === prepared.subtitle && d === prepared.delay)(chooseTracks(item, prepared.info));
+  const ready = fresh ? prepared : null; if (ready) prepared = null; discardPrepared();
   video?.pause(); if (video) { video.removeAttribute('src'); video.load(); }
-  await api.stop(); current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
+  await api.stop(ready?.url); current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
   if (item.kind === 'show' && (!keepQueue || library.queue.some(queued => { const entry = library.items.find(i => i.id === queued); return !entry || entry.kind !== 'show' || !sameTitle(entry, item); }))) {
     library.queue = orderedEpisodes(item).map(i => i.id);
   } else if (!library.queue.includes(id)) {
     const siblings = item.kind === 'show' ? library.items.filter(i => sameTitle(i, item) && i.kind === 'show').sort((a, b) => a.season - b.season || a.episode - b.episode).map(i => i.id) : [id];
     library.queue = [...new Set([...library.queue, ...siblings])];
   }
-  info = { duration: 0, audio: [], subtitles: [], chapters: [] }; renderPlayer();
+  info = { duration: 0, audio: [], subtitles: [], chapters: [] }; renderPlayer(ready?.element);
   try {
-    const metadata = await api.inspect(id); if (token !== generation) return; info = metadata;
-    const choice = library.preferences.tracks?.[titleKey(item)];
-    audio = matchTrack(info.audio, choice?.audio)?.index ?? info.audio.find(a => a.default)?.index ?? info.audio[0]?.index ?? null;
-    subtitle = choice?.off ? null : matchTrack(info.subtitles.filter(t => t.text || t.bitmap), choice?.subtitle)?.index ?? null;
-    delay = choice?.delay || 0; subSize = choice?.size || 'M'; video.className = `sub-${subSize}`;
-    if (info.subtitles.find(t => t.index === subtitle)?.text) {
-      try { subtitleText = await api.subtitles({ id, index: subtitle }); } catch { subtitle = null; subtitleText = null; }
-      if (token !== generation) return;
+    if (ready) {
+      // Preloaded: tracks were chosen and the stream has been buffering; the inspect call only tells the scanner what plays.
+      ({ info, audio, subtitle, delay, subtitleText } = ready); void api.inspect(id).catch(() => {});
+    } else {
+      const metadata = await api.inspect(id); if (token !== generation) return; info = metadata;
+      ({ audio, subtitle, delay } = chooseTracks(item, info));
+      if (info.subtitles.find(t => t.index === subtitle)?.text) {
+        try { subtitleText = await api.subtitles({ id, index: subtitle }); } catch { subtitle = null; subtitleText = null; }
+        if (token !== generation) return;
+      }
     }
     if (library.progress[id]) library.progress[id].hidden = false;
-    const progress = library.progress[id]; const start = progress && !completed(id) && progress.position < info.duration - finishMargin(info.duration) ? progress.position : 0;
-    updateMetadata(); await loadStream(start, true, token); await save(); void detectMarkers(id);
+    updateMetadata();
+    if (ready) await adoptStream(ready, token); else await loadStream(startAt(id, info.duration), true, token);
+    await save(); void detectMarkers(id);
   } catch (error) { if (token === generation) { loading = false; playbackError = error.message; showMessage(); } }
 }
-function renderPlayer() {
+function chooseTracks(item, details) {
+  const choice = library.preferences.tracks?.[titleKey(item)];
+  return {
+    audio: matchTrack(details.audio, choice?.audio)?.index ?? details.audio.find(a => a.default)?.index ?? details.audio[0]?.index ?? null,
+    subtitle: choice?.off ? null : matchTrack(details.subtitles.filter(t => t.text || t.bitmap), choice?.subtitle)?.index ?? null,
+    delay: choice?.delay || 0
+  };
+}
+const startAt = (id, duration) => { const progress = library.progress[id]; return progress && !completed(id) && progress.position < duration - finishMargin(duration) ? progress.position : 0; };
+// Near the end of an episode (the last 45 seconds, or once its outro starts) the next queue item is prepared: tracks are
+// chosen as play() would and its stream opens in a detached video element, so the first seconds are already buffered
+// when this one ends and the next starts without waiting. Chromium's buffer limit throttles that transcode.
+const PRELOAD_LEAD = 45;
+let prepared = null, preparing = null;
+function discardPrepared() { preparing = null; if (!prepared) return; prepared.element.removeAttribute('src'); prepared.element.load(); prepared = null; }
+async function prepareNext(position) {
+  if (!current || !info?.duration || preparing || loading) return;
+  const id = nextInQueue(1); if (!id || prepared?.id === id) return;
+  const inOutro = (library.markers?.[current.id] || []).some(s => s.type === 'outro' && s.start > info.duration / 2 && position >= s.start);
+  if (info.duration - position > PRELOAD_LEAD && !inOutro) return;
+  discardPrepared();
+  const run = preparing = { id }, from = current.id, stale = () => preparing !== run || current?.id !== from;
+  try {
+    const details = await api.prepare(id), tracks = chooseTracks(library.items.find(i => i.id === id), details);
+    let text = null;
+    if (details.subtitles.find(t => t.index === tracks.subtitle)?.text) { try { text = await api.subtitles({ id, index: tracks.subtitle }); } catch { tracks.subtitle = null; } }
+    if (stale()) return;
+    const bitmapSubtitle = details.video ? details.subtitles.find(t => t.index === tracks.subtitle && t.bitmap)?.index ?? null : null;
+    const result = await api.stream({ id, offset: startAt(id, details.duration), audio: tracks.audio, bitmapSubtitle, subtitleDelay: tracks.delay, preload: true });
+    if (stale()) return;
+    const element = document.createElement('video'); element.playsInline = true; element.crossOrigin = 'anonymous'; element.preload = 'auto'; element.src = result.url; element.load();
+    prepared = { id, info: details, ...tracks, subtitleText: text, offset: result.offset, url: result.url, element };
+  } catch { /* Preloading only saves time; the next item still starts the regular way. */ }
+  finally { if (preparing === run) preparing = null; }
+}
+async function adoptStream(ready, token) {
+  playIntent = true; offset = ready.offset; streamId = current.id; pendingStream = null; applySubtitle(); updateTime(); showMessage(); updateToggle();
+  try { await video.play(); } catch (error) { if (token === generation && error.name !== 'AbortError') { loading = false; playbackError = error.message; showMessage(); } }
+}
+function renderPlayer(adopt = null) {
   document.body.classList.add('in-player');
-  const heading = current.kind === 'show' ? `${displayName(current)} · S${current.season} E${current.episode}` : itemMeta(current);
-  root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline></video><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time" id="position">0:00</span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><output id="seek-preview-time"></output></div></div><span class="time" id="duration">0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="1" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
-  video = $('#video'); video.volume = library.preferences.volume; updateVolume();
+  const heading = current.kind === 'show' ? `${displayName(current)} · ${code(current)}` : itemMeta(current);
+  root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
+  if (adopt) { $('#video').replaceWith(adopt); adopt.id = 'video'; adopt.dataset.preloaded = String(adopt.readyState); }
+  video = $('#video'); applyVolume(library.preferences.volume); updateVolume(); applySubStyle();
   const player = video;
   const listen = (name, callback) => player.addEventListener(name, event => { if (video === player && view === 'player') callback(event); });
-  listen('timeupdate', () => { updateTime(); if (Date.now() - lastSave > 1000) { remember(); void attempt(save); lastSave = Date.now(); } });
+  listen('timeupdate', () => { updateTime(); void prepareNext(offset + video.currentTime); if (Date.now() - lastSave > 1000) { remember(); void attempt(save); lastSave = Date.now(); } });
   listen('playing', () => { if (playIntent && !video.paused) void api.playbackState(true); loading = false; playbackError = ''; showMessage(); updateToggle(); scheduleIdle(); });
   listen('pause', () => { if (!playIntent) void api.playbackState(false); loading = false; showMessage(); updateToggle(); $('.stage')?.classList.remove('idle'); remember(); void attempt(save); });
   listen('waiting', () => { loading = playIntent && !video.paused; if (loading) void api.playbackState({ playing: true, buffering: true }); showMessage(); });
@@ -629,7 +694,7 @@ function renderPlayer() {
   listen('error', () => { void api.playbackState(false); loading = false; playbackError = 'Playback failed. File may be unavailable, damaged, or use an unsupported codec.'; showMessage(); });
   listen('click', () => toggle());
   listen('dblclick', () => api.window('fullscreen'));
-  $('#seek').addEventListener('input', e => { $('#position').textContent = fmt(e.target.value); fillRange(e.target); });
+  $('#seek').addEventListener('input', e => { showTimes(Number(e.target.value)); fillRange(e.target); });
   $('#seek').addEventListener('change', e => { void attempt(() => seek(Number(e.target.value))); });
   $('#seek').addEventListener('pointermove', hoverSeek);
   $('#seek').addEventListener('pointerleave', hidePreview);
@@ -639,16 +704,33 @@ function renderPlayer() {
   renderQueue(); renderSegments(); showMessage();
 }
 const fillRange = input => input.style.setProperty('--fill', `${(Number(input.value) - Number(input.min)) / Math.max(1e-9, Number(input.max) - Number(input.min)) * 100}%`);
-function updateVolume() { const input = $('#volume'), output = $('#volume-value'); if (!input || !video) return; input.value = video.volume; fillRange(input); output.textContent = video.muted ? 'Muted' : `${Math.round(video.volume * 100)}%`; }
+// Volume runs to 150%: the element covers 0–100% and a Web Audio gain stage adds the boost above it. The gain graph is only
+// built once the boost is first used, since routing an element through Web Audio can't be undone for that element.
+const MAX_VOLUME = 1.5;
+let audioContext = null, boost = null;
+function applyVolume(value) {
+  if (!video) return;
+  video.volume = Math.min(1, value);
+  if (value > 1 && boost?.element !== video) {
+    try {
+      audioContext ||= new AudioContext();
+      const gain = audioContext.createGain(); audioContext.createMediaElementSource(video).connect(gain).connect(audioContext.destination);
+      boost = { element: video, gain };
+    } catch { boost = null; }
+  }
+  if (boost?.element === video) { boost.gain.gain.value = Math.max(1, value); void audioContext.resume(); }
+}
+const currentVolume = () => boost?.element === video ? video.volume * boost.gain.gain.value : video.volume;
+function updateVolume() { const input = $('#volume'), output = $('#volume-value'); if (!input || !video) return; const volume = currentVolume(); input.value = volume; fillRange(input); output.textContent = video.muted ? 'Muted' : `${Math.round(volume * 100)}%`; output.classList.toggle('boosted', !video.muted && volume > 1.005); }
 function scheduleIdle() { clearTimeout(idleTimer); idleTimer = setTimeout(() => { if (view === 'player' && !video.paused && !sidePanel && !loading && !previewHovered && !$('.stage').querySelector(':focus-visible')) $('.stage').classList.add('idle'); }, 3200); }
 function updateMetadata() {
   $('#player-chips').innerHTML = `<span class="chip">${esc(current.format)}</span>${info.video ? `<span class="chip">${info.video.height}p · ${esc(info.video.codec.toUpperCase())}</span>` : '<span class="chip">Audio</span>'}${info.audio.length ? `<span class="chip">${esc(info.audio.find(a => a.index === audio)?.codec.toUpperCase())} · Stereo output</span>` : ''}`;
-  $('#seek').max = info.duration || 1; $('#duration').textContent = fmt(info.duration); renderSeekMarks();
+  $('#seek').max = info.duration || 1; $('#duration').textContent = fmt(info.duration); showTimes(offset + (video?.currentTime || 0)); renderSeekMarks();
 }
 async function loadStream(position, shouldPlay = true, token = generation) {
-  playIntent = shouldPlay; loading = true; playbackError = ''; showMessage(); updateToggle();
+  playIntent = shouldPlay; loading = true; playbackError = ''; showMessage(); updateToggle(); pendingStream = { id: current.id, position };
   const result = await api.stream({ id: current.id, offset: position, audio, bitmapSubtitle: bitmapTrack()?.index ?? null, subtitleDelay: delay }); if (token !== generation) return;
-  offset = result.offset; video.src = result.url; video.load(); applySubtitle(); updateTime();
+  offset = result.offset; streamId = current.id; pendingStream = null; video.src = result.url; video.load(); applySubtitle(); updateTime();
   if (playIntent) { try { await video.play(); } catch (error) { if (token === generation && error.name !== 'AbortError') { loading = false; playbackError = error.message; showMessage(); } } }
   // A paused stream only gets its first frame now; re-apply cue timings so the subtitle for this moment appears without pressing play.
   else { video.addEventListener('loadeddata', () => { loading = false; showMessage(); adjustCues(); }, { once: true }); }
@@ -662,10 +744,12 @@ async function seek(position) {
   for (let i = 0; i < video.seekable.length; i++) if (relative >= video.seekable.start(i) && relative <= video.seekable.end(i)) { video.currentTime = relative; updateTime(); return; }
   const token = ++generation; await loadStream(target, shouldPlay, token);
 }
-function updateTime() { if (!video || view !== 'player') return; const position = Math.min(info.duration || Infinity, offset + (video.currentTime || 0)); $('#position').textContent = fmt(position); if (document.activeElement !== $('#seek')) $('#seek').value = position; fillRange($('#seek')); updateSkip(position); }
+// Left: elapsed / total. Right: time left, from the same whole seconds so elapsed + left always adds up to the total shown.
+function showTimes(position) { $('#position').textContent = fmt(position); $('#remaining').textContent = `-${fmt(Math.floor(info.duration || 0) - Math.floor(position))}`; }
+function updateTime() { if (!video || view !== 'player') return; const position = Math.min(info.duration || Infinity, offset + (video.currentTime || 0)); showTimes(position); if (document.activeElement !== $('#seek')) $('#seek').value = position; fillRange($('#seek')); updateSkip(position); }
 function updateToggle() { const btn = $('#play-toggle'); if (!btn) return; btn.innerHTML = icon(playIntent ? 'pause' : 'play'); btn.setAttribute('aria-label', playIntent ? 'Pause' : 'Play'); }
 function toggle() { if (!video || !video.getAttribute('src')) return; playIntent = !playIntent; void api.playbackState(playIntent); if (playIntent) void attempt(() => video.play()); else video.pause(); updateToggle(); }
-function setVolume(value) { if (!video) return; video.volume = Math.max(0, Math.min(1, value)); video.muted = false; library.preferences.volume = video.volume; updateVolume(); const btn = document.querySelector('[data-action="mute"]'); if (btn) btn.innerHTML = icon('volume'); void attempt(save); }
+function setVolume(value) { if (!video) return; const volume = Math.round(Math.max(0, Math.min(MAX_VOLUME, value)) * 100) / 100; applyVolume(volume); video.muted = false; library.preferences.volume = volume; updateVolume(); const btn = document.querySelector('[data-action="mute"]'); if (btn) btn.innerHTML = icon('volume'); void attempt(save); }
 function showMessage() {
   const message = $('#stage-message'); if (!message) return;
   message.classList.toggle('error', !!playbackError);
@@ -681,16 +765,17 @@ function renderQueue() {
     const id = item.id, previous = items[index - 1], now = id === current.id, done = completed(id), p = library.progress[id], pct = p?.duration && !done ? Math.min(100, p.position / p.duration * 100) : 0;
     const still = episodeInfo(item)?.still || (item.kind !== 'show' ? meta(item)?.backdrop : null), runtime = episodeInfo(item)?.runtime;
     const heading = item.kind === 'show' && (!previous || !sameTitle(previous, item) || previous.season !== item.season) ? `<h3 class="season-heading">${esc(displayName(item))} · Season ${item.season}</h3>` : '';
-    return `${heading}<div class="queue-row ${now ? 'current' : ''} ${done ? 'done' : ''}"><button class="qplay" data-play="${id}" aria-label="Play ${esc(item.title)}"><span class="queue-thumb ${artFor(item)}">${still ? `<img src="${esc(still)}" alt="" draggable="false">` : ''}<span class="queue-code">${item.kind === 'show' ? `E${item.episode}` : esc(item.format)}</span>${pct ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}</span><span class="queue-info"><small class="kicker">${now ? '<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>Now playing' : done ? 'Watched' : item.kind === 'show' ? `S${item.season} · E${item.episode}` : 'Movie'}</small><strong>${esc(item.kind === 'show' ? episodeName(item) : displayName(item))}</strong><small>${esc([runtime ? `${runtime}m` : null, item.format].filter(Boolean).join(' · '))}</small></span></button><span class="queue-actions"><button class="icon-button" data-complete="${id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(item.title)}" title="${done ? 'Mark incomplete' : 'Mark complete'}">${icon('check')}</button><button class="icon-button" data-remove-queue="${id}" aria-label="Remove ${esc(item.title)} from queue" title="Remove from queue">${icon('close')}</button></span></div>`;
+    return `${heading}<div class="queue-row ${now ? 'current' : ''} ${done ? 'done' : ''}"><button class="qplay" data-play="${id}" aria-label="Play ${esc(item.title)}"><span class="queue-thumb ${artFor(item)}">${still ? `<img src="${esc(still)}" alt="" draggable="false">` : ''}<span class="queue-code">${item.kind === 'show' ? (item.prelude ? 'Pre' : `E${item.episode}`) : esc(item.format)}</span>${pct ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}</span><span class="queue-info"><small class="kicker">${now ? '<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>Now playing' : done ? 'Watched' : item.kind === 'show' ? (item.prelude ? 'Prelude' : `S${item.season} · E${item.episode}`) : 'Movie'}</small><strong>${esc(item.kind === 'show' ? episodeName(item) : displayName(item))}</strong><small>${esc([runtime ? `${runtime}m` : null, item.format].filter(Boolean).join(' · '))}</small></span></button><span class="queue-actions"><button class="icon-button" data-complete="${id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(item.title)}" title="${done ? 'Mark incomplete' : 'Mark complete'}">${icon('check')}</button><button class="icon-button" data-remove-queue="${id}" aria-label="Remove ${esc(item.title)} from queue" title="Remove from queue">${icon('close')}</button></span></div>`;
   };
   panel.innerHTML = `<div class="queue-header"><div><h2>Up next</h2><p>${left} to go · ${items.length} in queue</p></div><button class="text-button" data-action="clear-watched">Clear watched</button></div><div class="queue-items">${items.map(row).join('') || '<p class="queue-empty">Nothing queued. Add titles from a title page.</p>'}</div><div class="autoplay"><div><strong>Autoplay next</strong><small>Plays the next episode when one ends</small></div><button class="switch ${library.preferences.autoplay ? 'on' : ''}" data-action="autoplay" aria-label="Autoplay next" aria-pressed="${library.preferences.autoplay}"></button></div>`;
   applyStyles(panel);
 }
-async function step(direction) {
+function nextInQueue(direction) {
   const queue = current?.kind === 'show' ? library.queue.filter(id => { const item = library.items.find(i => i.id === id); return item?.kind === 'show' && sameTitle(item, current); }) : library.queue;
   const index = queue.indexOf(current?.id);
-  if (index >= 0 && queue[index + direction]) await play(queue[index + direction], true);
+  return index >= 0 ? queue[index + direction] || null : null;
 }
+async function step(direction) { const id = nextInQueue(direction); if (id) await play(id, true); }
 const scanningSegments = new Set();
 function acceptMarkers(id, detected) {
   library.markers ||= {};
@@ -716,11 +801,21 @@ function renderSegments() {
   tools.innerHTML = '<button class="pill" id="skip-segment" data-action="skip-segment" aria-keyshortcuts="Enter" hidden></button>';
   renderSeekMarks(); updateSkip(offset + (video?.currentTime || 0));
 }
+// Seek bar sections: skip ranges are drawn and labelled on the bar, chapters get a tick at each start. Hovering names the
+// section under the pointer in the preview; skip ranges win over chapters where they overlap.
+const sectionName = type => type[0].toUpperCase() + type.slice(1);
+function sectionAt(time) {
+  const marker = (library.markers?.[current?.id] || []).find(s => time >= s.start && time < s.end);
+  if (marker) return sectionName(marker.type);
+  const chapters = info?.chapters || [];
+  return chapters.length > 1 ? [...chapters].reverse().find(c => time >= c.start)?.title || '' : '';
+}
 function renderSeekMarks() {
   const marks = $('#seek-marks'); if (!marks || !current) return;
-  const duration = info?.duration || 0, markers = duration ? library.markers?.[current.id] || [] : [];
-  marks.innerHTML = markers.map(() => '<span></span>').join('');
-  markers.forEach((s, i) => { const span = marks.children[i]; span.style.left = `${s.start / duration * 100}%`; span.style.width = `${Math.max(.4, (s.end - s.start) / duration * 100)}%`; span.title = s.type; });
+  const duration = info?.duration || 0, markers = duration ? library.markers?.[current.id] || [] : [], chapters = duration && info.chapters.length > 1 ? info.chapters.filter(c => c.start > 0) : [];
+  marks.innerHTML = markers.map(s => `<span class="seek-mark"><i>${esc(sectionName(s.type))}</i></span>`).join('') + chapters.map(() => '<span class="seek-chapter"></span>').join('');
+  markers.forEach((s, i) => { const span = marks.children[i]; span.style.left = `${s.start / duration * 100}%`; span.style.width = `${Math.max(.4, (s.end - s.start) / duration * 100)}%`; });
+  chapters.forEach((c, i) => { marks.children[markers.length + i].style.left = `${c.start / duration * 100}%`; });
 }
 function updateSkip(position) {
   const button = $('#skip-segment'); if (!button || !current) return;
@@ -750,17 +845,44 @@ function renderTracks() {
   if (sidePanel === 'segments') { panel.innerHTML = segmentsPanel(); return; }
   const bitmap = !!bitmapTrack();
   const audioRows = info.audio.map(a => `<button class="track-option ${a.index === audio ? 'selected' : ''}" data-audio="${a.index}" aria-pressed="${a.index === audio}"><span class="radio"></span><span class="track-copy">${trackHeading(a)}<small>${esc(a.codec.toUpperCase())} · ${a.channels} ch${a.channels > 2 ? ' · plays as stereo' : ''}${a.default ? ' · Default' : ''}</small></span></button>`).join('');
-  const subtitleRows = info.subtitles.map(s => `<button class="track-option ${s.index === subtitle ? 'selected' : ''}" data-subtitle="${s.index}" aria-pressed="${s.index === subtitle}" ${s.text || s.bitmap ? '' : 'disabled'}><span class="radio"></span><span class="track-copy">${trackHeading(s)}<small>${esc(s.codec.toUpperCase())} · ${s.bitmap ? 'Bitmap' : s.text ? 'Text' : 'Unsupported format'}</small></span></button>`).join('');
+  const subtitleRows = info.subtitles.map(s => `<button class="track-option ${s.index === subtitle ? 'selected' : ''}" data-subtitle="${s.index}" aria-pressed="${s.index === subtitle}" ${s.text || s.bitmap ? '' : 'disabled'}><span class="radio"></span><span class="track-copy">${trackHeading(s)}<small>${esc(s.codec.toUpperCase())} · ${s.sidecar ? 'File next to video' : s.bitmap ? 'Bitmap' : s.text ? 'Text' : 'Unsupported format'}</small></span></button>`).join('');
   panel.innerHTML = `<section class="tracks-panel" aria-label="Audio and subtitles">
     <div class="tracks-heading"><h3>Audio & subtitles</h3><button class="icon-button" data-action="tracks" aria-label="Close audio and subtitles">×</button></div>
     <div class="track-columns"><div><h3>Audio</h3>${audioRows || '<p class="scan-note">No audio tracks</p>'}</div>
     <div><h3>Subtitles</h3><button class="track-option ${subtitle === null ? 'selected' : ''}" data-subtitle="off" aria-pressed="${subtitle === null}"><span class="radio"></span><span><strong>Off</strong><small>No subtitles</small></span></button>${subtitleRows}
     ${subtitle === 'external' ? '<button class="track-option selected" disabled><span class="radio"></span><span><strong>External file</strong><small>Loaded subtitles</small></span></button>' : ''}</div></div>
     <div class="track-bottom"><div class="delay-controls"><span>Sub delay</span><button class="icon-button" data-action="delay-down" aria-label="Subtitles earlier by 0.1 seconds">−</button><output>${delay > 0 ? '+' : ''}${delay.toFixed(1)} s</output><button class="icon-button" data-action="delay-up" aria-label="Subtitles later by 0.1 seconds">+</button></div>
-    <div class="size-options" aria-label="Subtitle size">${['S', 'M', 'L'].map(size => `<button class="${size === subSize ? 'selected' : ''}" data-size="${size}" aria-label="Subtitle size ${size}" aria-pressed="${size === subSize}" ${bitmap ? 'disabled title="Bitmap subtitles keep their original size"' : ''}>${size}</button>`).join('')}</div><button class="text-button" data-action="subtitle-file">Load subtitle file…</button></div>
+    <button class="text-button" data-action="subtitle-file">Load subtitle file…</button></div>
+    ${subStylePanel(bitmap)}
     ${bitmap ? '<p class="bitmap-note">Bitmap subtitles keep their original appearance. Track or delay changes briefly reload playback.</p>' : ''}
     ${info.chapters.length ? `<div class="player-chapters">${info.chapters.map((c, index) => `<button class="chapter-button" data-chapter="${index}">${esc(c.title)} · ${fmt(c.start)}</button>`).join('')}</div>` : ''}</section>`;
 }
+// Subtitle look is one global preference: size (50–200%), font, background box, weight/slant and an edge effect.
+// It is applied through CSS variables that video::cue reads, so restyling never reloads the track.
+const SUB_FONTS = [['sans', 'Sans', "Geist, 'Segoe UI', system-ui, sans-serif"], ['classic', 'Classic', 'Arial, Helvetica, sans-serif'], ['serif', 'Serif', "Georgia, 'Times New Roman', serif"], ['mono', 'Mono', "'Geist Mono', Consolas, monospace"], ['casual', 'Casual', "'Comic Sans MS', 'Segoe Print', cursive"]];
+const SUB_BACKGROUNDS = [['none', 'Off', 0], ['light', 'Light', .45], ['dark', 'Dark', .75], ['solid', 'Solid', 1]];
+const SUB_EDGES = [['none', 'None', 'none'], ['outline', 'Outline', '-1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000, 0 0 3px #000'], ['shadow', 'Shadow', '2px 2px 4px #000, 0 0 8px #000c']];
+const subStyle = () => ({ size: 1, font: 'sans', background: 'light', bold: false, italic: false, edge: 'none', ...library.preferences.subtitles });
+function applySubStyle() {
+  if (!video) return; const style = subStyle();
+  const set = (name, value) => video.style.setProperty(name, value);
+  set('--cue-scale', String(style.size)); set('--cue-font', SUB_FONTS.find(([id]) => id === style.font)?.[2] || SUB_FONTS[0][2]);
+  set('--cue-bg', `rgb(0 0 0 / ${SUB_BACKGROUNDS.find(([id]) => id === style.background)?.[2] ?? .45})`);
+  set('--cue-weight', style.bold ? '700' : '400'); set('--cue-style', style.italic ? 'italic' : 'normal'); set('--cue-shadow', SUB_EDGES.find(([id]) => id === style.edge)?.[2] || 'none');
+}
+function setSubStyle(change, render = true) { library.preferences.subtitles = { ...subStyle(), ...change }; applySubStyle(); if (render) renderTracks(); void attempt(save); }
+function subStylePanel(bitmap) {
+  const style = subStyle(), off = bitmap ? 'disabled title="Bitmap subtitles keep their original look"' : '';
+  const chips = (label, key, options) => `<div class="size-options" role="group" aria-label="${label}">${options.map(([id, name]) => `<button class="${style[key] === id ? 'selected' : ''}" data-sub-style="${key}:${id}" aria-pressed="${style[key] === id}" ${off}>${name}</button>`).join('')}</div>`;
+  const row = (label, body) => `<div class="sub-style-row"><span>${label}</span>${body}</div>`;
+  return `<div class="sub-style">${row('Size', `<input id="sub-size" class="volume" type="range" min=".5" max="2" step=".05" value="${style.size}" aria-label="Subtitle size" ${off}><output>${Math.round(style.size * 100)}%</output>`)}
+    ${row('Font', chips('Subtitle font', 'font', SUB_FONTS))}${row('Background', chips('Subtitle background', 'background', SUB_BACKGROUNDS))}
+    ${row('Style', `<div class="size-options" role="group" aria-label="Subtitle text style">${[['bold', 'Bold'], ['italic', 'Italic']].map(([key, name]) => `<button class="${style[key] ? 'selected' : ''}" data-sub-style="${key}:on" aria-pressed="${style[key]}" ${off}>${name}</button>`).join('')}</div>${chips('Subtitle edge', 'edge', SUB_EDGES)}`)}</div>`;
+}
+document.addEventListener('input', event => {
+  if (event.target.id !== 'sub-size') return;
+  const size = Number(event.target.value); event.target.nextElementSibling.textContent = `${Math.round(size * 100)}%`; fillRange(event.target); setSubStyle({ size }, false);
+});
 function applySubtitle() {
   $('#subtitle-track')?.remove(); if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); subtitleUrl = null; trackCues = []; cueTrack = null;
   if (!subtitleText || !video) return;
@@ -804,7 +926,7 @@ async function pickSubtitle(value) {
 async function restartStream() { const token = ++generation; await loadStream(offset + video.currentTime, playIntent, token); }
 async function changeSubtitleDelay(change) { delay = Math.max(-60, Math.min(60, Math.round((delay + change) * 10) / 10)); adjustCues(); renderTracks(); rememberTracks(); if (bitmapTrack()) await restartStream(); }
 async function backToLibrary() {
-  hidePreview(); if (fullscreenActive) await api.window('fullscreen'); remember(); await save(); ++generation; ++subtitleGeneration; video?.pause(); if (video) { video.removeAttribute('src'); video.load(); } await api.stop();
+  hidePreview(); discardPrepared(); if (fullscreenActive) await api.window('fullscreen'); remember(); await save(); ++generation; ++subtitleGeneration; video?.pause(); if (video) { video.removeAttribute('src'); video.load(); } await api.stop();
   if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); current = null; video = null; renderLibrary();
 }
 // Page transitions run through the View Transitions API and are skipped when motion is reduced.
@@ -852,7 +974,7 @@ const actions = {
   rescan: async () => { toast('Refreshing your folders…'); library = await api.rescan(); renderLibrary(); toast(library.warnings?.join('\n') || 'Library is up to date.'); },
   'all-folders': () => { folderFilter = null; renderLibrary(); }, 'close-detail': closeDetail,
   about: () => { footerOpen = !footerOpen; $('#library-footer')?.classList.toggle('open', footerOpen); $('.help-button')?.setAttribute('aria-expanded', String(footerOpen)); },
-  'fix-match': () => openMatch(selected), 'close-match': () => { $('#match-dialog')?.close(); matchItem = null; },
+  'fix-match': () => openMatch(selected), 'pick-prelude': () => setPrelude(false), 'clear-prelude': () => setPrelude(true), 'close-match': () => { $('#match-dialog')?.close(); matchItem = null; },
   shortcuts: () => $('#shortcuts').showModal(), library: backToLibrary,
   toggle, backward: () => seek(offset + video.currentTime - SKIP), forward: () => seek(offset + video.currentTime + SKIP),
   previous: () => step(-1), next: () => step(1), fullscreen: () => api.window('fullscreen'),
@@ -863,7 +985,15 @@ const actions = {
   'clear-watched': async () => { library.queue = library.queue.filter(id => id === current.id || !completed(id)); await save(); renderQueue(); },
   'delay-down': () => changeSubtitleDelay(-.1),
   'delay-up': () => changeSubtitleDelay(.1),
-  'subtitle-file': async () => { const id = current.id, token = ++subtitleGeneration; const text = await api.loadSubtitle(); if (text && current?.id === id && token === subtitleGeneration) { const wasBitmap = !!bitmapTrack(); subtitleText = text; subtitle = 'external'; applySubtitle(); renderTracks(); if (wasBitmap) await restartStream(); } },
+  'subtitle-file': async () => {
+    const id = current.id, token = ++subtitleGeneration; const loaded = await api.loadSubtitle(id);
+    if (!loaded || current?.id !== id || token !== subtitleGeneration) return;
+    const wasBitmap = !!bitmapTrack(); subtitleText = loaded.text;
+    // Saved next to the video, it is a regular track from now on and is remembered like one.
+    if (loaded.track) { if (!info.subtitles.some(t => t.index === loaded.track.index)) info.subtitles.push(loaded.track); subtitle = loaded.track.index; rememberTracks(); toast('Subtitles saved next to the video.'); }
+    else { subtitle = 'external'; if (loaded.warning) toast(loaded.warning); }
+    applySubtitle(); renderTracks(); if (wasBitmap) await restartStream();
+  },
   'marker-end': async () => {
     const end = offset + video.currentTime;
     if (!markerDraft || end <= markerDraft.start) { toast('End must come after start.'); return; }
@@ -906,7 +1036,7 @@ document.addEventListener('click', event => {
     if (btn.dataset.removeQueue) { library.queue = library.queue.filter(id => id !== btn.dataset.removeQueue); await save(); renderQueue(); return; }
     if (btn.dataset.audio) { const position = offset + video.currentTime, playing = playIntent; audio = Number(btn.dataset.audio); rememberTracks(); updateMetadata(); renderTracks(); const token = ++generation; await loadStream(position, playing, token); return; }
     if (btn.dataset.subtitle) return pickSubtitle(btn.dataset.subtitle);
-    if (btn.dataset.size) { subSize = btn.dataset.size; video.className = `sub-${subSize}`; rememberTracks(); renderTracks(); return; }
+    if (btn.dataset.subStyle) { const [key, value] = btn.dataset.subStyle.split(':'); const style = subStyle(); setSubStyle({ [key]: ['bold', 'italic'].includes(key) ? !style[key] : value }); return; }
     if (btn.dataset.chapter !== undefined) return seek(info.chapters[Number(btn.dataset.chapter)].start);
     const action = actions[btn.dataset.action]; if (action) { btn.classList.add('busy'); try { await action(); } finally { btn.classList.remove('busy'); } }
   });
@@ -919,7 +1049,7 @@ document.addEventListener('keydown', event => {
   if (typing || $('#shortcuts').open || view !== 'player') return;
   // Enter takes a visible skip (intro, recap, outro) unless a control has focus and Enter belongs to it.
   if (event.key === 'Enter' && !$('#skip-segment')?.hidden && !event.target.closest('button, a, input, select, textarea')) { event.preventDefault(); void attempt(actions['skip-segment']); return; }
-  const key = event.key.toLowerCase(); const keyActions = { ' ': toggle, arrowleft: actions.backward, arrowright: actions.forward, arrowup: () => setVolume(video.volume + .05), arrowdown: () => setVolume(video.volume - .05), f: actions.fullscreen, m: actions.mute };
+  const key = event.key.toLowerCase(); const keyActions = { ' ': toggle, arrowleft: actions.backward, arrowright: actions.forward, arrowup: () => setVolume(currentVolume() + .05), arrowdown: () => setVolume(currentVolume() - .05), f: actions.fullscreen, m: actions.mute };
   if (keyActions[key]) { if (key === ' ' && event.target.closest('button')) return; event.preventDefault(); void attempt(keyActions[key]); $('.stage')?.classList.remove('idle'); scheduleIdle(); }
 });
 let dragDepth = 0;
@@ -928,6 +1058,8 @@ document.addEventListener('dragover', event => event.preventDefault());
 document.addEventListener('dragleave', event => { event.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; $('#drop-overlay')?.remove(); } });
 document.addEventListener('drop', event => { event.preventDefault(); dragDepth = 0; $('#drop-overlay')?.remove(); const files = Array.from(event.dataTransfer.files); void attempt(async () => { const before = new Set(library.items.map(i => i.id)); library = await api.importDrop(files); const item = library.items.find(i => !before.has(i.id)); if (item) await play(item.id); else toast('No new supported media files found. Use Add folder for directories.'); }); });
 window.addEventListener('beforeunload', () => { remember(); void save(); });
+// Closing the window waits for the latest position to be written before the app quits.
+api?.onClosing?.(async () => { try { remember(); await save(); } finally { void api.window('close'); } });
 api?.onFullscreen(active => { fullscreenActive = active; fullscreenQueueOpen = false; document.body.classList.toggle('fullscreen', active); hidePreview(); if (view === 'player') { renderQueue(); $('.stage')?.classList.remove('idle'); scheduleIdle(); } });
 api?.onMetadata?.(update => { metadata = update || {}; rerender(); });
 api?.onSegments(update => {

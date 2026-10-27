@@ -3,10 +3,55 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { fixtures, bitmapFixture } = require('./fixtures.cjs');
-const { describe, scan, probe, ffmpeg, run } = require('../electron/media.cjs');
+const { describe, scan, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, probe, ffmpeg, run } = require('../electron/media.cjs');
 const { createStreamServer } = require('../electron/stream.cjs');
 const { createPreviews } = require('../electron/previews.cjs');
 const os = require('node:os');
+
+test('loaded subtitle files are copied next to the video without overwriting and listed as sidecar tracks', async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-sidecar-'));
+  const video = path.join(temp, 'show', 'Northbound.S01E01.mkv'), other = path.join(temp, 'show', 'Northbound.S01E02.mkv');
+  const download = path.join(temp, 'downloads', 'random subs.en.srt');
+  await fs.mkdir(path.dirname(video), { recursive: true }); await fs.mkdir(path.dirname(download), { recursive: true });
+  await fs.writeFile(video, ''); await fs.writeFile(other, ''); await fs.writeFile(download, '1\n00:00:00,000 --> 00:00:01,000\nHi\n');
+  await fs.writeFile(path.join(temp, 'show', 'Northbound.S01E02.srt'), '');
+  try {
+    const first = await keepSidecar(video, download, 'en');
+    assert.equal(path.basename(first), 'Northbound.S01E01.en.srt');
+    assert.equal(path.basename(await keepSidecar(video, download, 'en')), 'Northbound.S01E01.en.2.srt');
+    assert.equal(await keepSidecar(video, first, 'en'), first);
+    assert.equal(await fs.readFile(download, 'utf8'), await fs.readFile(first, 'utf8'));
+    const tracks = await sidecars(video);
+    assert.deepEqual(tracks.map(t => [t.index, t.language, t.title, t.codec, t.text]), [[SIDECAR, 'en', 'Subtitle file', 'srt', true], [SIDECAR + 1, 'en', '2', 'srt', true]]);
+    assert.deepEqual((await sidecars(other)).map(t => path.basename(t.path)), ['Northbound.S01E02.srt']);
+  } finally { await fs.rm(temp, { recursive: true, force: true }); }
+});
+
+test('any picked file becomes a show prelude, inside or outside its folder, and survives regrouping', async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-prelude-'));
+  const show = path.join(temp, 'Shows', 'Northbound');
+  const files = ['S01/S01E01 - Thaw.mkv', 'S01/S01E02 - Drift.mkv', 'S02/S02E01 - Ice.mkv', 'extras/random clip 7.mkv'];
+  for (const file of files) { const target = path.join(show, file); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, ''); }
+  const outside = path.join(temp, 'Downloads', 'whatever_final_v2.mp4'); await fs.mkdir(path.dirname(outside), { recursive: true }); await fs.writeFile(outside, '');
+  try {
+    const items = await scan(path.join(temp, 'Shows'));
+    const groupId = items.find(i => i.path.endsWith('S01E01 - Thaw.mkv')).groupId;
+    const inside = path.join(show, 'extras', 'random clip 7.mkv');
+    // A file in the show's folder is renumbered to the first season's episode 0.
+    let result = applyPreludes(groupFolders(items), { [groupId]: inside });
+    const pre = result.find(i => i.path === inside);
+    assert.deepEqual([pre.kind, pre.groupId, pre.season, pre.episode, pre.prelude], ['show', groupId, 1, 0, true]);
+    // A file from anywhere else joins the show; the previous pick loses its flag.
+    result = applyPreludes(groupFolders(result), { [groupId]: outside });
+    const added = result.find(i => i.path === outside);
+    assert.deepEqual([added.group, added.season, added.episode, added.prelude, added.root], ['Northbound', 1, 0, true, path.join(temp, 'Shows')]);
+    assert.equal(result.find(i => i.path === inside).prelude, undefined);
+    assert.equal(result.filter(i => i.path === outside).length, 1);
+    // Clearing the pick leaves regular numbering after regrouping.
+    result = applyPreludes(groupFolders(result), {});
+    assert.equal(result.some(i => i.prelude), false);
+  } finally { await fs.rm(temp, { recursive: true, force: true }); }
+});
 
 test('title folders classify single videos as movies and multiple videos as shows across seasons', async () => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-folders-'));

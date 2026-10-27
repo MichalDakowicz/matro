@@ -20,7 +20,7 @@ The implementation carries those layouts and colors into a responsive desktop wi
 
 Users can add local or mounted network folders, open multiple files, or drop files into the window. Folder scans recurse without following directory symlinks. Rescan updates available folders and reports unavailable roots without erasing their catalog. Removing a folder removes its entries from Matro only; it never deletes media on disk.
 
-Folder scans preserve title directories: one video in a title folder becomes a movie; multiple videos become a show. Collection roots such as Media, Shows, and Movies are traversed into individual title directories. Nested S01/S02 or Season 1 folders remain seasons of the parent title. Folder identity keeps equally named shows in different directories separate. Season and episode numbers come from S01E02/1x02 filenames, season directories, or chapter/episode numbers; natural filename order provides fallback numbering. Audio files remain under Music and do not affect video counts. Individually opened files retain filename-based classification. Search matches show and file titles. The drawer exposes file location, playback, and queue actions. Existing folder libraries are rescanned automatically once when upgrading to this grouping version; file IDs, watch progress, and queues remain stable.
+Folder scans preserve title directories: one video in a title folder becomes a movie; multiple videos become a show. Collection roots such as Media, Shows, and Movies are traversed into individual title directories. Nested S01/S02 or Season 1 folders remain seasons of the parent title. Folder identity keeps equally named shows in different directories separate. Season and episode numbers come from S01E02/1x02 filenames, season directories, or chapter/episode numbers; natural filename order provides fallback numbering. Any file, whatever its name or folder, can be picked as a show's prelude from the Episodes panel (Add prelude…): it plays first as episode 0 of the first season, is labelled Prelude, survives rescans, and can be changed or removed. Audio files remain under Music and do not affect video counts. Individually opened files retain filename-based classification. Search matches show and file titles. The drawer exposes file location, playback, and queue actions. Existing folder libraries are rescanned automatically once when upgrading to this grouping version; file IDs, watch progress, and queues remain stable.
 
 ### Playback
 
@@ -28,7 +28,7 @@ FFprobe reads real streams, duration, and chapters. FFmpeg decodes the selected 
 
 Recognized import extensions include MKV, MP4/M4V, AVI, MOV, WebM, FLV, WMV, MPG/MPEG, TS/MTS/M2TS, VOB, OGV, 3GP, MP3, FLAC, WAV, AAC, M4A, OGG, Opus, WMA, AIFF, and ALAC. Actual decoding depends on the bundled FFmpeg build and the file's codec, not just its extension. The file dialog also offers an all-files view, though imports currently use the extension allowlist.
 
-Controls include pause, seek, 10-second jumps, volume/mute, playback speed, fullscreen, previous/next queue entry, and chapter jumps. Progress is persisted periodically and on pause/navigation. Completed titles restart from the beginning. Queue state, autoplay, and volume survive restarts.
+Controls include pause, seek, 10-second jumps, volume/mute (boost up to 150% through a Web Audio gain stage), playback speed, fullscreen, previous/next queue entry, and chapter jumps. Progress is persisted periodically, on pause/navigation (including mid-seek, before the new stream starts) and before the window closes. In the last 45 seconds of an item, or once its outro starts, the next queue item is prepared: tracks are chosen, and its stream starts buffering in a detached video element alongside the playing one, so autoplay and Next start it without waiting. A track change discards the preload. Completed titles restart from the beginning. Queue state, autoplay, and volume survive restarts.
 
 Hovering the seek bar displays a source-frame thumbnail and a target timestamp to tenths of a second. Thumbnail requests are debounced, obsolete decoder work is cancelled, and up to 100 frames are cached in memory in one-second buckets. Audio-only items show the timestamp without a thumbnail. Preview failure leaves seeking available.
 
@@ -36,7 +36,7 @@ Fullscreen removes the title bar, window padding, and rounded player frame, expa
 
 ### Subtitles and audio
 
-Audio tracks are read from the media file. Track rows place the full language name first (Japanese, English, Polish, etc.), followed by the track title, with codec, channels, and default status below. The same language-first labeling is used for subtitles. Text subtitle streams (including SRT, ASS/SSA, WebVTT, and MOV text) are converted to WebVTT. Users can also load external SRT/VTT/ASS/SSA files. Subtitle timing is adjusted relative to the original file timeline after seeks; text size and subtitle delay can be changed in the panel.
+Audio tracks are read from the media file. Track rows place the full language name first (Japanese, English, Polish, etc.), followed by the track title, with codec, channels, and default status below. The same language-first labeling is used for subtitles. Text subtitle streams (including SRT, ASS/SSA, WebVTT, and MOV text) are converted to WebVTT. Users can also load external SRT/VTT/ASS/SSA files. Subtitle timing is adjusted relative to the original file timeline after seeks; subtitle delay can be changed in the panel, and one global subtitle style sets size (50–200%), font, background box, bold/italic and an outline or shadow. A loaded subtitle file is copied next to the video (never overwriting) and same-named SRT/VTT/ASS/SSA files beside a video are offered as tracks.
 
 Embedded bitmap tracks (PGS, DVD/VobSub, DVB, XSUB) use FFmpeg's bitmap-to-video overlay path, composited into the selected playback stream. Selecting a bitmap, turning it off, switching back to text, or changing bitmap delay reloads playback at the current position while preserving play/pause intent. Bitmap size/styling is preserved and its text-size controls are disabled. External bitmap sidecar files are not supported yet. PGS and DVD rendering, clearing, seeking into active captions, and positive/negative delay are covered by generated media tests; a DVD bitmap clip from the local Akira file was also decoded during development. ASS text survives conversion, but advanced styling and animation do not. Audio output currently downmixes to stereo. Track language choices are not yet retained across different files; the next file selects its default audio track and disables subtitles.
 
@@ -46,7 +46,7 @@ Embedded bitmap tracks (PGS, DVD/VobSub, DVB, XSUB) use FFmpeg's bitmap-to-video
 | --- | --- |
 | Space | Play / pause |
 | Left / right | Seek 5 seconds (on the landing reel: previous / next title) |
-| Up / down | Adjust volume |
+| Up / down | Adjust volume (0–150%) |
 | M | Mute / unmute |
 | F | Toggle fullscreen |
 | Escape | Exit fullscreen, otherwise close details/tracks or return to library |
