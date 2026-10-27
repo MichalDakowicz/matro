@@ -153,5 +153,10 @@ test('PGS and DVD bitmap subtitles render, clear, seek, and respect delay; hover
     assert.match(preview, /^data:image\/jpeg;base64,/);
     const jpeg = Buffer.from(preview.split(',')[1], 'base64'); assert.equal(jpeg.readUInt16BE(0), 0xffd8);
     assert.equal(await previews.frame(files.pgs, 2.9), preview, 'Preview cache reuses frames within a second');
+    assert.match(await previews.frame(files.pgs, 2, { hover: true }), /^data:image\/jpeg;base64,/);
+    const [running, replaced, latest] = await Promise.all([5, 6, 7].map(time => previews.frame(files.pgs, time, { hover: true })));
+    assert.match(running, /^data:image\/jpeg;base64,/, 'A newer hover never cancels the decode already running');
+    assert.equal(replaced, undefined, 'A newer hover replaces the one still waiting');
+    assert.match(latest, /^data:image\/jpeg;base64,/);
   } finally { service.close(); previews.close(); }
 });

@@ -143,7 +143,7 @@ app.whenReady().then(async () => {
     const subtitleDelay = Math.max(-60, Math.min(60, Number(options.subtitleDelay) || 0));
     return { url: streams.create({ file: item.path, offset, audio, hasVideo: !!info.video, bitmapSubtitle, subtitleDelay }, { preload: !!options.preload }), offset };
   });
-  handle('media:preview', async ({ id, time }) => { const item = find(id); if (!Number.isFinite(time) || time < 0) throw new Error('Invalid preview time'); return previews.frame(item.path, time); });
+  handle('media:preview', async ({ id, time, hover }) => { const item = find(id); if (!Number.isFinite(time) || time < 0) throw new Error('Invalid preview time'); return previews.frame(item.path, time, { hover: !!hover }); });
   handle('media:subtitles', async ({ id, index }) => {
     const item = find(id);
     if (index >= SIDECAR) { const file = (await sidecars(item.path)).find(s => s.index === index); if (!file) throw new Error('That subtitle file is no longer next to the video.'); return run(ffmpeg, ['-v', 'error', '-nostdin', '-i', file.path, '-f', 'webvtt', 'pipe:1']); }
