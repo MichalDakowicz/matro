@@ -165,6 +165,14 @@ function remember() {
   const pastOutro = info.duration > 0 && (library.markers?.[current.id] || []).some(s => s.type === 'outro' && s.start > info.duration / 2 && position >= s.start);
   library.progress[current.id] = { ...old, position, duration: info.duration, completed: !!old.completed || pastOutro || (info.duration > 0 && position >= info.duration - finishMargin(info.duration)), hidden: false, updated: Date.now() };
 }
+// Saves the place at most once a second, but never drops the last change: a seek while paused fires one timeupdate and then
+// nothing, so a save skipped by the throttle is retried when the second is up.
+let saveTimer = null;
+function checkpoint(now = false) {
+  const wait = 1000 - (Date.now() - lastSave);
+  if (!now && wait > 0) { saveTimer ||= setTimeout(() => { saveTimer = null; checkpoint(true); }, wait); return; }
+  clearTimeout(saveTimer); saveTimer = null; remember(); void attempt(save); lastSave = Date.now();
+}
 function groups(kind) {
   const map = new Map();
   for (const item of library.items.filter(i => i.kind === kind && (!folderFilter || i.root === folderFilter))) {
@@ -697,7 +705,7 @@ function renderPlayer(adopt = null) {
   video = $('#video'); applyVolume(library.preferences.volume); updateVolume(); applySubStyle();
   const player = video;
   const listen = (name, callback) => player.addEventListener(name, event => { if (video === player && view === 'player') callback(event); });
-  listen('timeupdate', () => { updateTime(); void prepareNext(offset + video.currentTime); if (Date.now() - lastSave > 1000) { remember(); void attempt(save); lastSave = Date.now(); } });
+  listen('timeupdate', () => { updateTime(); void prepareNext(offset + video.currentTime); checkpoint(); });
   listen('playing', () => { if (playIntent && !video.paused) void api.playbackState(true); loading = false; playbackError = ''; showMessage(); updateToggle(); scheduleIdle(); });
   listen('pause', () => { if (!playIntent) void api.playbackState(false); loading = false; showMessage(); updateToggle(); $('.stage')?.classList.remove('idle'); remember(); void attempt(save); });
   listen('waiting', () => { loading = playIntent && !video.paused; if (loading) void api.playbackState({ playing: true, buffering: true }); showMessage(); });
@@ -752,8 +760,8 @@ async function seek(position) {
   const shouldPlay = playIntent;
   const relative = target - offset;
   // Fragmented streams can buffer frames before Chromium exposes a seekable range.
-  for (let i = 0; i < video.seekable.length; i++) if (relative >= video.seekable.start(i) && relative <= video.seekable.end(i)) { video.currentTime = relative; updateTime(); return; }
-  const token = ++generation; await loadStream(target, shouldPlay, token);
+  for (let i = 0; i < video.seekable.length; i++) if (relative >= video.seekable.start(i) && relative <= video.seekable.end(i)) { video.currentTime = relative; updateTime(); checkpoint(true); return; }
+  const token = ++generation, load = loadStream(target, shouldPlay, token); checkpoint(true); await load;
 }
 // Left: elapsed / total. Right: time left, from the same whole seconds so elapsed + left always adds up to the total shown.
 function showTimes(position) { $('#position').textContent = fmt(position); $('#remaining').textContent = `-${fmt(Math.floor(info.duration || 0) - Math.floor(position))}`; }
@@ -894,8 +902,15 @@ document.addEventListener('input', event => {
   if (event.target.id !== 'sub-size') return;
   const size = Number(event.target.value); event.target.nextElementSibling.textContent = `${Math.round(size * 100)}%`; fillRange(event.target); setSubStyle({ size }, false);
 });
+// Chromium keeps drawing the cues that were active when a track element is removed, and nothing ever ends them, so each
+// skip would leave its line stuck on screen. Empty and disable the old track first.
+function dropSubtitleTrack() {
+  const old = $('#subtitle-track'), textTrack = old?.track;
+  if (textTrack) { for (const cue of [...(textTrack.cues || [])]) textTrack.removeCue(cue); textTrack.mode = 'disabled'; }
+  old?.remove();
+}
 function applySubtitle() {
-  $('#subtitle-track')?.remove(); if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); subtitleUrl = null; trackCues = []; cueTrack = null;
+  dropSubtitleTrack(); if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); subtitleUrl = null; trackCues = []; cueTrack = null;
   if (!subtitleText || !video) return;
   subtitleUrl = URL.createObjectURL(new Blob([subtitleText], { type: 'text/vtt' }));
   const track = document.createElement('track'); track.id = 'subtitle-track'; track.kind = 'subtitles'; track.label = 'Selected subtitles'; track.src = subtitleUrl; track.default = true;

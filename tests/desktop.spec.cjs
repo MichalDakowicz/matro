@@ -429,6 +429,24 @@ test('subtitles stay right after seeks and 5-second skips, paused or playing', a
   } finally { await app.close(); }
 });
 
+test('a seek while paused is saved, including one right after another', async () => {
+  const f = await fixtures(), items = [describe(f.mkv)], profile = path.join(f.dir, `paused-seek-profile-${Date.now()}`); await fs.mkdir(profile);
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items, folders: [], queue: [], progress: {}, preferences: { autoplay: false, volume: .3, motion: 'off' } }));
+  const app = await electron.launch(launchOptions(profile)), page = await app.firstWindow();
+  const saved = async () => Object.values(JSON.parse(await fs.readFile(path.join(profile, 'library.json'), 'utf8')).progress)[0]?.position ?? 0;
+  try {
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: 'Play now', exact: true }).click();
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.3);
+    await page.getByRole('button', { name: 'Pause', exact: true }).click();
+    await page.locator('#seek').evaluate(el => { el.value = '8'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+    await expect.poll(saved, { timeout: 4000 }).toBeGreaterThan(7.5);
+    // The throttle must not swallow the last change: a second seek right after the first is saved too.
+    await page.locator('#seek').evaluate(el => { el.value = '3'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+    await expect.poll(saved, { timeout: 4000 }).toBeLessThan(3.5);
+  } finally { await app.close(); }
+});
+
 test('any file can be picked as a show prelude and plays first', async () => {
   const f = await fixtures();
   const root = path.resolve(__dirname, '../.test-media', `prelude-${Date.now()}`), show = path.join(root, 'Shows', 'Northbound');
