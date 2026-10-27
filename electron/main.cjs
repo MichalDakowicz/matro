@@ -102,7 +102,7 @@ app.whenReady().then(async () => {
   handle('library:remove-folder', async root => { state.folders = state.folders.filter(f => f !== root); state.items = state.items.filter(i => i.root !== root); await persist(); scanner.invalidate(); return state; });
   handle('library:save', async data => {
     const ids = new Set(state.items.map(i => i.id));
-    if (data.progress && typeof data.progress === 'object') for (const [id, value] of Object.entries(data.progress)) if (ids.has(id) && value && Number.isFinite(value.position) && Number.isFinite(value.duration)) state.progress[id] = { position: Math.max(0, value.position), duration: Math.max(0, value.duration), updated: Number.isFinite(value.updated) ? value.updated : Date.now(), completed: !!value.completed, hidden: !!value.hidden };
+    if (data.progress && typeof data.progress === 'object') for (const [id, value] of Object.entries(data.progress)) if (ids.has(id) && value && Number.isFinite(value.position) && Number.isFinite(value.duration) && !(Number.isFinite(value.updated) && value.updated < (state.progress[id]?.updated || 0))) state.progress[id] = { position: Math.max(0, value.position), duration: Math.max(0, value.duration), updated: Number.isFinite(value.updated) ? value.updated : Date.now(), completed: !!value.completed, hidden: !!value.hidden };
     if (data.markers && typeof data.markers === 'object') {
       state.markers ||= {};
       // The scanner owns automatic markers. A renderer's older library snapshot

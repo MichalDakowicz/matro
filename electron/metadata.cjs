@@ -6,7 +6,7 @@ const API = 'https://api.themoviedb.org/3', IMAGES = 'https://image.tmdb.org/t/p
 const RECHECK_MISSING = 7 * 24 * 3600 * 1000;
 const artworkName = /^(?:(?:movie|tv)-\d+-(?:poster|backdrop|thumb)|tv-\d+-s\d+e\d+)\.jpg$/;
 
-// Minimal KEY=VALUE reader so secrets stay in a local, unpackaged .env file.
+// Minimal KEY=VALUE reader for the git-ignored .env (packed into local builds, see package.json "files").
 function readEnv(files) {
   const env = {};
   for (const file of files) {

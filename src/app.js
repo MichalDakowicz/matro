@@ -165,6 +165,14 @@ function remember() {
   const pastOutro = info.duration > 0 && (library.markers?.[current.id] || []).some(s => s.type === 'outro' && s.start > info.duration / 2 && position >= s.start);
   library.progress[current.id] = { ...old, position, duration: info.duration, completed: !!old.completed || pastOutro || (info.duration > 0 && position >= info.duration - finishMargin(info.duration)), hidden: false, updated: Date.now() };
 }
+// Saves the place at most once a second, but never drops the last change: a seek while paused fires one timeupdate and then
+// nothing, so a save skipped by the throttle is retried when the second is up.
+let saveTimer = null;
+function checkpoint(now = false) {
+  const wait = 1000 - (Date.now() - lastSave);
+  if (!now && wait > 0) { saveTimer ||= setTimeout(() => { saveTimer = null; checkpoint(true); }, wait); return; }
+  clearTimeout(saveTimer); saveTimer = null; remember(); void attempt(save); lastSave = Date.now();
+}
 function groups(kind) {
   const map = new Map();
   for (const item of library.items.filter(i => i.kind === kind && (!folderFilter || i.root === folderFilter))) {
@@ -512,6 +520,9 @@ function setupReel() {
   el.addEventListener('pointerleave', () => { if (reel.hover && !reel.drag) { reel.hover = null; updateReel(); } });
 }
 window.addEventListener('resize', () => { if (view === 'library') updateReel(); });
+// Opening and closing a title hands focus to the Back button or the card so the keyboard keeps its place, without the
+// focus ring: nobody pointed at it, so it only looks like a stray selection. Tab still shows the ring as usual.
+function restoreFocus(element) { element?.focus({ preventScroll: true, focusVisible: false }); }
 function detail(id, focus = true) {
   selected = library.items.find(i => i.id === id); if (!selected) return;
   const items = selected.kind === 'show' ? library.items.filter(i => i.kind === 'show' && sameTitle(i, selected)).sort((a, b) => a.season - b.season || a.episode - b.episode) : [selected];
@@ -531,7 +542,7 @@ function detail(id, focus = true) {
     <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
       <section class="panel" aria-labelledby="file-h"><div class="panel-head"><h3 id="file-h">File</h3></div><div class="facts"><div><p>Format</p><strong>${esc(selected.format)}</strong><small>${selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie'}</small></div><div><p>Source</p><strong>${esc(selected.root ? base(selected.root) : 'Opened file')}</strong><small>Local file</small></div>${m?.cast?.length ? `<div><p>Starring</p><strong>${esc(m.cast.slice(0, 2).join(', '))}</strong>${m.cast[2] ? `<small>${esc(m.cast.slice(2).join(', '))}</small>` : ''}</div>` : ''}</div><div class="path-box">${icon('folder')}<span class="mono">${esc(selected.path)}</span></div><p class="note">Audio tracks, subtitles and chapters appear when playback starts. HDR is tone-mapped and surround plays as stereo.</p></section></div></div>`;
   document.querySelectorAll('.detail').forEach(old => old.remove()); root.append(overlay); applyStyles(overlay);
-  if (focus) $('.dock-back')?.focus({ preventScroll: true });
+  if (focus) restoreFocus($('.dock-back'));
 }
 // Episodes: one season at a time behind season tabs, each episode a card with its TMDB still, summary and progress.
 let detailSeason = null;
@@ -607,7 +618,7 @@ function closeDetail() {
     if (to) runs.push(hero.animate([{ clipPath: 'inset(0px 0px 0px 0px round 0px)' }, { clipPath: insetFrom(to, hero.getBoundingClientRect()) }], { duration: 380, easing: EASE, fill: 'forwards' }));
     Promise.all(runs.map(run => run.finished)).finally(() => overlay.remove());
   } else overlay?.remove();
-  (card || document.querySelector(`[data-detail="${id}"]`))?.focus({ preventScroll: true });
+  restoreFocus(card || document.querySelector(`[data-detail="${id}"]`));
 }
 function enqueue(id, all = false) {
   const item = library.items.find(i => i.id === id); if (!item) return;
@@ -697,7 +708,7 @@ function renderPlayer(adopt = null) {
   video = $('#video'); applyVolume(library.preferences.volume); updateVolume(); applySubStyle();
   const player = video;
   const listen = (name, callback) => player.addEventListener(name, event => { if (video === player && view === 'player') callback(event); });
-  listen('timeupdate', () => { updateTime(); void prepareNext(offset + video.currentTime); if (Date.now() - lastSave > 1000) { remember(); void attempt(save); lastSave = Date.now(); } });
+  listen('timeupdate', () => { updateTime(); void prepareNext(offset + video.currentTime); checkpoint(); });
   listen('playing', () => { if (playIntent && !video.paused) void api.playbackState(true); loading = false; playbackError = ''; showMessage(); updateToggle(); scheduleIdle(); });
   listen('pause', () => { if (!playIntent) void api.playbackState(false); loading = false; showMessage(); updateToggle(); $('.stage')?.classList.remove('idle'); remember(); void attempt(save); });
   listen('waiting', () => { loading = playIntent && !video.paused; if (loading) void api.playbackState({ playing: true, buffering: true }); showMessage(); });
@@ -752,8 +763,8 @@ async function seek(position) {
   const shouldPlay = playIntent;
   const relative = target - offset;
   // Fragmented streams can buffer frames before Chromium exposes a seekable range.
-  for (let i = 0; i < video.seekable.length; i++) if (relative >= video.seekable.start(i) && relative <= video.seekable.end(i)) { video.currentTime = relative; updateTime(); return; }
-  const token = ++generation; await loadStream(target, shouldPlay, token);
+  for (let i = 0; i < video.seekable.length; i++) if (relative >= video.seekable.start(i) && relative <= video.seekable.end(i)) { video.currentTime = relative; updateTime(); checkpoint(true); return; }
+  const token = ++generation, load = loadStream(target, shouldPlay, token); checkpoint(true); await load;
 }
 // Left: elapsed / total. Right: time left, from the same whole seconds so elapsed + left always adds up to the total shown.
 function showTimes(position) { $('#position').textContent = fmt(position); $('#remaining').textContent = `-${fmt(Math.floor(info.duration || 0) - Math.floor(position))}`; }
@@ -894,8 +905,15 @@ document.addEventListener('input', event => {
   if (event.target.id !== 'sub-size') return;
   const size = Number(event.target.value); event.target.nextElementSibling.textContent = `${Math.round(size * 100)}%`; fillRange(event.target); setSubStyle({ size }, false);
 });
+// Chromium keeps drawing the cues that were active when a track element is removed, and nothing ever ends them, so each
+// skip would leave its line stuck on screen. Empty and disable the old track first.
+function dropSubtitleTrack() {
+  const old = $('#subtitle-track'), textTrack = old?.track;
+  if (textTrack) { for (const cue of [...(textTrack.cues || [])]) textTrack.removeCue(cue); textTrack.mode = 'disabled'; }
+  old?.remove();
+}
 function applySubtitle() {
-  $('#subtitle-track')?.remove(); if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); subtitleUrl = null; trackCues = []; cueTrack = null;
+  dropSubtitleTrack(); if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); subtitleUrl = null; trackCues = []; cueTrack = null;
   if (!subtitleText || !video) return;
   subtitleUrl = URL.createObjectURL(new Blob([subtitleText], { type: 'text/vtt' }));
   const track = document.createElement('track'); track.id = 'subtitle-track'; track.kind = 'subtitles'; track.label = 'Selected subtitles'; track.src = subtitleUrl; track.default = true;
