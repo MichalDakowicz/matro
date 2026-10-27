@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, protocol, net, session } = require(
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { scan, describe, groupFolders, extensions, probe, run, ffmpeg } = require('./media.cjs');
+const { scan, describe, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
 const { createStreamServer } = require('./stream.cjs');
 const { createPreviews } = require('./previews.cjs');
 const { createSegments } = require('./segments.cjs');
@@ -26,10 +26,15 @@ async function importFiles(files) {
   }
   await persist(); scanner?.invalidate(); void metadata?.sync(state.items); return state;
 }
+const subtitleStyle = value => {
+  const style = value && typeof value === 'object' ? value : {}, pick = (key, options, fallback) => options.includes(style[key]) ? style[key] : fallback;
+  return { size: Math.max(.5, Math.min(2, Number(style.size) || 1)), font: pick('font', ['sans', 'classic', 'serif', 'mono', 'casual'], 'sans'), background: pick('background', ['none', 'light', 'dark', 'solid'], 'light'), bold: !!style.bold, italic: !!style.italic, edge: pick('edge', ['none', 'outline', 'shadow'], 'none') };
+};
+const regroup = items => applyPreludes(groupFolders(items), state.preludes);
 async function rescan() {
   const results = await Promise.all(state.folders.map(async root => { try { return { root, items: await scan(root) }; } catch { return { root, error: 'Folder unavailable. Check the drive or network connection.' }; } }));
   for (const result of results) if (result.items) state.items = state.items.filter(i => i.root !== result.root).concat(result.items);
-  state.items = groupFolders([...new Map(state.items.map(item => [item.id, item])).values()]);
+  state.items = regroup([...new Map(state.items.map(item => [item.id, item])).values()]);
   state.libraryVersion = 2;
   await persist(); scanner?.invalidate(); void metadata?.sync(state.items); return { ...state, warnings: results.filter(r => r.error).map(r => `${r.root}: ${r.error}`) };
 }
@@ -55,15 +60,37 @@ app.whenReady().then(async () => {
   win.once('ready-to-show', () => { win.maximize(); win.show(); });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
+  // Let the renderer save playback progress before the window goes away; a stuck renderer still closes after a moment.
+  let closing = false;
+  win.on('close', event => {
+    if (closing) return;
+    event.preventDefault(); closing = true;
+    win.webContents.send('window:closing');
+    setTimeout(() => { if (!win.isDestroyed()) win.destroy(); }, 2000);
+  });
   win.on('enter-full-screen', () => win.webContents.send('window:fullscreen', true));
   win.on('leave-full-screen', () => win.webContents.send('window:fullscreen', false));
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   scanner = createSegmentScheduler({ getState: () => state, engine: segments, persist, onUpdate: update => { if (!win.isDestroyed()) win.webContents.send('media:segments-progress', update); } });
   handle('library:load', async () => { await metadata.loaded; return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
-  handle('library:folder', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (result.canceled) return state; const root = result.filePaths[0]; const items = await scan(root); if (!state.folders.includes(root)) state.folders.push(root); const existing = new Map(state.items.map(i => [i.id, i])); for (const item of items) existing.set(item.id, item); state.items = groupFolders([...existing.values()]); await persist(); scanner.invalidate(); void metadata.sync(state.items); return state; });
+  handle('library:folder', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (result.canceled) return state; const root = result.filePaths[0]; const items = await scan(root); if (!state.folders.includes(root)) state.folders.push(root); const existing = new Map(state.items.map(i => [i.id, i])); for (const item of items) existing.set(item.id, item); state.items = regroup([...existing.values()]); await persist(); scanner.invalidate(); void metadata.sync(state.items); return state; });
   handle('library:files', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Media', extensions: [...extensions] }, { name: 'All files', extensions: ['*'] }] }); return result.canceled ? state : importFiles(result.filePaths); });
   handle('library:import', files => { if (!Array.isArray(files) || files.length > 5000) throw new Error('Invalid file selection'); return importFiles(files); });
   handle('library:rescan', rescan);
+  // Pick (or clear) a show's prelude. Rescanning restores the regular numbering of a file that stops being the prelude.
+  handle('library:prelude', async options => {
+    const show = state.items.filter(i => i.kind === 'show' && i.groupId === options?.key && !i.prelude);
+    if (!show.length) throw new Error('That show is no longer in the library.');
+    state.preludes ||= {};
+    if (options.clear) delete state.preludes[options.key];
+    else {
+      const result = await dialog.showOpenDialog(win, { title: `Choose a prelude for ${show[0].group}`, defaultPath: path.dirname(show[0].path), properties: ['openFile'], filters: [{ name: 'Video', extensions: [...extensions].filter(ext => !/^(mp3|flac|wav|aac|m4a|ogg|opus|wma|aiff|alac)$/.test(ext)) }, { name: 'All files', extensions: ['*'] }] });
+      if (result.canceled) return null;
+      if (!(await fs.stat(result.filePaths[0])).isFile()) throw new Error('Choose a video file.');
+      state.preludes[options.key] = path.resolve(result.filePaths[0]);
+    }
+    return rescan();
+  });
   handle('metadata:search', options => metadata.search(options?.kind, options?.query, /^\d{4}$/.test(String(options?.year || '')) ? options.year : null));
   handle('metadata:assign', async options => {
     const items = state.items.filter(i => (i.kind === 'show' ? i.groupId || i.group : i.id) === options?.key);
@@ -86,10 +113,10 @@ app.whenReady().then(async () => {
       }
     }
     if (Array.isArray(data.queue)) state.queue = [...new Set(data.queue.filter(id => ids.has(id)))];
-    if (data.preferences) state.preferences = { autoplay: !!data.preferences.autoplay, volume: Math.max(0, Math.min(1, Number(data.preferences.volume) || 0)), tracks: data.preferences.tracks && typeof data.preferences.tracks === 'object' ? data.preferences.tracks : {}, motion: ['on', 'off'].includes(data.preferences.motion) ? data.preferences.motion : 'system' };
+    if (data.preferences) state.preferences = { autoplay: !!data.preferences.autoplay, volume: Math.max(0, Math.min(1.5, Number(data.preferences.volume) || 0)), tracks: data.preferences.tracks && typeof data.preferences.tracks === 'object' ? data.preferences.tracks : {}, motion: ['on', 'off'].includes(data.preferences.motion) ? data.preferences.motion : 'system', subtitles: subtitleStyle(data.preferences.subtitles) };
     await persist(); scanner.refresh();
   });
-  handle('media:inspect', async id => { const item = find(id); scanner.setPlayback(true); scanner.setCurrent(id); try { return await probe(item.path); } catch (error) { scanner.setPlayback(false); throw error; } });
+  handle('media:inspect', async id => { const item = find(id); scanner.setPlayback(true); scanner.setCurrent(id); try { const info = await probe(item.path); info.subtitles.push(...(await sidecars(item.path)).map(({ path: _path, ...track }) => track)); return info; } catch (error) { scanner.setPlayback(false); throw error; } });
   handle('media:playback-state', value => {
     const playing = typeof value === 'boolean' ? value : value?.playing, buffering = typeof value === 'object' && value?.buffering === true;
     if (typeof playing !== 'boolean') throw new Error('Invalid playback state');
@@ -106,18 +133,35 @@ app.whenReady().then(async () => {
     state.markers[id] = (state.markers[id] || []).filter(s => !(s.type === marker.type && s.start === marker.start && s.end === marker.end));
     await persist(); return state.markers[id];
   });
+  // Track list and sidecar subtitles for the next queue item, without moving the background scanner's attention.
+  handle('media:prepare', async id => { const item = find(id); const info = await probe(item.path); info.subtitles.push(...(await sidecars(item.path)).map(({ path: _path, ...track }) => track)); return info; });
   handle('media:stream', async options => {
     const item = find(options.id); const info = await probe(item.path);
     const offset = Math.max(0, Math.min(info.duration || 864000, Number(options.offset) || 0));
     const audio = info.audio.find(a => a.index === options.audio)?.index ?? info.audio.find(a => a.default)?.index ?? info.audio[0]?.index ?? null;
     const bitmapSubtitle = info.video ? info.subtitles.find(s => s.index === options.bitmapSubtitle && s.bitmap)?.index ?? null : null;
     const subtitleDelay = Math.max(-60, Math.min(60, Number(options.subtitleDelay) || 0));
-    return { url: streams.create({ file: item.path, offset, audio, hasVideo: !!info.video, bitmapSubtitle, subtitleDelay }), offset };
+    return { url: streams.create({ file: item.path, offset, audio, hasVideo: !!info.video, bitmapSubtitle, subtitleDelay }, { preload: !!options.preload }), offset };
   });
   handle('media:preview', async ({ id, time }) => { const item = find(id); if (!Number.isFinite(time) || time < 0) throw new Error('Invalid preview time'); return previews.frame(item.path, time); });
-  handle('media:subtitles', async ({ id, index }) => { const item = find(id); const info = await probe(item.path); if (!info.subtitles.some(s => s.index === index && s.text)) throw new Error('This subtitle format is not supported yet. Load an SRT, ASS, or VTT file.'); return run(ffmpeg, ['-v', 'error', '-nostdin', '-i', item.path, '-map', `0:${index}`, '-f', 'webvtt', 'pipe:1']); });
-  handle('media:subtitle-file', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'Subtitles', extensions: ['srt', 'vtt', 'ass', 'ssa'] }] }); if (result.canceled) return null; return run(ffmpeg, ['-v', 'error', '-nostdin', '-i', result.filePaths[0], '-f', 'webvtt', 'pipe:1']); });
-  handle('media:stop', () => { streams.stop(); scanner.setPlayback(false); scanner.setCurrent(null); });
+  handle('media:subtitles', async ({ id, index }) => {
+    const item = find(id);
+    if (index >= SIDECAR) { const file = (await sidecars(item.path)).find(s => s.index === index); if (!file) throw new Error('That subtitle file is no longer next to the video.'); return run(ffmpeg, ['-v', 'error', '-nostdin', '-i', file.path, '-f', 'webvtt', 'pipe:1']); }
+    const info = await probe(item.path); if (!info.subtitles.some(s => s.index === index && s.text)) throw new Error('This subtitle format is not supported yet. Load an SRT, ASS, or VTT file.'); return run(ffmpeg, ['-v', 'error', '-nostdin', '-i', item.path, '-map', `0:${index}`, '-f', 'webvtt', 'pipe:1']); });
+  // A loaded subtitle file is copied next to the video (never overwriting) so it shows up as a track from then on.
+  // Read-only folders still load it for this session.
+  handle('media:subtitle-file', async id => {
+    const item = find(id);
+    const result = await dialog.showOpenDialog(win, { defaultPath: path.dirname(item.path), properties: ['openFile'], filters: [{ name: 'Subtitles', extensions: ['srt', 'vtt', 'ass', 'ssa'] }] }); if (result.canceled) return null;
+    const picked = result.filePaths[0], text = await run(ffmpeg, ['-v', 'error', '-nostdin', '-i', picked, '-f', 'webvtt', 'pipe:1']);
+    const language = path.basename(picked, path.extname(picked)).split('.').pop();
+    let kept = null, warning = null;
+    try { kept = await keepSidecar(item.path, picked, language); } catch (error) { warning = `Loaded for now, but couldn't save it next to the video: ${error.message}`; }
+    const track = kept ? (await sidecars(item.path)).find(s => path.resolve(s.path) === path.resolve(kept)) : null;
+    if (track) delete track.path;
+    return { text, track, warning };
+  });
+  handle('media:stop', keepUrl => { streams.stop(typeof keepUrl === 'string' ? keepUrl : null); scanner.setPlayback(false); scanner.setCurrent(null); });
   handle('window:action', action => { if (action === 'minimize') win.minimize(); if (action === 'maximize') win.isMaximized() ? win.unmaximize() : win.maximize(); if (action === 'close') win.close(); if (action === 'fullscreen') win.setFullScreen(!win.isFullScreen()); });
   await win.loadURL('matro://app/');
   scanner.refresh();

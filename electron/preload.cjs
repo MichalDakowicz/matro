@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('matro', {
   openFiles: () => ipcRenderer.invoke('library:files'),
   importDrop: files => ipcRenderer.invoke('library:import', Array.from(files, file => webUtils.getPathForFile(file))),
   rescan: () => ipcRenderer.invoke('library:rescan'),
+  setPrelude: options => ipcRenderer.invoke('library:prelude', options),
   searchMetadata: options => ipcRenderer.invoke('metadata:search', options),
   assignMetadata: options => ipcRenderer.invoke('metadata:assign', options),
   removeFolder: root => ipcRenderer.invoke('library:remove-folder', root),
@@ -17,10 +18,12 @@ contextBridge.exposeInMainWorld('matro', {
   stream: options => ipcRenderer.invoke('media:stream', options),
   preview: options => ipcRenderer.invoke('media:preview', options),
   subtitles: options => ipcRenderer.invoke('media:subtitles', options),
-  loadSubtitle: () => ipcRenderer.invoke('media:subtitle-file'),
-  stop: () => ipcRenderer.invoke('media:stop'),
+  loadSubtitle: id => ipcRenderer.invoke('media:subtitle-file', id),
+  stop: keepUrl => ipcRenderer.invoke('media:stop', keepUrl),
+  prepare: id => ipcRenderer.invoke('media:prepare', id),
   save: state => ipcRenderer.invoke('library:save', state),
   window: action => ipcRenderer.invoke('window:action', action),
   onMetadata: callback => { const listener = (_event, metadata) => callback(metadata); ipcRenderer.on('library:metadata', listener); return () => ipcRenderer.removeListener('library:metadata', listener); },
+  onClosing: callback => { const listener = () => callback(); ipcRenderer.on('window:closing', listener); return () => ipcRenderer.removeListener('window:closing', listener); },
   onFullscreen: callback => { const listener = (_event, fullscreen) => callback(fullscreen); ipcRenderer.on('window:fullscreen', listener); return () => ipcRenderer.removeListener('window:fullscreen', listener); }
 });
