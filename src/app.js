@@ -44,7 +44,8 @@ function renderScannerStatus() {
 }
 const isScanning = id => scanningSegments.has(id) || (scannerSummary?.running && scannerSummary.id === id);
 let fullscreenActive = false, fullscreenQueueOpen = false;
-let previewTimer, previewVersion = 0, previewHovered = false;
+let previewTimer, previewVersion = 0, previewShown = 0, previewHovered = false;
+const hoverFrames = new Map();
 const languageNames = new Intl.DisplayNames(['en'], { type: 'language' });
 function languageName(code) {
   if (!code || ['und', 'unk'].includes(code.toLowerCase())) return 'Unknown language';
@@ -63,20 +64,30 @@ function hoverSeek(event) {
   const fraction = Math.max(0, Math.min(1, (event.clientX - bounds.left - 8) / Math.max(1, bounds.width - 16)));
   const time = Math.min(info.duration - .1, fraction * info.duration);
   const tooltip = $('#seek-preview'), image = $('#seek-preview-image'), status = $('#seek-preview-status');
+  const fresh = tooltip.hidden;
   tooltip.hidden = false; tooltip.style.left = `${Math.max(90, Math.min(bounds.width - 90, event.clientX - bounds.left))}px`;
   $('#seek-preview-time').textContent = `${fmt(time)}.${Math.floor(time % 1 * 10)}`;
   const section = $('#seek-preview-section'); section.textContent = sectionAt(time); section.hidden = !section.textContent;
-  image.hidden = true; image.removeAttribute('src'); status.hidden = false; status.textContent = info.video ? 'Loading preview…' : 'Audio';
   clearTimeout(previewTimer); const version = ++previewVersion; const id = current.id;
-  if (!info.video) return;
+  if (fresh) { previewShown = version - 1; image.hidden = true; image.removeAttribute('src'); }
+  if (!info.video) { image.hidden = true; status.hidden = false; status.textContent = 'Audio'; return; }
+  // Hover frames are keyframes, so nearby times share one: snap to a step and remember what came back.
+  const step = Math.max(2, info.duration / 600), at = Math.floor(time / step) * step, key = `${id}:${at}`;
+  const show = frame => {
+    previewShown = version;
+    if (frame) { image.src = frame; image.hidden = false; status.hidden = true; }
+    else { image.hidden = true; status.hidden = false; status.textContent = 'Preview unavailable'; }
+  };
+  if (hoverFrames.has(key)) { show(hoverFrames.get(key)); return; }
+  // Keep the last frame up while the next one decodes rather than flashing back to the loading text.
+  if (image.hidden) { status.hidden = false; status.textContent = 'Loading preview…'; }
   previewTimer = setTimeout(async () => {
-    try {
-      const frame = await api.preview({ id, time });
-      if (version !== previewVersion || !previewHovered || current?.id !== id) return;
-      if (frame) { image.src = frame; image.hidden = false; status.hidden = true; }
-      else status.textContent = 'Preview unavailable';
-    } catch { if (version === previewVersion) status.textContent = 'Preview unavailable'; }
-  }, 160);
+    let frame; try { frame = await api.preview({ id, time: at, hover: true }); } catch { frame = null; }
+    if (frame === undefined) return; // replaced by a newer hover before it started
+    if (frame) { if (hoverFrames.size >= 600) hoverFrames.delete(hoverFrames.keys().next().value); hoverFrames.set(key, frame); }
+    // An older frame still lands while the pointer keeps moving, unless something newer is already showing.
+    if (version > previewShown && previewHovered && current?.id === id) show(frame);
+  }, 50);
 }
 const finishMargin = duration => Math.min(10, duration * .05);
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 5000); }
