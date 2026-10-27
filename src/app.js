@@ -520,6 +520,9 @@ function setupReel() {
   el.addEventListener('pointerleave', () => { if (reel.hover && !reel.drag) { reel.hover = null; updateReel(); } });
 }
 window.addEventListener('resize', () => { if (view === 'library') updateReel(); });
+// Opening and closing a title hands focus to the Back button or the card so the keyboard keeps its place, without the
+// focus ring: nobody pointed at it, so it only looks like a stray selection. Tab still shows the ring as usual.
+function restoreFocus(element) { element?.focus({ preventScroll: true, focusVisible: false }); }
 function detail(id, focus = true) {
   selected = library.items.find(i => i.id === id); if (!selected) return;
   const items = selected.kind === 'show' ? library.items.filter(i => i.kind === 'show' && sameTitle(i, selected)).sort((a, b) => a.season - b.season || a.episode - b.episode) : [selected];
@@ -539,7 +542,7 @@ function detail(id, focus = true) {
     <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
       <section class="panel" aria-labelledby="file-h"><div class="panel-head"><h3 id="file-h">File</h3></div><div class="facts"><div><p>Format</p><strong>${esc(selected.format)}</strong><small>${selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie'}</small></div><div><p>Source</p><strong>${esc(selected.root ? base(selected.root) : 'Opened file')}</strong><small>Local file</small></div>${m?.cast?.length ? `<div><p>Starring</p><strong>${esc(m.cast.slice(0, 2).join(', '))}</strong>${m.cast[2] ? `<small>${esc(m.cast.slice(2).join(', '))}</small>` : ''}</div>` : ''}</div><div class="path-box">${icon('folder')}<span class="mono">${esc(selected.path)}</span></div><p class="note">Audio tracks, subtitles and chapters appear when playback starts. HDR is tone-mapped and surround plays as stereo.</p></section></div></div>`;
   document.querySelectorAll('.detail').forEach(old => old.remove()); root.append(overlay); applyStyles(overlay);
-  if (focus) $('.dock-back')?.focus({ preventScroll: true });
+  if (focus) restoreFocus($('.dock-back'));
 }
 // Episodes: one season at a time behind season tabs, each episode a card with its TMDB still, summary and progress.
 let detailSeason = null;
@@ -615,7 +618,7 @@ function closeDetail() {
     if (to) runs.push(hero.animate([{ clipPath: 'inset(0px 0px 0px 0px round 0px)' }, { clipPath: insetFrom(to, hero.getBoundingClientRect()) }], { duration: 380, easing: EASE, fill: 'forwards' }));
     Promise.all(runs.map(run => run.finished)).finally(() => overlay.remove());
   } else overlay?.remove();
-  (card || document.querySelector(`[data-detail="${id}"]`))?.focus({ preventScroll: true });
+  restoreFocus(card || document.querySelector(`[data-detail="${id}"]`));
 }
 function enqueue(id, all = false) {
   const item = library.items.find(i => i.id === id); if (!item) return;

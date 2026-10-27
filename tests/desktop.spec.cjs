@@ -447,6 +447,33 @@ test('a seek while paused is saved, including one right after another', async ()
   } finally { await app.close(); }
 });
 
+test('opening and closing a title by mouse leaves no focus ring, by keyboard keeps focus in place', async () => {
+  const f = await fixtures(), items = [describe(f.mkv)], profile = path.join(f.dir, `focus-profile-${Date.now()}`); await fs.mkdir(profile);
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items, folders: [], queue: [], progress: {}, preferences: { autoplay: false, volume: .3, motion: 'off' } }));
+  const app = await electron.launch(launchOptions(profile)), page = await app.firstWindow();
+  const ringed = () => page.evaluate(() => document.querySelector(':focus-visible')?.className || null);
+  const card = page.getByRole('button', { name: 'Open Northbound', exact: true });
+  try {
+    await card.click();
+    await expect(page.locator('.dock-back')).toBeVisible();
+    expect(await ringed()).toBeNull();
+    await page.locator('.dock-back').click();
+    await expect(page.locator('#detail-overlay')).toHaveCount(0);
+    expect(await ringed()).toBeNull();
+    // Keyboard: Enter opens the title and focus lands on Back, Escape returns it to the card, both without a ring.
+    await card.focus(); await page.keyboard.press('Enter');
+    await expect(page.locator('.dock-back')).toBeFocused();
+    expect(await ringed()).toBeNull();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#detail-overlay')).toHaveCount(0);
+    await expect(card).toBeFocused();
+    expect(await ringed()).toBeNull();
+    // Tab still shows the ring on whatever it lands on.
+    await page.keyboard.press('Tab');
+    expect(await ringed()).not.toBeNull();
+  } finally { await app.close(); }
+});
+
 test('any file can be picked as a show prelude and plays first', async () => {
   const f = await fixtures();
   const root = path.resolve(__dirname, '../.test-media', `prelude-${Date.now()}`), show = path.join(root, 'Shows', 'Northbound');
