@@ -30,6 +30,7 @@
     "files": [
       "electron/**/*",
       "src/**/*",
+      ".env",
       "assets/icon.png",
       "assets/icon.ico",
       "package.json",
