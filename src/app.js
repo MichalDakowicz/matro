@@ -6,6 +6,8 @@ const icons = {
   shows: '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M12 17v4"/>',
   movies: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/>',
   music: '<path d="M9 18V5l11-2v13M9 8l11-2"/><ellipse cx="6" cy="18" rx="3" ry="3"/><ellipse cx="17" cy="16" rx="3" ry="3"/>',
+  wrench: '<path d="M14.700 6.300a1 1 0 0 0 0 1.400l1.600 1.600a1 1 0 0 0 1.400 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.910 7.910a1 1 0 0 1-2.999-3l7.910-7.910a6 6 0 0 1 7.057-8.259c.438.120.540.662.219.984z"/>',
+  external: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v4.5a1.5 1.5 0 0 1-1.500 1.500h-11A1.5 1.5 0 0 1 4 18.500v-11A1.500 1.500 0 0 1 5.500 6H10"/>', person: '<circle cx="12" cy="9" r="4"/><path d="M4.500 21a7.500 7.500 0 0 1 15 0z"/>',
   folder: '<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/>',
   plus: '<path d="M12 5v14M5 12h14"/>', search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
   play: '<path d="M7 4.5v15l13-7.5z"/>', pause: '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
@@ -520,6 +522,7 @@ function setupReel() {
   el.addEventListener('pointerleave', () => { if (reel.hover && !reel.drag) { reel.hover = null; updateReel(); } });
 }
 window.addEventListener('resize', () => { if (view === 'library') updateReel(); });
+const openTitlePage = site => { const m = selected && meta(selected); if (m) void api.openTitlePage({ site, type: m.type, tmdbId: m.tmdbId, imdbId: m.imdbId }); };
 // Opening and closing a title hands focus to the Back button or the card so the keyboard keeps its place, without the
 // focus ring: nobody pointed at it, so it only looks like a stray selection. Tab still shows the ring as usual.
 function restoreFocus(element) { element?.focus({ preventScroll: true, focusVisible: false }); }
@@ -531,18 +534,32 @@ function detail(id, focus = true) {
   const facts = [[m?.year, m?.genres?.slice(0, 3).join(' · ')], [selected.kind === 'show' ? `${seasons} ${seasons === 1 ? 'season' : 'seasons'} · ${items.length} episodes` : m?.runtime ? `${Math.floor(m.runtime / 60) ? `${Math.floor(m.runtime / 60)}h ` : ''}${m.runtime % 60}m` : null]].flat().filter(Boolean);
   const overlay = document.createElement('div'); overlay.className = 'detail'; overlay.id = 'detail-overlay'; overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-labelledby', 'detail-title');
   overlay.innerHTML = `<div class="detail-hero"><span class="detail-hero-art ${artFor(selected)}">${m?.backdrop ? `<img src="${esc(m.backdrop)}" alt="" draggable="false">` : `<span class="cover-title">${esc(name)}</span>`}</span><span class="detail-hero-fade"></span></div>
-    <div class="detail-body"><div class="detail-head">${m?.poster && !m.backdrop ? `<span class="detail-poster"><img src="${esc(m.poster)}" alt=""></span>` : ''}<h2 id="detail-title">${esc(name)}</h2>
+    <div class="detail-body"><div class="detail-head">${m?.poster && !m.backdrop ? `<span class="detail-poster"><img src="${esc(m.poster)}" alt=""></span>` : ''}<div class="detail-title-row"><h2 id="detail-title">${esc(name)}</h2>${metadataEnabled && selected.kind !== 'audio' ? `<button class="fix-match" data-action="fix-match" title="${esc(m ? `Matched on TMDB as ${m.title}${m.year ? ` (${m.year})` : ''}. Wrong title? Fix match` : 'Not matched on TMDB yet. Find on TMDB')}">${m ? 'on' : 'Find on'} <strong>TMDB</strong>${icon('wrench')}</button>` : ''}</div>
+      ${m?.tagline ? `<p class="detail-tagline">${esc(m.tagline)}</p>` : ''}
       ${m?.people?.length ? `<p class="detail-sub">${esc(m.peopleLabel)} <strong>${esc(m.people.slice(0, 3).join(', '))}</strong></p>` : ''}
       <p class="detail-sub">${[...facts, selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie', selected.format].map(esc).join(' <span aria-hidden="true">·</span> ')}</p>
       ${m?.overview ? `<p class="detail-overview">${esc(m.overview)}</p>` : ''}
       <div class="detail-actions"><button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
       ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
-      ${m?.rating ? `<div class="ratings"><div><p><img class="tmdb-logo" src="assets/tmdb.svg" alt="TMDB rating"></p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}
-      ${metadataEnabled && selected.kind !== 'audio' ? `<p class="match-line">${m ? `Matched on TMDB as <strong>${esc(m.title)}</strong>${m.year ? ` (${esc(m.year)})` : ''}.` : 'Not matched on TMDB yet.'}<button class="text-button" data-action="fix-match">${icon('search')}${m ? 'Wrong title? Fix match' : 'Find on TMDB'}</button></p>` : ''}</div>
+      ${m?.rating ? `<div class="ratings"><div><p class="rating-label">TMDB</p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}</div>
     <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
-      <section class="panel" aria-labelledby="file-h"><div class="panel-head"><h3 id="file-h">File</h3></div><div class="facts"><div><p>Format</p><strong>${esc(selected.format)}</strong><small>${selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie'}</small></div><div><p>Source</p><strong>${esc(selected.root ? base(selected.root) : 'Opened file')}</strong><small>Local file</small></div>${m?.cast?.length ? `<div><p>Starring</p><strong>${esc(m.cast.slice(0, 2).join(', '))}</strong>${m.cast[2] ? `<small>${esc(m.cast.slice(2).join(', '))}</small>` : ''}</div>` : ''}</div><div class="path-box">${icon('folder')}<span class="mono">${esc(selected.path)}</span></div><p class="note">Audio tracks, subtitles and chapters appear when playback starts. HDR is tone-mapped and surround plays as stereo.</p></section></div></div>`;
+      ${castPanel(m)}${productionPanel(m)}${filePanel(selected, m)}</div></div>`;
+  $('#title-links').hidden = !m; $('#imdb-link').hidden = !m?.imdbId;
   document.querySelectorAll('.detail').forEach(old => old.remove()); root.append(overlay); applyStyles(overlay);
   if (focus) restoreFocus($('.dock-back'));
+}
+// Cast and production come from TMDB; a missing portrait gets the generated cover, like missing posters do.
+const castPanel = m => m?.cast?.length ? `<section class="panel flat cast-panel" aria-labelledby="cast-h"><div class="panel-head"><h3 id="cast-h">Cast</h3></div><div class="cast-grid">${m.cast.map(c => `<div class="cast-member"><span class="cast-photo art" data-hue="${hash(c.name) % 360}">${c.photo ? `<img src="${esc(c.photo)}" alt="" loading="lazy" draggable="false">` : icon('person')}</span><strong>${esc(c.name)}</strong>${c.role ? `<small>${esc(c.role)}</small>` : ''}</div>`).join('')}</div></section>` : '';
+// Where the file lives and what it is; it sits flat on the page like the other sections.
+const filePanel = (item, m) => `<section class="panel flat file" aria-labelledby="file-h"><div class="panel-head"><h3 id="file-h">File</h3></div><div class="facts"><div><p>Format</p><strong>${esc(item.format)}</strong><small>${item.kind === 'show' ? 'Series' : item.kind === 'audio' ? 'Audio' : 'Movie'}</small></div><div><p>Source</p><strong>${esc(item.root ? base(item.root) : 'Opened file')}</strong><small>Local file</small></div>${m?.cast?.length ? `<div><p>Starring</p><strong>${esc(m.cast.slice(0, 2).map(c => c.name).join(', '))}</strong>${m.cast[2] ? `<small>${esc(m.cast.slice(2, 5).map(c => c.name).join(', '))}</small>` : ''}</div>` : ''}</div><div class="path-box">${icon('folder')}<span class="mono">${esc(item.path)}</span></div><p class="note">Audio tracks, subtitles and chapters appear when playback starts. HDR is tone-mapped and surround plays as stereo.</p></section>`;
+const money = n => n >= 1e9 ? `$${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `$${Math.round(n / 1e6)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}K` : '';
+function productionPanel(m) {
+  if (!m) return '';
+  const people = (label, list, n = 2) => list?.length ? [label, list.slice(0, n).join(', '), list.length > n ? `${list.length - n} more` : ''] : null;
+  const facts = [people('Production companies', m.companies), people('Executive producers', m.producers), people('Writers', m.writers), m.type === 'movie' ? people('Directors', m.directors) : null,
+    people('Music', m.music, 1), people('Cinematography', m.cinematography, 1), money(m.budget) ? ['Budget', money(m.budget), money(m.revenue) ? `${money(m.revenue)} box office` : ''] : null,
+    m.countries?.length ? ['Made in', m.countries.join(', '), ''] : null].filter(Boolean);
+  return facts.length ? `<section class="panel flat" aria-labelledby="production-h"><div class="panel-head"><h3 id="production-h">Production</h3></div><div class="facts">${facts.map(([label, value, sub]) => `<div><p>${esc(label)}</p><strong>${esc(value)}</strong>${sub ? `<small>${esc(sub)}</small>` : ''}</div>`).join('')}</div></section>` : '';
 }
 // Episodes: one season at a time behind season tabs, each episode a card with its TMDB still, summary and progress.
 let detailSeason = null;
@@ -1003,7 +1020,7 @@ const actions = {
   rescan: async () => { toast('Refreshing your folders…'); library = await api.rescan(); renderLibrary(); toast(library.warnings?.join('\n') || 'Library is up to date.'); },
   'all-folders': () => { folderFilter = null; renderLibrary(); }, 'close-detail': closeDetail,
   about: () => { footerOpen = !footerOpen; $('#library-footer')?.classList.toggle('open', footerOpen); $('.help-button')?.setAttribute('aria-expanded', String(footerOpen)); },
-  'fix-match': () => openMatch(selected), 'pick-prelude': () => setPrelude(false), 'clear-prelude': () => setPrelude(true), 'close-match': () => { $('#match-dialog')?.close(); matchItem = null; },
+  'fix-match': () => openMatch(selected), 'open-tmdb': () => openTitlePage('tmdb'), 'open-imdb': () => openTitlePage('imdb'), 'pick-prelude': () => setPrelude(false), 'clear-prelude': () => setPrelude(true), 'close-match': () => { $('#match-dialog')?.close(); matchItem = null; },
   shortcuts: () => $('#shortcuts').showModal(), library: backToLibrary,
   toggle, backward: () => seek(offset + video.currentTime - SKIP), forward: () => seek(offset + video.currentTime + SKIP),
   previous: () => step(-1), next: () => step(1), fullscreen: () => api.window('fullscreen'),

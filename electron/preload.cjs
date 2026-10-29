@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('matro', {
   importDrop: files => ipcRenderer.invoke('library:import', Array.from(files, file => webUtils.getPathForFile(file))),
   rescan: () => ipcRenderer.invoke('library:rescan'),
   setPrelude: options => ipcRenderer.invoke('library:prelude', options),
+  openTitlePage: options => ipcRenderer.invoke('metadata:open', options),
   searchMetadata: options => ipcRenderer.invoke('metadata:search', options),
   assignMetadata: options => ipcRenderer.invoke('metadata:assign', options),
   removeFolder: root => ipcRenderer.invoke('library:remove-folder', root),

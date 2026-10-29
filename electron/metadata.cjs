@@ -4,7 +4,7 @@ const path = require('node:path');
 
 const API = 'https://api.themoviedb.org/3', IMAGES = 'https://image.tmdb.org/t/p/';
 const RECHECK_MISSING = 7 * 24 * 3600 * 1000;
-const artworkName = /^(?:(?:movie|tv)-\d+-(?:poster|backdrop|thumb)|tv-\d+-s\d+e\d+)\.jpg$/;
+const artworkName = /^(?:(?:movie|tv)-\d+-(?:poster|backdrop|thumb)|tv-\d+-s\d+e\d+|person-\d+)\.jpg$/;
 
 // Minimal KEY=VALUE reader for the git-ignored .env (packed into local builds, see package.json "files").
 function readEnv(files) {
@@ -37,7 +37,13 @@ function cleanQuery(text) {
 const keyFor = item => item.kind === 'show' ? item.groupId || item.group : item.id;
 const MATCHER = 2;
 // Bumped when stored details gain fields; matched titles are then refreshed by their TMDB id, never searched again.
-const DETAILS = 2;
+const DETAILS = 3;
+const CAST_SHOWN = 24;
+const names = (credits, jobs) => [...new Set((credits?.crew || []).filter(c => jobs.includes(c.job)).map(c => c.name))];
+// What the Production panel shows, read from TMDB's credits and company lists; the renderer decides what is worth printing.
+const productionOf = (title, credits) => ({ companies: (title.production_companies || []).map(c => c.name), countries: (title.production_countries || []).map(c => c.name),
+  producers: names(credits, ['Executive Producer']), writers: names(credits, ['Writer', 'Screenplay', 'Story', 'Creator']), directors: names(credits, ['Director']),
+  music: names(credits, ['Original Music Composer', 'Music', 'Composer']), cinematography: names(credits, ['Director of Photography']), budget: title.budget || 0, revenue: title.revenue || 0 });
 const norm = text => String(text || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/^(?:the|a|an) /, '');
 // Accept a result only when its title really is the file's title; a nearby release year helps, a distant one counts against it.
 function pick(results, query, year, dateKey, titleKeys) {
@@ -84,17 +90,18 @@ function createMetadata({ dir, fetch, auth, onUpdate }) {
     await fsp.writeFile(target, Buffer.from(await response.arrayBuffer()));
     return `artwork/${name}`;
   }
+  const castOf = credits => Promise.all((credits?.cast || []).slice(0, CAST_SHOWN).map(async c => ({ name: c.name, role: c.character || '', photo: await image(c.profile_path, 'w185', `person-${c.id}.jpg`).catch(() => null) })));
   async function movieDetails(id) {
     const movie = await api(`/movie/${id}`, { append_to_response: 'credits' });
     if (!movie) return null;
     return { tmdbId: movie.id, type: 'movie', title: movie.title, year: movie.release_date?.slice(0, 4) || null, genres: (movie.genres || []).map(g => g.name),
       people: [...new Set((movie.credits?.crew || []).filter(c => c.job === 'Director').map(c => c.name))], peopleLabel: 'Directed by',
-      cast: (movie.credits?.cast || []).slice(0, 4).map(c => c.name), overview: movie.overview || '', tagline: movie.tagline || '', runtime: movie.runtime || null,
+      cast: await castOf(movie.credits), imdbId: movie.imdb_id || null, ...productionOf(movie, movie.credits), overview: movie.overview || '', tagline: movie.tagline || '', runtime: movie.runtime || null,
       rating: movie.vote_count ? Math.round(movie.vote_average * 10) / 10 : null, votes: movie.vote_count || 0,
       poster: await image(movie.poster_path, 'w500', `movie-${movie.id}-poster.jpg`), backdrop: await image(movie.backdrop_path, 'w1280', `movie-${movie.id}-backdrop.jpg`) };
   }
   async function tvDetails(id, seasons) {
-    const show = await api(`/tv/${id}`, { append_to_response: 'credits' });
+    const show = await api(`/tv/${id}`, { append_to_response: 'credits,external_ids' });
     if (!show) return null;
     const episodes = {};
     for (const season of seasons) {
@@ -103,7 +110,7 @@ function createMetadata({ dir, fetch, auth, onUpdate }) {
         still: await image(e.still_path, 'w300', `tv-${show.id}-s${season}e${e.episode_number}.jpg`).catch(() => null) }])));
     }
     return { tmdbId: show.id, type: 'tv', title: show.name, year: show.first_air_date?.slice(0, 4) || null, genres: (show.genres || []).map(g => g.name),
-      people: (show.created_by || []).map(c => c.name), peopleLabel: 'Created by', cast: (show.credits?.cast || []).slice(0, 4).map(c => c.name),
+      people: (show.created_by || []).map(c => c.name), peopleLabel: 'Created by', cast: await castOf(show.credits), imdbId: show.external_ids?.imdb_id || null, ...productionOf(show, show.credits),
       overview: show.overview || '', tagline: show.tagline || '', runtime: show.episode_run_time?.[0] || null, seasonCount: show.number_of_seasons || null,
       rating: show.vote_count ? Math.round(show.vote_average * 10) / 10 : null, votes: show.vote_count || 0, episodes,
       poster: await image(show.poster_path, 'w500', `tv-${show.id}-poster.jpg`), backdrop: await image(show.backdrop_path, 'w1280', `tv-${show.id}-backdrop.jpg`) };
