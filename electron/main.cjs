@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, protocol, net, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, session, shell } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -49,7 +49,7 @@ app.whenReady().then(async () => {
   streams = await createStreamServer();
   protocol.handle('matro', request => {
     const url = new URL(request.url);
-    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg','/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
+    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg','/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
     const artwork = url.hostname === 'app' && url.pathname.startsWith('/artwork/') && metadata.artworkFile(url.pathname.slice('/artwork/'.length));
     if (artwork) return net.fetch(pathToFileURL(artwork).href);
     const file = url.hostname === 'app' && files[url.pathname];
@@ -91,7 +91,14 @@ app.whenReady().then(async () => {
     }
     return rescan();
   });
-  handle('metadata:search', options => metadata.search(options?.kind, options?.query, /^\d{4}$/.test(String(options?.year || '')) ? options.year : null));
+  // The page only names a title; the address is built here so nothing but TMDB and IMDb title pages can ever be opened.
+  handle('metadata:open', options => {
+    const id = Number(options?.tmdbId), imdb = String(options?.imdbId || '');
+    const url = options?.site === 'imdb' && /^tt\d{5,12}$/.test(imdb) ? `https://www.imdb.com/title/${imdb}/`
+      : options?.site === 'tmdb' && Number.isInteger(id) && id > 0 ? `https://www.themoviedb.org/${options.type === 'tv' ? 'tv' : 'movie'}/${id}` : null;
+    if (url) void shell.openExternal(url);
+  });
+  handle('metadata:search',options => metadata.search(options?.kind, options?.query, /^\d{4}$/.test(String(options?.year || '')) ? options.year : null));
   handle('metadata:assign', async options => {
     const items = state.items.filter(i => (i.kind === 'show' ? i.groupId || i.group : i.id) === options?.key);
     if (!items.length) throw new Error('That title is no longer in the library.');
