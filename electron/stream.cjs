@@ -2,6 +2,7 @@ const http = require('node:http');
 const { randomBytes } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { ffmpeg } = require('./media.cjs');
+const { remote } = require('./ssh-media.cjs');
 
 async function createStreamServer() {
   // One playing session plus, near the end of an episode, one preload session for the next queue item. A new request
@@ -9,14 +10,18 @@ async function createStreamServer() {
   const sessions = new Map();
   const children = new Set();
   let preloadToken = null;
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     const session = sessions.get(url.pathname.slice(1));
     if (!session || req.method !== 'GET') { res.writeHead(404).end(); return; }
     const token = url.pathname.slice(1);
     for (const child of children) if (child.token === token || !sessions.has(child.token)) child.kill();
     const { file, offset, audio, hasVideo, bitmapSubtitle = null, subtitleDelay = 0 } = session;
-    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-protocol_whitelist', 'file,pipe,crypto', '-ss', String(offset), '-i', file];
+    let input;
+    try { input = await remote.input(file); }
+    catch { res.writeHead(502).end('SSH media is unavailable.'); return; }
+    if (res.destroyed) return;
+    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-protocol_whitelist', remote.isRemote(file) ? 'file,pipe,crypto,http,tcp' : 'file,pipe,crypto', '-ss', String(offset), '-i', input];
     if (hasVideo) {
       if (bitmapSubtitle !== null) args.push('-filter_complex', `[0:${bitmapSubtitle}]setpts=PTS+${subtitleDelay}/TB[sub];[0:v:0][sub]overlay=eof_action=pass:shortest=0,scale=trunc(iw/2)*2:trunc(ih/2)*2[video]`, '-map', '[video]');
       else args.push('-map', '0:v:0', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2');

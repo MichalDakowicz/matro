@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog, protocol, net, session, shell } = require('electron');
 const fs = require('node:fs/promises');
+const { remote } = require('./ssh-media.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { scan, describe, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
@@ -45,6 +46,9 @@ app.whenReady().then(async () => {
   const env = { ...readEnv([path.join(app.getAppPath(), '.env'), path.join(app.getPath('userData'), '.env')]), ...process.env };
   metadata = createMetadata({ dir: app.getPath('userData'), fetch: (url, options) => net.fetch(url, options), auth: env.MATRO_METADATA === 'off' ? null : credentials(env), onUpdate: snapshot => { if (win && !win.isDestroyed()) win.webContents.send('library:metadata', snapshot); } });
   try { state = { ...state, ...JSON.parse(await fs.readFile(storage, 'utf8')) }; } catch { /* First launch or damaged state uses a fresh library. */ }
+  for (const config of state.sshConnections || []) {
+    try { remote.register(config); } catch { /* Leave cached titles available if a saved configuration is invalid. */ }
+  }
   if (state.libraryVersion !== 2) await rescan();
   streams = await createStreamServer();
   protocol.handle('matro', request => {
@@ -73,6 +77,22 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   scanner = createSegmentScheduler({ getState: () => state, engine: segments, persist, onUpdate: update => { if (!win.isDestroyed()) win.webContents.send('media:segments-progress', update); } });
   handle('library:load', async () => { await metadata.loaded; return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
+  handle('library:ssh', async options => {
+    const root = remote.register(options);
+    const wasSaved = state.folders.includes(root);
+    try {
+      const items = await scan(root);
+      if (!state.folders.includes(root)) state.folders.push(root);
+      state.sshConnections ||= [];
+      if (!state.sshConnections.some(config => remote.register(config) === root)) state.sshConnections.push({ ...remote.configs.get(root), root });
+      state.items = regroup(state.items.filter(item => item.root !== root).concat(items));
+      await persist(); scanner.invalidate(); void metadata.sync(state.items);
+      return state;
+    } catch (error) {
+      if (!wasSaved) remote.remove(root);
+      throw new Error(`Could not read SSH media: ${error.message}. Check that SSH key login works in your terminal and Python 3 is installed on the server.`);
+    }
+  });
   handle('library:folder', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (result.canceled) return state; const root = result.filePaths[0]; const items = await scan(root); if (!state.folders.includes(root)) state.folders.push(root); const existing = new Map(state.items.map(i => [i.id, i])); for (const item of items) existing.set(item.id, item); state.items = regroup([...existing.values()]); await persist(); scanner.invalidate(); void metadata.sync(state.items); return state; });
   handle('library:files', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Media', extensions: [...extensions] }, { name: 'All files', extensions: ['*'] }] }); return result.canceled ? state : importFiles(result.filePaths); });
   handle('library:import', files => { if (!Array.isArray(files) || files.length > 5000) throw new Error('Invalid file selection'); return importFiles(files); });
@@ -106,7 +126,7 @@ app.whenReady().then(async () => {
     if (!win.isDestroyed()) win.webContents.send('library:metadata', snapshot);
     return snapshot;
   });
-  handle('library:remove-folder', async root => { state.folders = state.folders.filter(f => f !== root); state.items = state.items.filter(i => i.root !== root); await persist(); scanner.invalidate(); return state; });
+  handle('library:remove-folder', async root => { state.folders = state.folders.filter(f => f !== root); state.items = state.items.filter(i => i.root !== root); state.sshConnections = (state.sshConnections || []).filter(config => remote.register(config) !== root); remote.remove(root); await persist(); scanner.invalidate(); return state; });
   handle('library:save', async data => {
     const ids = new Set(state.items.map(i => i.id));
     if (data.progress && typeof data.progress === 'object') for (const [id, value] of Object.entries(data.progress)) if (ids.has(id) && value && Number.isFinite(value.position) && Number.isFinite(value.duration) && !(Number.isFinite(value.updated) && value.updated < (state.progress[id]?.updated || 0))) state.progress[id] = { position: Math.max(0, value.position), duration: Math.max(0, value.duration), updated: Number.isFinite(value.updated) ? value.updated : Date.now(), completed: !!value.completed, hidden: !!value.hidden };
@@ -175,4 +195,4 @@ app.whenReady().then(async () => {
   void metadata.sync(state.items);
 });
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => { streams?.close(); previews.close(); scanner?.close(); });
+app.on('before-quit', () => { streams?.close(); previews.close(); scanner?.close(); remote.close(); });

@@ -1,6 +1,6 @@
 module.exports = {
   testDir: './tests',
-  testMatch: 'desktop.spec.cjs',
+  testMatch: /(?:^|\/)(?:desktop|ssh-desktop)\.spec\.cjs$/,
   timeout: 90000,
   workers: 1,
   reporter: 'list',

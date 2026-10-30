@@ -33,6 +33,28 @@ const sameTitle = (left, right) => titleKey(left) === titleKey(right);
 const SKIP = 5;
 let library = { items: [], folders: [], progress: {}, queue: [], preferences: { autoplay: true, volume: .72 } };
 let metadata = {}, metadataEnabled = false;
+const sshSource = file => (library.sshConnections || []).find(config => config.root && (file === config.root || file.startsWith(config.root + '\\') || file.startsWith(config.root + '/')));
+function sourcePath(file) {
+  const config = sshSource(file);
+  if (!config) return file;
+  const suffix = file.slice(config.root.length).replace(/\\/g, '/');
+  return `${config.user}@${config.host}:${config.directory.replace(/\/$/, '')}${suffix}`;
+}
+function openSSH() {
+  const saved = library.sshConnections?.at(-1);
+  if (saved) for (const name of ['host', 'user', 'port', 'directory', 'identity']) $('#ssh-form').elements.namedItem(name).value = saved[name] ?? '';
+  $('#ssh-status').textContent = ''; $('#ssh-dialog').showModal();
+}
+$('#ssh-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = $('#ssh-connect'), status = $('#ssh-status');
+  button.disabled = true; status.textContent = 'Connecting and scanning the media folder…';
+  try {
+    library = await api.connectSSH(Object.fromEntries(new FormData(event.target)));
+    $('#ssh-dialog').close(); tab = 'folders'; folderFilter = null; renderLibrary(); toast('SSH media folder added.');
+  } catch (error) { status.textContent = error.message || String(error); }
+  finally { button.disabled = false; }
+});
 let tab = 'home', query = '', view = 'library', selected = null, folderFilter = null, statusFilter = 'all';
 let current = null, info = null, video = null, offset = 0, audio = null, subtitle = null, subtitleText = null, subtitleUrl = null, delay = 0;
 let queueOpen = false, sidePanel = null, generation = 0, lastSave = 0, idleTimer, toastTimer, subtitleGeneration = 0;
@@ -224,12 +246,12 @@ function dock() {
 }
 let footerOpen = false;
 function footer() {
-  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Local library</span><span class="dim">Your files stay on this device. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
+  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
 }
 const sectionGrid = (title, items, count, more) => items.length ? `<section class="section"><div class="section-heading"><h2>${title}</h2><span>${count}${more ? ` · <button class="text-button" data-tab="${more}">See all</button>` : ''}</span></div><div class="grid">${items.map(poster).join('')}</div></section>` : '';
 const kinds = [['show', 'Shows', 'shows'], ['movie', 'Movies', 'titles'], ['audio', 'Music & audio', 'files']];
 function landingPage() {
-  if (!library.items.length) return `<section class="welcome"><p class="show-kicker">Matro · local library</p><h1>Your collection.<br>Your kind of player.</h1><p>All your films, shows and favourite files in one quiet place. Add a folder to build your library, or drop media anywhere in this window — seasons and episodes are picked up from file names.</p><div class="show-actions"><button class="pill primary" data-action="folder">${icon('folder')}Add folder</button><button class="pill" data-action="files">${icon('plus')}Open files</button></div><div class="formats">${['MKV', 'MP4', 'AVI', 'MOV', 'WEBM', 'FLAC', '+ MORE'].map(f => `<span>${f}</span>`).join('')}</div></section>`;
+  if (!library.items.length) return `<section class="welcome"><p class="show-kicker">Matro · local library</p><h1>Your collection.<br>Your kind of player.</h1><p>All your films, shows and favourite files in one quiet place. Add a folder to build your library, or drop media anywhere in this window — seasons and episodes are picked up from file names.</p><div class="show-actions"><button class="pill" data-action="ssh">${icon('network')}Connect SSH</button><button class="pill primary" data-action="folder">${icon('folder')}Add folder</button><button class="pill" data-action="files">${icon('plus')}Open files</button></div><div class="formats">${['MKV', 'MP4', 'AVI', 'MOV', 'WEBM', 'FLAC', '+ MORE'].map(f => `<span>${f}</span>`).join('')}</div></section>`;
   const continues = continueItems();
   const featured = !folderFilter ? featuredTitles() : [];
   return `${folderFilter ? `<div class="page-head"><div><h1 class="page-title">${esc(base(folderFilter))}</h1><p class="page-sub">${esc(folderFilter)}</p></div><button class="text-button" data-action="all-folders">Show all folders</button></div>` : ''}
@@ -249,13 +271,13 @@ function searchPage() {
   const files = words ? library.items.filter(i => i.path.toLowerCase().includes(words)).slice(0, 12) : [];
   const total = kinds.reduce((sum, [kind]) => sum + groups(kind).length, 0) + files.length;
   return `<div class="search-hero"><label for="search">Search movies, shows, people and file names</label><div class="search-field">${icon('search')}<input id="search" type="search" placeholder="Try a title, a director, or a file name" aria-label="Search library" autocomplete="off" value="${esc(query)}"><kbd>Ctrl K</kbd></div><p class="search-summary">${words ? `${total} ${total === 1 ? 'result' : 'results'} across ${library.items.length} files` : 'Searching your whole library — titles, people and file names'}</p></div>
-    ${sections}${files.length ? `<section class="section"><div class="section-heading"><h2>Files</h2><span>${files.length}</span></div>${files.map(i => `<button class="file-row" data-play="${i.id}">${icon('file')}<span class="mono">${esc(i.path)}</span><small>${esc(i.format)}</small></button>`).join('')}</section>` : ''}
+    ${sections}${files.length ? `<section class="section"><div class="section-heading"><h2>Files</h2><span>${files.length}</span></div>${files.map(i => `<button class="file-row" data-play="${i.id}">${icon('file')}<span class="mono">${esc(sourcePath(i.path))}</span><small>${esc(i.format)}</small></button>`).join('')}</section>` : ''}
     ${words && !total ? '<div class="empty-results"><h2>No matches.</h2><p>Check the spelling, or search by part of a file name.</p></div>' : ''}`;
 }
 function foldersPage() {
   const loose = library.items.filter(i => !library.folders.includes(i.root)).length;
-  return `<div class="page-head"><div><h1 class="page-title">Folders</h1><p class="page-sub">${library.folders.length} ${library.folders.length === 1 ? 'source' : 'sources'} · ${library.items.length} items · stored on this device only</p></div><div class="show-actions"><button class="pill" data-action="files">${icon('plus')}Open files</button><button class="pill" data-action="rescan" aria-label="Rescan folders">${icon('refresh')}Rescan</button><button class="pill primary" data-action="folder">${icon('plus')}Add folder</button></div></div>
-    <ul class="sources">${library.folders.map((f, index) => `<li class="source-row"><span class="source-icon">${icon(/^\\\\|^\/\//.test(f) ? 'network' : 'folder')}</span><span class="min"><span class="source-name">${esc(base(f))}</span><span class="source-path mono" title="${esc(f)}">${esc(f)}</span></span><span class="source-count">${library.items.filter(i => i.root === f).length} items</span><span class="source-actions"><button class="pill small" data-folder="${index}" aria-label="Browse ${esc(base(f))}">Browse</button><button class="icon-button" data-remove-folder="${index}" aria-label="Remove ${esc(base(f))} from library">${icon('trash')}</button></span></li>`).join('')}
+  return `<div class="page-head"><div><h1 class="page-title">Folders</h1><p class="page-sub">${library.folders.length} ${library.folders.length === 1 ? 'source' : 'sources'} · ${library.items.length} items · local and SSH sources</p></div><div class="show-actions"><button class="pill" data-action="files">${icon('plus')}Open files</button><button class="pill" data-action="rescan" aria-label="Rescan folders">${icon('refresh')}Rescan</button><button class="pill" data-action="ssh">${icon('network')}Connect SSH</button><button class="pill primary" data-action="folder">${icon('plus')}Add folder</button></div></div>
+    <ul class="sources">${library.folders.map((f, index) => `<li class="source-row"><span class="source-icon">${icon(/^\\\\|^\/\//.test(f) ? 'network' : 'folder')}</span><span class="min"><span class="source-name">${esc(base(f))}</span><span class="source-path mono" title="${esc(sourcePath(f))}">${esc(sourcePath(f))}</span></span><span class="source-count">${library.items.filter(i => i.root === f).length} items</span><span class="source-actions"><button class="pill small" data-folder="${index}" aria-label="Browse ${esc(base(f))}">Browse</button><button class="icon-button" data-remove-folder="${index}" aria-label="Remove ${esc(base(f))} from library">${icon('trash')}</button></span></li>`).join('')}
     ${loose ? `<li class="source-row"><span class="source-icon">${icon('file')}</span><span><span class="source-name">Opened files</span><span class="source-path">Added one by one or dropped into the window</span></span><span class="source-count">${loose} items</span><span></span></li>` : ''}</ul>
     ${!library.folders.length && !loose ? '<p class="page-sub">No folders yet. Add one to build your library — mounted network drives work too.</p>' : ''}
     <div class="drop-hint">${icon('upload')}Drop folders or files anywhere to import · scanning is recursive</div>
@@ -551,7 +573,7 @@ function detail(id, focus = true) {
 // Cast and production come from TMDB; a missing portrait gets the generated cover, like missing posters do.
 const castPanel = m => m?.cast?.length ? `<section class="panel flat cast-panel" aria-labelledby="cast-h"><div class="panel-head"><h3 id="cast-h">Cast</h3></div><div class="cast-grid">${m.cast.map(c => `<div class="cast-member"><span class="cast-photo art" data-hue="${hash(c.name) % 360}">${c.photo ? `<img src="${esc(c.photo)}" alt="" loading="lazy" draggable="false">` : icon('person')}</span><strong>${esc(c.name)}</strong>${c.role ? `<small>${esc(c.role)}</small>` : ''}</div>`).join('')}</div></section>` : '';
 // Where the file lives and what it is; it sits flat on the page like the other sections.
-const filePanel = (item, m) => `<section class="panel flat file" aria-labelledby="file-h"><div class="panel-head"><h3 id="file-h">File</h3></div><div class="facts"><div><p>Format</p><strong>${esc(item.format)}</strong><small>${item.kind === 'show' ? 'Series' : item.kind === 'audio' ? 'Audio' : 'Movie'}</small></div><div><p>Source</p><strong>${esc(item.root ? base(item.root) : 'Opened file')}</strong><small>Local file</small></div>${m?.cast?.length ? `<div><p>Starring</p><strong>${esc(m.cast.slice(0, 2).map(c => c.name).join(', '))}</strong>${m.cast[2] ? `<small>${esc(m.cast.slice(2, 5).map(c => c.name).join(', '))}</small>` : ''}</div>` : ''}</div><div class="path-box">${icon('folder')}<span class="mono">${esc(item.path)}</span></div><p class="note">Audio tracks, subtitles and chapters appear when playback starts. HDR is tone-mapped and surround plays as stereo.</p></section>`;
+const filePanel = (item, m) => `<section class="panel flat file" aria-labelledby="file-h"><div class="panel-head"><h3 id="file-h">File</h3></div><div class="facts"><div><p>Format</p><strong>${esc(item.format)}</strong><small>${item.kind === 'show' ? 'Series' : item.kind === 'audio' ? 'Audio' : 'Movie'}</small></div><div><p>Source</p><strong>${esc(item.root ? base(item.root) : 'Opened file')}</strong><small>${sshSource(item.path) ? 'SSH media' : 'Local file'}</small></div>${m?.cast?.length ? `<div><p>Starring</p><strong>${esc(m.cast.slice(0, 2).map(c => c.name).join(', '))}</strong>${m.cast[2] ? `<small>${esc(m.cast.slice(2, 5).map(c => c.name).join(', '))}</small>` : ''}</div>` : ''}</div><div class="path-box">${icon('folder')}<span class="mono">${esc(sourcePath(item.path))}</span></div><p class="note">Audio tracks, subtitles and chapters appear when playback starts. HDR is tone-mapped and surround plays as stereo.</p></section>`;
 const money = n => n >= 1e9 ? `$${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `$${Math.round(n / 1e6)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}K` : '';
 function productionPanel(m) {
   if (!m) return '';
@@ -1015,6 +1037,8 @@ function goTab(next) {
 function goTabNow(next) {
   if (selected) { $('#detail-overlay')?.remove(); selected = null; } if (next !== tab) statusFilter = 'all'; tab = next; folderFilter = null; renderLibrary(); $('.shell')?.scrollTo(0, 0); }
 const actions = {
+  ssh: openSSH,
+  'close-ssh': () => $('#ssh-dialog').close(),
   folder: async () => { toast('Choose a folder. Large collections may take a moment to scan.'); library = await api.addFolder(); renderLibrary(); },
   files: async () => { const before = new Set(library.items.map(i => i.id)); library = await api.openFiles(); const added = library.items.find(i => !before.has(i.id)); if (added) await play(added.id); else if (view === 'library') renderLibrary(); },
   rescan: async () => { toast('Refreshing your folders…'); library = await api.rescan(); renderLibrary(); toast(library.warnings?.join('\n') || 'Library is up to date.'); },
@@ -1091,8 +1115,8 @@ document.addEventListener('keydown', event => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) && event.target.type !== 'range';
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); void attempt(actions.files); return; }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && view === 'library') { event.preventDefault(); if (tab !== 'search') goTab('search'); $('#search')?.focus(); return; }
-  if (event.key === 'Escape') { if ($('#shortcuts').open || $('#match-dialog')?.open) return; if (footerOpen && view === 'library') { actions.about(); return; } if (fullscreenActive) { void api.window('fullscreen'); return; } if (selected) closeDetail(); else if (sidePanel) { sidePanel = null; renderTracks(); } else if (view === 'player') void attempt(backToLibrary); return; }
-  if (typing || $('#shortcuts').open || view !== 'player') return;
+  if (event.key === 'Escape') { if ($('#shortcuts').open || $('#match-dialog')?.open || $('#ssh-dialog').open) return; if (footerOpen && view === 'library') { actions.about(); return; } if (fullscreenActive) { void api.window('fullscreen'); return; } if (selected) closeDetail(); else if (sidePanel) { sidePanel = null; renderTracks(); } else if (view === 'player') void attempt(backToLibrary); return; }
+  if (typing || $('#shortcuts').open || $('#ssh-dialog').open || view !== 'player') return;
   // Enter takes a visible skip (intro, recap, outro) unless a control has focus and Enter belongs to it.
   if (event.key === 'Enter' && !$('#skip-segment')?.hidden && !event.target.closest('button, a, input, select, textarea')) { event.preventDefault(); void attempt(actions['skip-segment']); return; }
   const key = event.key.toLowerCase(); const keyActions = { ' ': toggle, arrowleft: actions.backward, arrowright: actions.forward, arrowup: () => setVolume(currentVolume() + .05), arrowdown: () => setVolume(currentVolume() - .05), f: actions.fullscreen, m: actions.mute };
