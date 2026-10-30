@@ -61,6 +61,42 @@ Starting a series replaces an old mixed queue with that show's episodes in seaso
 
 On Windows, a native Electron `0x80000003` startup crash can come from runtime folder ACLs. If stderr explicitly reports `install_dir_access.cc` and missing `ALL APPLICATION PACKAGES` access, grant read/execute to the reported runtime folder with `icacls "node_modules\electron\dist" /grant "*S-1-15-2-1:(OI)(CI)(RX)"`. Codex's restricted process sandbox may still prevent desktop launches; run desktop tests in an ordinary terminal or with approved execution outside that sandbox. Keep Electron's renderer sandbox enabled.
 
-Server connection, remote catalog browsing, web/mobile clients, and sync are planned, not implemented. Focus is the desktop player while the server is not yet set up.
+### SSH media folders
+
+Choose **Connect SSH** on the welcome page or under **Folders**. Enter the server,
+username, SSH port (normally 22), and an absolute media folder such as `/mnt/media`.
+An optional private-key path selects a specific key; otherwise Matro uses your
+OpenSSH keys or agent. First verify key login in a terminal:
+
+```sh
+ssh michu@192.168.100.6
+```
+
+Accept the host key in that terminal after checking it. Matro requires a known host
+and noninteractive key authentication; it does not store or prompt for passwords.
+Windows OpenSSH must be installed on the PC and Python 3 on the Linux server.
+Encrypted keys work when loaded into the SSH agent.
+
+Matro scans and reads the configured directory over SSH. Videos stream in chunks
+with byte-range seeking; movies are not downloaded in full. FFmpeg playback,
+thumbnails, embedded and adjacent text subtitles, and background segment detection
+continue to run locally. Loading a local SRT, VTT, ASS, or SSA subtitle saves a copy
+beside the video on the server (up to 16 MiB). Existing files are never overwritten;
+a numbered filename is chosen when needed. Uploads are staged in the destination
+directory and published only when complete. If the server is offline or its folder
+is read-only, the subtitle still works for the current session and Matro shows a
+save warning. No movie files are changed. A temporary Python helper runs inside the
+SSH session, with no remote listening port or installed service. It exits when
+Matro disconnects. Progress, subtitle choices, delay, appearance, and other player
+preferences remain saved on this PC; these are not synchronized through the server.
+
+Connection settings are saved with your library and reconnect on demand after
+restart. If the server goes offline, cached entries stay in the library; use
+**Rescan** or retry playback after reconnecting. Remove an SSH folder under
+**Folders** to close its connection without deleting server files. Importing an old
+local library under the new SSH source creates new path-based item IDs; previous
+local watch progress is not automatically migrated.
+
+Remote catalog browsing outside the configured folder, web/mobile clients, and sync remain planned.
 
 See [OVERVIEW.md](OVERVIEW.md) for the product direction, architecture, decisions, and roadmap. Original source: MIT; bundled media binaries have separate licenses described in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

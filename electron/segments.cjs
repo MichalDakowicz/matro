@@ -1,4 +1,4 @@
-const fs = require('node:fs/promises');
+const { mediaFS: fs } = require('./ssh-media.cjs');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const os = require('node:os');

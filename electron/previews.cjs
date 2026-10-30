@@ -1,12 +1,14 @@
 const { execFile } = require('node:child_process');
 const { ffmpeg } = require('./media.cjs');
+const { remote } = require('./ssh-media.cjs');
 
 // Hover frames decode only the keyframe at or before the time (no decoding forward to the exact frame), which is what
 // makes scrubbing quick on long-GOP and 4K files. Library cards keep exact frames. That keyframe is stamped before the
 // seek point, so passthrough stops frame-rate sync from dropping it when it is the last one in the file.
-function extract(file, second, keyframe, track) {
+async function extract(file, second, keyframe, track) {
+  const input = await remote.input(file);
   return new Promise(resolve => {
-    const child = execFile(ffmpeg, ['-v', 'error', '-nostdin', '-protocol_whitelist', 'file,pipe,crypto', ...(keyframe ? ['-skip_frame', 'nokey', '-noaccurate_seek'] : []), '-ss', String(second), '-i', file,
+    const child = execFile(ffmpeg, ['-v', 'error', '-nostdin', '-protocol_whitelist', remote.isRemote(file) ? 'file,pipe,crypto,http,tcp' : 'file,pipe,crypto', ...(keyframe ? ['-skip_frame', 'nokey', '-noaccurate_seek'] : []), '-ss', String(second), '-i', input,
       ...(keyframe ? ['-fps_mode', 'passthrough'] : []), '-map', '0:v:0', '-frames:v', '1', '-an', '-sn', '-vf', 'scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2', '-q:v', '4', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1'],
     { windowsHide: true, timeout: 10000, maxBuffer: 2 * 1024 * 1024, encoding: 'buffer' }, (error, data) => resolve(error || !data.length ? null : `data:image/jpeg;base64,${data.toString('base64')}`));
     track(child);

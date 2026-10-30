@@ -1,5 +1,5 @@
 const path = require('node:path');
-const fs = require('node:fs/promises');
+const { mediaFS: fs, remote } = require('./ssh-media.cjs');
 const { createHash } = require('node:crypto');
 const { execFile } = require('node:child_process');
 const os = require('node:os');
@@ -88,7 +88,8 @@ function groupFolders(items) {
   }
   return items;
 }
-function run(binary, args, options = {}) {
+async function run(binary, args, options = {}) {
+  args = await remote.args(args);
   const { priority, ...executionOptions } = options;
   return new Promise((resolve, reject) => {
     const child = execFile(binary, args, { windowsHide: true, timeout: 30000, maxBuffer: 16 * 1024 * 1024, ...executionOptions }, (error, stdout, stderr) => error ? reject(error.name === 'AbortError' ? error : new Error(stderr?.slice(-1000) || error.message)) : resolve(stdout));

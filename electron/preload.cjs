@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('matro', {
   load: () => ipcRenderer.invoke('library:load'),
   addFolder: () => ipcRenderer.invoke('library:folder'),
+  connectSSH: options => ipcRenderer.invoke('library:ssh', options),
   openFiles: () => ipcRenderer.invoke('library:files'),
   importDrop: files => ipcRenderer.invoke('library:import', Array.from(files, file => webUtils.getPathForFile(file))),
   rescan: () => ipcRenderer.invoke('library:rescan'),

@@ -1,4 +1,4 @@
-const fs = require('node:fs/promises');
+const { mediaFS: fs } = require('./ssh-media.cjs');
 const { idFor } = require('./media.cjs');
 const titleKey = item => item.groupId || item.group;
 const order = (a, b) => a.season - b.season || a.episode - b.episode || a.path.localeCompare(b.path);

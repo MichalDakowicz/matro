@@ -13,6 +13,22 @@
   <div id="app"></div>
   <div id="toast" role="status" aria-live="polite" hidden></div>
   <dialog id="shortcuts"><form method="dialog"><div class="section-heading"><h2>Make yourself at home.</h2><button class="icon-button" aria-label="Close shortcuts">×</button></div><p class="muted">A few shortcuts for a quieter movie night.</p><dl><dt>Play / pause</dt><dd>Space</dd><dt>Seek 5 seconds</dt><dd>← / →</dd><dt>Browse featured titles</dt><dd>← / → on the poster reel</dd><dt>Search</dt><dd>Ctrl / ⌘ + K</dd><dt>Volume</dt><dd>↑ / ↓</dd><dt>Fullscreen</dt><dd>F</dd><dt>Mute</dt><dd>M</dd><dt>Open files</dt><dd>Ctrl / ⌘ + O</dd><dt>Back to library</dt><dd>Esc</dd></dl><button class="pill primary">Got it</button></form></dialog>
+  <dialog id="ssh-dialog" aria-labelledby="ssh-title">
+    <form id="ssh-form">
+      <div class="section-heading"><h2 id="ssh-title">Connect over SSH</h2><button type="button" class="icon-button" data-action="close-ssh" aria-label="Close SSH settings">×</button></div>
+      <p class="muted">Read media from your server. Files stay on the server; playback runs on this PC.</p>
+      <div class="ssh-fields">
+        <label>Server<input name="host" required autocomplete="off" placeholder="192.168.1.10"></label>
+        <label>Username<input name="user" required autocomplete="off" placeholder="Your SSH username"></label>
+        <label>Port<input name="port" type="number" value="22" min="1" max="65535" required></label>
+        <label class="ssh-wide">Media folder<input name="directory" value="/mnt/media" required placeholder="/mnt/media"></label>
+        <label class="ssh-wide">Private key path <span class="dim">(optional)</span><input name="identity" autocomplete="off" placeholder="Leave empty to use your SSH keys or agent"></label>
+      </div>
+      <p class="note">Uses SSH key authentication and your known hosts. First connect successfully in a terminal with <code>ssh username@server</code>. The server needs Python 3. Password prompts are not supported inside Matro.</p>
+      <p id="ssh-status" role="status" aria-live="polite"></p>
+      <div class="show-actions"><button id="ssh-connect" class="pill primary" type="submit">Connect and add folder</button><button class="pill" type="button" data-action="close-ssh">Cancel</button></div>
+    </form>
+  </dialog>
   <script type="module" src="app.js"></script>
 </body>
 </html>
