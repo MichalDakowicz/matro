@@ -6,6 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src http://127.0.0.1:* blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Matro</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="downloads.css">
 </head>
 <body>
   <header class="titlebar"></header>
@@ -24,7 +25,7 @@
         <label class="ssh-wide">Media folder<input name="directory" value="/mnt/media" required placeholder="/mnt/media"></label>
         <label class="ssh-wide">Private key path <span class="dim">(optional)</span><input name="identity" autocomplete="off" placeholder="Leave empty to use your SSH keys or agent"></label>
       </div>
-      <p class="note">Uses SSH key authentication and your known hosts. First connect successfully in a terminal with <code>ssh username@server</code>. The server needs Python 3. Password prompts are not supported inside Matro.</p>
+      <p class="note">Uses SSH key authentication and your known hosts. First connect successfully in a terminal with <code>ssh username@server</code>. The server needs Python 3 and FFmpeg for embedded text subtitles. Password prompts are not supported inside Matro.</p>
       <p id="ssh-status" role="status" aria-live="polite"></p>
       <div class="show-actions"><button id="ssh-connect" class="pill primary" type="submit">Connect and add folder</button><button class="pill" type="button" data-action="close-ssh">Cancel</button></div>
     </form>

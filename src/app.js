@@ -1,4 +1,6 @@
+import { createDownloadBrowser } from './downloads.js';
 const api = window.matro;
+const downloads = createDownloadBrowser(api, { play: id => { void attempt(() => play(id, false, true)); } });
 const $ = selector => document.querySelector(selector);
 const root = $('#app');
 const icons = {
@@ -21,6 +23,7 @@ const icons = {
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>', close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>', more: '<circle cx="5.5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18.5" cy="12" r="1"/>',
   trash: '<path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13"/>', upload: '<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/>',
   arrows: '<path d="M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4"/>', network: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  download: '<path d="M12 4v11m-4.5-4.5 4.5 4.5 4.5-4.5M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>'
 };
 const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.file}</svg>`;
@@ -241,8 +244,8 @@ async function loadFrames() {
   }
 }
 function dock() {
-  const items = [['movie', 'Movies', 'movies'], ['show', 'Shows', 'shows'], ...(library.items.some(i => i.kind === 'audio') ? [['audio', 'Music', 'music']] : []), ['search', 'Search', 'search'], ['folders', 'Folders', 'folder']];
-  return `<div class="dock-wrap"><button class="dock-back" data-action="close-detail" aria-label="Close details" title="Back (Esc)">${icon('back')}</button><nav class="dock" aria-label="Library">${items.map(([id, label, glyph]) => `<button class="dock-item" data-tab="${id}" ${tab === id && !folderFilter ? `aria-current="page" title="Back to the landing page"` : ''}>${icon(glyph)}<span class="dock-label">${label}</span>${['movie', 'show', 'audio'].includes(id) ? `<span class="sr-only"> ${groups(id).length}</span>` : ''}</button>`).join('')}</nav></div>`;
+  const items = [['movie', 'Movies', 'movies'], ['show', 'Shows', 'shows'], ...(library.items.some(i => i.kind === 'audio') ? [['audio', 'Music', 'music']] : []), ['search', 'Search', 'search'], ['folders', 'Folders', 'folder'], ['downloads', 'Downloads', 'download']];
+  return `<div class="dock-wrap"><button class="dock-back" data-action="close-detail" aria-label="Close details" title="Back (Esc)">${icon('back')}</button><nav class="dock" aria-label="Library">${items.map(([id, label, glyph]) => `<button class="dock-item" data-tab="${id}" ${id === 'downloads' ? 'aria-label="Downloads"' : ''} ${tab === id && !folderFilter ? `aria-current="page" title="Back to the landing page"` : ''}>${icon(glyph)}<span class="dock-label">${label}</span>${['movie', 'show', 'audio'].includes(id) ? `<span class="sr-only"> ${groups(id).length}</span>` : ''}</button>`).join('')}</nav></div>`;
 }
 let footerOpen = false;
 function footer() {
@@ -284,15 +287,17 @@ function foldersPage() {
     <p class="note">Removing a folder never deletes files on disk. Progress, queue and skip markers are kept for when you add it back.</p>`;
 }
 function renderLibrary() {
+  downloads.unmount();
   view = 'library'; document.body.classList.remove('in-player');
-  const page = tab === 'search' ? searchPage() : tab === 'folders' ? foldersPage() : ['movie', 'show', 'audio'].includes(tab) ? browsePage(tab) : landingPage();
+  const page = tab === 'downloads' ? downloads.markup() : tab === 'search' ? searchPage() : tab === 'folders' ? foldersPage() : ['movie', 'show', 'audio'].includes(tab) ? browsePage(tab) : landingPage();
   root.innerHTML = `<div class="shell">${dock()}<main class="page">${page}</main>${footer()}</div>`;
   applyStyles(root);
   $('#search')?.addEventListener('input', event => { const caret = event.target.selectionStart; query = event.target.value; renderLibrary(); $('#search').focus(); $('#search').setSelectionRange(caret, caret); });
+  if (tab === 'downloads') void downloads.mount($('#download-browser'));
   setupReel(); renderScannerStatus(); void loadFrames();
 }
 function rerender() {
-  if (view !== 'library') return;
+  if (view !== 'library' || tab === 'downloads') return;
   const focused = document.activeElement?.id === 'search' ? $('#search').selectionStart : null, scroll = $('.shell')?.scrollTop || 0, open = selected?.id;
   renderLibrary(); if ($('.shell')) $('.shell').scrollTop = scroll;
   if (focused !== null && $('#search')) { $('#search').focus(); $('#search').setSelectionRange(focused, focused); }
@@ -561,7 +566,7 @@ function detail(id, focus = true) {
       ${m?.people?.length ? `<p class="detail-sub">${esc(m.peopleLabel)} <strong>${esc(m.people.slice(0, 3).join(', '))}</strong></p>` : ''}
       <p class="detail-sub">${[...facts, selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie', selected.format].map(esc).join(' <span aria-hidden="true">·</span> ')}</p>
       ${m?.overview ? `<p class="detail-overview">${esc(m.overview)}</p>` : ''}
-      <div class="detail-actions"><button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
+      <div class="detail-actions">${selected.kind === 'movie' ? `<button class="pill" data-upgrade="${selected.id}">Find better quality / compare editions</button>` : ''}<button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
       ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
       ${m?.rating ? `<div class="ratings"><div><p class="rating-label">TMDB</p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}</div>
     <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
@@ -665,7 +670,15 @@ function enqueue(id, all = false) {
   library.queue = [...new Set([...library.queue, ...ids])]; void attempt(save); toast(`${all ? 'Episodes' : displayName(item)} added to queue`); if (view === 'player') renderQueue();
 }
 function ib(name, label, action, extra = '') { return `<button class="icon-button ${extra}" data-action="${action}" aria-label="${label}" title="${label}">${icon(name)}</button>`; }
-async function play(id, keepQueue = false) {
+async function play(id, keepQueue = false, compareEdition = false) {
+  if (compareEdition) library.queue = [id];
+  else {
+    const editions = Object.values(library.movieEditions || {}).find(group => group.editions.includes(id));
+    if (editions?.favorite && library.items.some(item => item.id === editions.favorite)) {
+      id = editions.favorite;
+      library.queue = [...new Set(library.queue.map(queued => editions.editions.includes(queued) ? id : queued))];
+    }
+  }
   const item = library.items.find(i => i.id === id); if (!item) return;
   // Starting playback from the library always opens with the queue closed; next, previous and autoplay keep it as it was.
   if (view !== 'player') queueOpen = false;
@@ -1023,7 +1036,7 @@ function openDetail(id, source) {
   if (from) hero.animate([{ clipPath: insetFrom(from, hero.getBoundingClientRect()) }, { clipPath: 'inset(0px 0px 0px 0px round 0px)' }], { duration: 700, easing: EASE });
   overlay.querySelector('.detail-body').animate([{ opacity: 0, transform: 'translateY(24px)' }, { opacity: 1, transform: 'none' }], { duration: 520, delay: 140, easing: EASE, fill: 'backwards' });
 }
-const TAB_ORDER = ['home', 'movie', 'show', 'audio', 'search', 'folders'];
+const TAB_ORDER = ['home', 'movie', 'show', 'audio', 'search', 'folders', 'downloads'];
 function goTab(next) {
   // Clicking the selected dock item again deselects it, which is the landing page.
   if (next === tab && next !== 'home' && !folderFilter && !selected) next = 'home';
@@ -1090,6 +1103,7 @@ document.addEventListener('click', event => {
     if (btn.dataset.matchPick) return assignMatch(Number(btn.dataset.matchPick));
     if (btn.dataset.matchNone !== undefined) return assignMatch(null);
     if (btn.dataset.restart) { const old = library.progress[btn.dataset.restart]; if (old) library.progress[btn.dataset.restart] = { ...old, position: 0, updated: Date.now() }; return play(btn.dataset.restart); }
+    if (btn.dataset.upgrade) { await downloads.openUpgrade(btn.dataset.upgrade); goTab('downloads'); return; }
     if (btn.dataset.play) return play(btn.dataset.play, !!btn.closest('.queue-panel'));
     if (btn.dataset.detail) return openDetail(btn.dataset.detail, btn);
     if (btn.dataset.enqueue) return enqueue(btn.dataset.enqueue);
@@ -1131,6 +1145,7 @@ window.addEventListener('beforeunload', () => { remember(); void save(); });
 // Closing the window waits for the latest position to be written before the app quits.
 api?.onClosing?.(async () => { try { remember(); await save(); } finally { void api.window('close'); } });
 api?.onFullscreen(active => { fullscreenActive = active; fullscreenQueueOpen = false; document.body.classList.toggle('fullscreen', active); hidePreview(); if (view === 'player') { renderQueue(); $('.stage')?.classList.remove('idle'); scheduleIdle(); } });
+api?.onDownloads?.(state => { library = { ...library, ...state }; rerender(); });
 api?.onMetadata?.(update => { metadata = update || {}; rerender(); });
 api?.onSegments(update => {
   if (update.scanner) { scannerSummary = update.scanner; renderScannerStatus(); }

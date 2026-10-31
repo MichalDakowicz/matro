@@ -11,3 +11,10 @@ The MIT license in this repository covers original Matro source code. Dependenci
 - TMDB (optional metadata and artwork): "This product uses the TMDB API but is not endorsed or certified by TMDB." Matro shows this notice in the library footer whenever TMDB is enabled. Use is subject to the TMDB API terms: https://www.themoviedb.org/api-terms-of-use . `src/assets/tmdb.svg` is TMDB's "primary short" logo from https://www.themoviedb.org/about/logos-attribution , used unmodified next to TMDB ratings as attribution. Credentials are supplied by each user and are not bundled.
 
 Before distributing installers publicly, audit the exact FFmpeg/FFprobe binaries, preserve their complete license notices, and provide the corresponding source and build instructions required by those builds. The development packaging command is not a substitute for that release check. No claim is made that every upstream codec is enabled or that DRM-protected media is supported.
+
+- TVmaze series metadata: CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/), source https://www.tvmaze.com/api . Series search displays source links and the license; summaries are converted from HTML to shortened plain text. This attribution applies to that data, separately from Matro source code.
+- EZTV series-release index: optional, explicitly requested public API lookups via https://eztvx.to/api/ . No API client code from EZTV is bundled.
+
+## Windows v0.5.0 media-tool builds
+
+The installer preserves the complete GPLv3 text in `licenses/FFmpeg-GPL-3.0.txt`. `licenses/FFmpeg-6.1.1-build.txt` contains the bundled Gyan essentials build configuration and exact FFmpeg source commit (`e38092ef93`). `licenses/FFprobe-4.0.2-build.txt` records the older ffprobe-static binary configuration, upstream n4.0.2 source archive, wrapper provenance and Windows build documentation. Both binaries report GPL/version3-enabled configurations. These notices supplement the dependency licenses shipped in the application archive.

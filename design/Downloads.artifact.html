@@ -1,0 +1,403 @@
+<title>Matro Downloads</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Built from Matro's own shell and classes (styles.css): dock top-left, brand top-right, .page 98/56 padding, .page-title, .section-heading, poster .grid cards, .chip, .pill, dialog, toast.
+   Downloads becomes a poster grid like Library; releases open in a dialog; transfers sit in a Continue-watching style row. */
+:root{--bg:#0a0a0b;--panel:#161618;--surface:#ffffff09;--text:#ece9e4;--muted:#a9a59d;--dim:#8f8c87;--line:#ffffff14;--white:#f3f1ec;--primary:#f3f1ec;--on-primary:#0a0a0b;--good:#9fd6b0;--warn:#e3a58b;
+  color-scheme:dark;font-family:Geist,'Segoe UI',system-ui,sans-serif;font-size:14px;background:var(--bg);color:var(--text)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
+button,input,select{font:inherit}button{cursor:pointer;color:inherit;border:0;background:none;padding:0;transition:background .15s,transform .15s,color .15s,border-color .15s}
+button:disabled{opacity:.35;cursor:default}button:active:not(:disabled){transform:scale(.97)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--white);outline-offset:3px}
+svg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}button svg{pointer-events:none}
+h1,h2,h3,p{margin:0}h1,h2,h3{letter-spacing:-.035em}h2{font-size:20px;font-weight:600}h3{font-size:15px;font-weight:600}small{font-size:12px}
+.muted{color:var(--muted)}.dim{color:var(--dim)}.mono{font-family:'Geist Mono',ui-monospace,Consolas,monospace}
+[hidden]{display:none!important}
+body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:95;opacity:.09;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+
+/* dock + brand */
+.dock-wrap{position:fixed;top:max(18px,env(safe-area-inset-top,0px));left:max(16px,env(safe-area-inset-left,0px));z-index:80}
+.dock{display:flex;align-items:center;gap:2px;padding:4px;border-radius:999px;background:#1a1a1c8c;border:1px solid #ffffff14;backdrop-filter:blur(18px);box-shadow:0 10px 30px #0006}
+.dock-item{display:flex;align-items:center;gap:8px;height:40px;padding:0 16px;border-radius:999px;font-size:13.5px;font-weight:500;color:#b9b6b0}
+.dock-item svg{width:16px;height:16px}.dock-item:hover{background:#ece9e414;color:#f4f1ec}.dock-item[aria-current=page]{background:#ece9e41f;color:#f4f1ec}
+.brand{position:fixed;top:max(18px,env(safe-area-inset-top,0px));right:max(20px,env(safe-area-inset-right,0px));z-index:85;display:flex;align-items:center;gap:12px;height:48px;color:var(--text)}
+.brand span{font-weight:600;font-size:22px;letter-spacing:-.035em}.brand img{width:40px;height:40px}
+@media(max-width:980px){.dock-label{display:none}.dock-item{padding:0 13px}}
+@media(max-width:620px){.brand span{display:none}}
+
+/* page */
+.page{position:relative;max-width:1720px;margin:0 auto;min-height:100vh;
+  padding-block:98px 56px;padding-left:max(clamp(20px,4vw,56px),env(safe-area-inset-left,0px));padding-right:max(clamp(20px,4vw,56px),env(safe-area-inset-right,0px))}
+.page-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:28px}
+.page-title{font-size:44px;font-weight:600;letter-spacing:-.04em;line-height:1}.page-sub{margin-top:8px;font-size:14px;color:var(--dim)}
+.section{margin-bottom:44px;position:relative;z-index:5}
+.section-heading{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:16px}.section-heading>span{font-size:13px;color:var(--dim)}
+.pill{height:44px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:0 20px;font-size:14px;font-weight:500;border:1px solid #ece9e433;white-space:nowrap;color:var(--text)}
+.pill svg{width:16px;height:16px}.pill:hover{background:#ece9e414}.pill.primary{background:var(--primary);color:var(--on-primary);border-color:var(--primary);font-weight:600}.pill.primary:hover{background:#fff}.pill.small{height:36px;padding:0 14px;font-size:13px}
+.text-button{color:var(--muted);font-size:13px;padding:6px 8px;border-radius:8px}.text-button:hover{color:var(--text);background:#ffffff0a}
+.icon-button{width:40px;height:40px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;flex:none;font-size:22px;color:var(--text)}.icon-button:hover{background:#ffffff12}
+.chip-row{display:flex;flex-wrap:wrap;gap:6px}.chip{height:34px;padding:0 14px;border-radius:999px;border:1px solid #ece9e429;font-size:13px;color:#bebab3}.chip:hover{background:#ece9e414}.chip[aria-pressed=true]{background:var(--white);color:var(--on-primary);border-color:var(--white)}
+
+/* destination + search (search-hero from the Search page) */
+.destination{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin-bottom:34px}
+.destination .path{display:flex;align-items:center;gap:8px;min-width:0;overflow-wrap:anywhere;font-size:12px;color:var(--dim)}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--good);flex:none}.status-dot.off{background:var(--warn)}
+.search-hero{max-width:760px;margin:0 0 14px}
+.search-field{display:flex;align-items:center;gap:14px;height:64px;padding:0 12px 0 22px;border-radius:999px;background:#1a1a1cb3;border:1px solid #ece9e438;box-shadow:0 20px 50px #0007}
+.search-field:focus-within{border-color:#ece9e473}.search-field svg{color:var(--dim)}
+.search-field input{flex:1;min-width:0;height:100%;border:0;background:none;color:#f4f1ec;font-size:20px;font-weight:500;letter-spacing:-.02em;outline:none}.search-field input::placeholder{color:#6f6c68}
+.kind-toggle{width:44px;height:44px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;background:none;border:1px solid #ece9e433;color:var(--text)}
+.kind-toggle:hover{background:#ece9e414}.kind-toggle svg{width:18px;height:18px}
+.note{font-size:13px;color:var(--dim);max-width:760px;line-height:1.6;margin-bottom:44px}
+
+/* transfers: continue-watching style cards */
+.cw-row{display:flex;gap:16px;overflow-x:auto;padding:4px 2px 10px;margin:0 -2px;scrollbar-width:thin}
+.xfer{position:relative;flex:none;width:300px;height:172px;border-radius:10px;overflow:hidden;box-shadow:0 14px 30px #0007,0 0 0 1px #ffffff0d;transition:transform .35s cubic-bezier(.2,.75,.15,1)}
+.xfer:hover{transform:translateY(-3px)}
+.xfer:after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,#0000 18%,#000d)}
+.xfer-text{position:absolute;left:14px;right:14px;bottom:12px;z-index:2}
+.xfer-state{position:absolute;top:12px;left:14px;right:14px;z-index:2;display:flex;justify-content:space-between;gap:10px;font-size:12px;color:#ffffffd9}
+.xfer-state b{font-weight:600;font-size:9px;letter-spacing:.09em;padding:4px 7px;border-radius:5px;background:#0006;text-transform:uppercase}
+.xfer-line{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px}
+.card-name{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff}.xfer-line .card-meta{font-size:12px;color:#ffffffc7;white-space:nowrap}
+.progress-track{display:block;height:2px;border-radius:2px;background:#ffffff38;overflow:hidden}.progress-fill{display:block;height:100%;background:var(--primary);width:0;transition:width .6s linear}
+.xfer.done .progress-fill{background:var(--good)}
+.xfer-path{display:block;margin-top:8px;font-size:11px;color:#ffffffa6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* poster grid (Library cards) */
+.art{--h:210;background:radial-gradient(ellipse 80% 55% at 30% 22%,hsl(var(--h) 70% 72% / .45),#0000 70%),radial-gradient(ellipse 70% 45% at 85% 95%,hsl(calc(var(--h) + 40) 60% 18% / .7),#0000 70%),linear-gradient(170deg,hsl(var(--h) 42% 38%),hsl(calc(var(--h) + 25) 38% 13%))}
+.art.v1{background:radial-gradient(circle at 50% 38%,hsl(var(--h) 80% 78% / .9) 0 9%,#0000 10%),linear-gradient(180deg,hsl(var(--h) 55% 58%),hsl(calc(var(--h) - 20) 55% 22%) 62%,hsl(calc(var(--h) - 30) 45% 8%))}
+.art.v2{background:linear-gradient(180deg,hsl(var(--h) 38% 46%) 0 33.3%,hsl(calc(var(--h) + 50) 32% 30%) 33.3% 66.6%,hsl(calc(var(--h) + 100) 36% 16%) 66.6%)}
+.art.v3{background:linear-gradient(116deg,#0000 0 36%,hsl(var(--h) 80% 80% / .25) 44%,#0000 56%),repeating-linear-gradient(90deg,#0000 0 46px,#0003 46px 48px),linear-gradient(180deg,hsl(var(--h) 22% 30%),hsl(var(--h) 20% 8%))}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:30px 22px}
+.card{padding:0;text-align:left;min-width:0;display:block;color:var(--text)}
+.cover{position:relative;display:block;aspect-ratio:2/3;border-radius:6px;overflow:hidden;box-shadow:0 14px 30px #0007,0 0 0 1px #ffffff0d;transition:transform .45s cubic-bezier(.2,.75,.15,1),box-shadow .45s}
+.card:hover .cover,.card:focus-visible .cover{transform:translateY(-6px) rotate(-1deg) scale(1.03);box-shadow:0 30px 50px #0009,0 0 0 1px #ece9e459}
+.cover:after{content:'';position:absolute;inset:0;background:linear-gradient(115deg,#ffffff1c,#0000 34%);pointer-events:none}
+.cover-title{position:absolute;left:12px;right:12px;bottom:16px;font-size:20px;line-height:1.08;font-weight:700;letter-spacing:-.04em;color:#fff;overflow-wrap:anywhere;text-shadow:0 2px 14px #0005}
+.v1 .cover-title,.v2 .cover-title{text-align:center;text-transform:uppercase;font-weight:500;letter-spacing:.26em;font-size:12px;line-height:1.5}.v2 .cover-title{bottom:auto;top:calc(50% - 10px)}
+.v3 .cover-title{text-transform:uppercase;letter-spacing:.02em;font-size:22px;font-weight:600}
+.format-badge{position:absolute;top:10px;left:10px;font-size:9px;font-weight:600;letter-spacing:.09em;padding:4px 7px;border-radius:5px;background:#0006;color:#fff;z-index:1}
+.status-badge{position:absolute;top:8px;right:8px;width:22px;height:22px;border-radius:50%;background:#0a0a0b99;display:flex;align-items:center;justify-content:center;z-index:1;color:var(--good)}.status-badge svg{width:12px;height:12px;stroke-width:2.6}
+.card .card-name{display:block;margin-top:12px;font-size:13.5px;color:var(--text)}
+.card>.card-meta{display:block;margin-top:3px;font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.empty-results{text-align:center;padding:60px 20px;color:var(--muted)}.empty-results p{margin-top:8px;font-size:13px}
+.pager{display:flex;gap:10px;margin-top:40px}
+
+/* settings panel (download-settings) */
+.settings-dialog{width:min(700px,calc(100vw - 32px));padding-bottom:0}
+.settings-dialog>form>.lede{line-height:1.6;margin:10px 0 22px;color:var(--muted);max-width:520px}
+.seg{position:relative;display:grid;grid-template-columns:repeat(var(--n),1fr);padding:4px;border-radius:999px;background:#1a1a1c8c;border:1px solid #ffffff14}
+.seg-thumb{position:absolute;top:4px;bottom:4px;left:4px;width:calc((100% - 8px)/var(--n));border-radius:999px;background:var(--primary);transform:translateX(calc(var(--i)*100%));transition:transform .45s cubic-bezier(.2,.75,.15,1)}
+.seg button{position:relative;z-index:1;height:36px;padding:0 10px;border-radius:999px;font-size:13px;font-weight:500;color:#b9b6b0;white-space:nowrap;transition:color .25s}
+.seg button:hover{color:var(--text)}.seg button[aria-selected=true]{color:var(--on-primary)}
+.st-panel{padding:26px 0 8px;animation:st-in .4s cubic-bezier(.2,.75,.15,1)}
+@keyframes st-in{from{opacity:0;transform:translateY(8px)}}
+.st-block+.st-block{margin-top:30px}
+.st-block>h3{margin-bottom:4px}.st-block>.hint{font-size:13px;color:var(--dim);line-height:1.55;margin-bottom:14px;max-width:520px}
+.dest-cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.dest-card{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:14px;border:1px solid #ece9e426;background:var(--surface);text-align:left;min-width:0;transition:background .25s,border-color .25s,transform .35s cubic-bezier(.2,.75,.15,1)}
+.dest-card:hover{background:#ece9e40f;transform:translateY(-2px)}
+.dest-card[aria-checked=true]{border-color:#ece9e480;background:#ece9e41a}
+.dest-ico{width:42px;height:42px;border-radius:50%;background:#ffffff0f;display:flex;align-items:center;justify-content:center;flex:none}
+.dest-card[aria-checked=true] .dest-ico{background:var(--primary);color:var(--on-primary)}
+.dest-card b{display:block;font-size:15px;font-weight:600;letter-spacing:-.02em}
+.dest-card small{display:flex;align-items:center;gap:6px;margin-top:3px;color:var(--dim)}
+.dest-card .url{display:block;margin-top:4px;font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dest-card>span:last-child{min-width:0}
+.status-dot{display:inline-block}
+.fields{display:grid;grid-template-columns:1fr 1fr;gap:16px}.fields .wide{grid-column:1/-1}
+.field{display:flex;flex-direction:column;gap:8px;font-size:13px;color:var(--muted);min-width:0}
+.field input{height:46px;background:var(--surface);color:var(--text);border:1px solid #ffffff30;border-radius:9px;padding:0 14px;min-width:0;width:100%;font-size:14px}
+.field input.mono{font-size:12.5px}.field input:focus{outline:0;border-color:#ffffff73}
+.field .with-ico{position:relative;display:block}.field .with-ico input{padding-left:42px}.field .with-ico>svg{position:absolute;left:14px;top:15px;width:16px;height:16px;color:var(--dim);pointer-events:none}
+.field .with-ico .eye{position:absolute;right:3px;top:3px;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--dim)}.field .with-ico .eye:hover{background:#ffffff12;color:var(--text)}.field .with-ico .eye svg{width:17px;height:17px}.field .with-ico.pw input{padding-left:14px;padding-right:48px}
+.test-row{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin-top:20px}
+.test-msg{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--dim);min-width:0}.test-msg.good{color:var(--good)}.test-msg.bad{color:var(--warn)}
+.spin{width:14px;height:14px;border-radius:50%;border:2px solid #ffffff30;border-top-color:var(--white);animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.radios{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.radio{position:relative;padding:14px 14px 12px;border-radius:12px;border:1px solid #ece9e426;background:var(--surface);text-align:left;min-width:0;transition:background .25s,border-color .25s,transform .35s cubic-bezier(.2,.75,.15,1)}
+.radio:hover{background:#ece9e40f;transform:translateY(-2px)}
+.radio[aria-checked=true]{border-color:#ece9e480;background:#ece9e41a}
+.radio b{display:block;font-size:13.5px;font-weight:500;margin-bottom:10px;padding-right:22px}
+.radio pre{margin:0;font:11px/1.6 'Geist Mono',ui-monospace,Consolas,monospace;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
+.radio .tick{position:absolute;top:12px;right:12px;width:18px;height:18px;border-radius:50%;background:var(--primary);color:var(--on-primary);display:flex;align-items:center;justify-content:center;opacity:0;transform:scale(.5);transition:opacity .25s,transform .35s cubic-bezier(.2,.75,.15,1)}
+.radio .tick svg{width:11px;height:11px;stroke-width:3}.radio[aria-checked=true] .tick{opacity:1;transform:none}
+.eg{margin-top:12px;font-size:12.5px;color:var(--dim);overflow-wrap:anywhere}.eg .mono{color:var(--muted);font-size:11.5px}
+.preview{margin-top:30px;padding:16px 18px;border-radius:14px;background:#0a0a0b;border:1px solid var(--line)}
+.preview h3{font-size:12px;font-weight:500;color:var(--dim);letter-spacing:0;margin-bottom:10px}
+.preview p{font-family:'Geist Mono',ui-monospace,Consolas,monospace;font-size:11.5px;line-height:1.7;color:var(--muted);overflow-wrap:anywhere;white-space:pre-wrap}.preview p+p{margin-top:6px}.preview em{font-style:normal;color:var(--text)}
+.switch-row{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 18px;border-radius:14px;border:1px solid #ece9e426;background:var(--surface);width:100%;text-align:left}
+.switch-row:hover{background:#ece9e40f}.switch-row b{display:block;font-size:14px;font-weight:500}.switch-row small{display:block;margin-top:3px;color:var(--dim);line-height:1.5;font-size:12.5px}
+.sw{position:relative;width:46px;height:28px;border-radius:999px;background:#ffffff1f;flex:none;transition:background .35s cubic-bezier(.2,.75,.15,1)}
+.sw:after{content:'';position:absolute;top:4px;left:4px;width:20px;height:20px;border-radius:50%;background:#ece9e4;transition:transform .35s cubic-bezier(.2,.75,.15,1),background .35s}
+.switch-row[aria-checked=true] .sw{background:var(--primary)}.switch-row[aria-checked=true] .sw:after{transform:translateX(18px);background:var(--on-primary)}
+.seed-note{margin-top:14px;min-height:42px;font-size:13px;line-height:1.6;color:var(--muted);max-width:520px}
+.st-foot{position:sticky;bottom:0;display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:26px -28px 0;padding:16px 28px 20px;background:#161618f2;backdrop-filter:blur(12px);border-top:1px solid var(--line);border-radius:0 0 20px 20px}
+@media(max-width:600px){.dest-cards,.radios,.fields{grid-template-columns:1fr}.page-title{font-size:36px}.settings-dialog{padding-left:20px;padding-right:20px}.st-foot{margin-inline:-20px;padding-inline:20px}.seg button{padding:0 6px;font-size:12.5px}}
+.show-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
+
+/* dialog + toast (shared with the app) */
+dialog{color:var(--text);background:#161618;border:1px solid #ffffff17;border-radius:20px;padding:28px;width:min(520px,calc(100vw - 32px));max-height:calc(100vh - 48px);overflow:auto;box-shadow:0 30px 100px #000a}
+dialog::backdrop{background:#0009;backdrop-filter:blur(4px)}dialog .section-heading{margin-bottom:6px}dialog p.muted{line-height:1.6;margin:12px 0}
+.dlg-meta{color:var(--dim);font-size:13px;margin-top:2px}
+.release{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:12px 0;border-bottom:1px solid var(--line)}
+.release:first-of-type{border-top:1px solid var(--line);margin-top:20px}
+.release strong{font-weight:500}.release small{display:block;margin-top:5px;color:var(--dim)}
+.remember{display:flex;align-items:center;gap:10px;margin:18px 0 6px;color:var(--muted)}.remember input{accent-color:#f3f1ec;width:16px;height:16px}
+#toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);max-width:min(600px,calc(100vw - 32px));background:var(--white);color:#161618;border-radius:14px;padding:13px 20px;font-size:13px;box-shadow:0 12px 40px #0009;z-index:300}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="dock-wrap"><nav class="dock" aria-label="Library">
+  <button class="dock-item"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M8 5v14M16 5v14"/></svg><span class="dock-label">Movies</span></button>
+  <button class="dock-item"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2.5"/><path d="M8 21h8"/></svg><span class="dock-label">Shows</span></button>
+  <button class="dock-item"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg><span class="dock-label">Search</span></button>
+  <button class="dock-item"><svg viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2H10l2 2.5h6.5a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg><span class="dock-label">Folders</span></button>
+  <button class="dock-item" aria-current="page" aria-label="Downloads"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg><span class="dock-label">Downloads</span></button>
+</nav></div>
+<div class="brand"><span>Matro</span><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M23 13L44 25.5L23 38Z' fill='%23F3F1EC' stroke='%23F3F1EC' stroke-width='5' stroke-linejoin='round'/%3E%3Crect x='12' y='46' width='40' height='6' rx='3' fill='%23F3F1EC' opacity='0.35'/%3E%3Crect x='12' y='46' width='22' height='6' rx='3' fill='%23F3F1EC'/%3E%3Ccircle cx='34' cy='49' r='5' fill='%23F3F1EC'/%3E%3C/svg%3E"></div>
+
+<main class="page">
+  <div class="page-head">
+    <div><h1 class="page-title">Downloads</h1><p class="page-sub">Find a movie. Choose where it goes.</p></div>
+    <button class="pill" id="settings-btn" aria-expanded="false">Download settings</button>
+  </div>
+
+  <dialog id="settings" class="settings-dialog" aria-labelledby="st">
+    <form id="config" novalidate>
+      <div class="section-heading"><h2 id="st">Download settings</h2><button type="button" class="icon-button" data-close-settings aria-label="Close download settings">×</button></div>
+      <p class="lede">Connect qBittorrent, choose how finished files are laid out, and decide what happens after. Each destination keeps its own folders.</p>
+
+      <div class="seg" data-seg="tab" role="tablist" aria-label="Settings sections" style="--n:3;--i:0"><i class="seg-thumb"></i>
+        <button type="button" role="tab" data-v="conn" aria-selected="true">Connection</button><button type="button" role="tab" data-v="files" aria-selected="false">Files</button><button type="button" role="tab" data-v="after" aria-selected="false">After download</button>
+      </div>
+
+      <div class="st-panel" id="p-conn">
+        <div class="st-block"><h3>Destination</h3><p class="hint">Pick which qBittorrent you are setting up.</p>
+          <div class="dest-cards" role="radiogroup" aria-label="Destination">
+            <button type="button" class="dest-card" role="radio" data-edit="local" aria-checked="true"><span class="dest-ico"><svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="12" rx="2.5"/><path d="M8 20h8M12 16.5V20"/></svg></span><span><b>This PC</b><small><span class="status-dot off"></span><span data-status>Not configured</span></small><span class="url mono" data-url></span></span></button>
+            <button type="button" class="dest-card" role="radio" data-edit="server" aria-checked="false"><span class="dest-ico"><svg viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="7" rx="2"/><rect x="3.5" y="13" width="17" height="7" rx="2"/><path d="M7.5 7.5h.01M7.5 16.5h.01"/></svg></span><span><b>Server</b><small><span class="status-dot off"></span><span data-status>Not configured</span></small><span class="url mono" data-url></span></span></button>
+          </div>
+        </div>
+        <div class="st-block"><h3>qBittorrent Web UI</h3><p class="hint">Turn on the Web UI in qBittorrent first. For a server outside your trusted network, use HTTPS or an SSH tunnel.</p>
+          <div class="fields">
+            <label class="field wide">Address<input id="f-url" class="mono" type="url" autocomplete="off" placeholder="http://192.168.1.10:8080"></label>
+            <label class="field">Username<input id="f-user" autocomplete="off"></label>
+            <label class="field">Password<span class="with-ico pw"><input id="f-pass" type="password" autocomplete="off" placeholder="Web UI password"><button type="button" class="eye" id="eye" aria-label="Show password"><svg viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span></label>
+          </div>
+          <div class="test-row"><button type="button" class="pill small" id="test-btn">Test connection</button><span class="test-msg" id="test-msg" role="status" aria-live="polite"></span></div>
+        </div>
+      </div>
+
+      <div class="st-panel" id="p-files" hidden>
+        <div class="st-block"><h3>Library folders</h3><p class="hint">Finished downloads go straight into these folders. Downloads in progress are kept there too.</p>
+          <div class="fields">
+            <label class="field wide">Movies<span class="with-ico"><svg viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2H10l2 2.5h6.5a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg><input id="f-movies" class="mono" autocomplete="off"></span></label>
+            <label class="field wide">Shows<span class="with-ico"><svg viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2H10l2 2.5h6.5a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg><input id="f-shows" class="mono" autocomplete="off"></span></label>
+          </div>
+        </div>
+        <div class="st-block"><h3>Movie layout</h3><p class="hint">How each movie is arranged inside the Movies folder.</p><div class="radios" role="radiogroup" aria-label="Movie layout" id="lay-m"></div></div>
+        <div class="st-block"><h3>Show layout</h3><p class="hint">How episodes are arranged inside the Shows folder.</p><div class="radios" role="radiogroup" aria-label="Show layout" id="lay-s"></div></div>
+        <div class="st-block"><h3>Filenames</h3>
+          <div class="seg" data-seg="naming" style="--n:2;--i:0"><i class="seg-thumb"></i><button type="button" data-v="clean" aria-selected="true">Clean names</button><button type="button" data-v="original" aria-selected="false">Keep original names</button></div>
+          <p class="eg" id="eg-naming"></p>
+        </div>
+        <div class="preview" aria-live="polite"><h3>Where a download lands</h3><p id="pv-m"></p><p id="pv-s"></p><p id="pv-sub"></p></div>
+      </div>
+
+      <div class="st-panel" id="p-after" hidden>
+        <div class="st-block"><h3>Seed after downloading?</h3><p class="hint">Seeding shares the finished movie with other people.</p>
+          <div class="seg" data-seg="seed" style="--n:3;--i:0"><i class="seg-thumb"></i><button type="button" data-v="ask" aria-selected="true">Ask each time</button><button type="button" data-v="yes" aria-selected="false">Keep seeding</button><button type="button" data-v="no" aria-selected="false">Stop when done</button></div>
+          <p class="seed-note" id="seed-note"></p>
+        </div>
+        <div class="st-block"><h3>Subtitles</h3>
+          <button type="button" class="switch-row" id="subs" role="switch" aria-checked="true"><span><b>Keep text subtitles</b><small>SRT, ASS, SSA and VTT files are kept beside the video. Samples, images and extras are always skipped.</small></span><span class="sw"></span></button>
+        </div>
+      </div>
+
+      <div class="st-foot"><button class="pill primary" type="submit" id="save">Test and save</button><button class="pill" type="button" data-close-settings>Cancel</button></div>
+    </form>
+  </dialog>
+
+  <div class="destination">
+    <div class="chip-row" role="group" aria-label="Download to">
+      <button class="chip" id="d-local" aria-pressed="true">This PC</button><button class="chip" id="d-server" aria-pressed="false">Server</button>
+    </div>
+    <span class="path"><span class="status-dot" id="dot"></span><span class="mono" id="path"></span></span>
+  </div>
+
+  <section class="section" id="active" hidden>
+    <div class="section-heading"><h2 id="active-title">On This PC</h2><span><button class="text-button" id="refresh">Refresh downloads</button></span></div>
+    <div class="cw-row" id="xfers"></div>
+  </section>
+
+  <form class="search-hero" id="search" role="search">
+    <label for="q" class="sr" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Search movie torrents</label>
+    <div class="search-field"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
+      <input id="q" type="search" maxlength="200" placeholder="Search a movie title" autocomplete="off">
+      <button class="kind-toggle" id="kind" type="button"></button></div>
+  </form>
+  <p class="note">Submitting a search sends the title to YTS. A download starts only when you choose a release and click Download.</p>
+
+  <section class="section">
+    <div class="section-heading"><h2 id="results-title">Results</h2><span id="count"></span></div>
+    <div id="results"></div>
+  </section>
+</main>
+
+<dialog id="detail" aria-labelledby="d-title"></dialog>
+<dialog id="seed" aria-labelledby="seed-t">
+  <div class="section-heading"><h2 id="seed-t">Seed after downloading?</h2></div>
+  <p class="muted">Seeding shares the downloaded movie with other people.</p>
+  <p class="muted">Choose No to stop when the download finishes. BitTorrent may still upload while downloading.</p>
+  <label class="remember"><input type="checkbox" id="remember" checked> Remember my choice</label>
+  <div class="show-actions"><button class="pill primary" data-seed="yes">Yes, keep seeding</button><button class="pill" data-seed="no">No, stop when complete</button><button class="text-button" data-seed="x">Cancel</button></div>
+</dialog>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+
+<script>
+// Example titles to show the layout; the real page renders YTS results.
+const CATALOG=[
+ {t:'Blade Runner',y:1982,l:'English',o:'A burned-out detective hunts four replicants who have escaped to Earth, and starts to question what separates them from the people he protects.',r:[['2160p','BluRay · x265','8.4 GiB',212,31],['1080p','BluRay · x264','2.1 GiB',486,60],['720p','WEB · x264','1.1 GiB',301,24]]},
+ {t:'Stalker',y:1979,l:'Russian',o:'A guide leads a writer and a professor through a forbidden Zone where, it is said, a room grants the deepest wish of anyone who enters.',r:[['1080p','BluRay · x264','2.3 GiB',97,12],['720p','BluRay · x264','1.0 GiB',64,9]]},
+ {t:'Paris, Texas',y:1984,l:'English',o:'A man walks out of the desert after four years of silence and tries to find his way back to his young son and the wife he lost.',r:[['2160p','WEB · x265','6.9 GiB',140,18],['1080p','BluRay · x264','1.9 GiB',233,27],['720p','BluRay · x264','0.9 GiB',118,11]]},
+ {t:'Perfect Days',y:2023,l:'Japanese',o:'A Tokyo toilet cleaner keeps a quiet, ordered routine of music, trees and film photographs, until the past starts to intrude.',r:[['1080p','WEB · x264','2.0 GiB',350,41],['720p','WEB · x264','1.0 GiB',188,20]]},
+ {k:'show',t:'Twin Peaks',y:1990,l:'English',o:'An FBI agent arrives in a small Washington town to investigate the murder of a homecoming queen, and finds the town stranger than the case.',r:[['S01','1080p · WEB · x264','9.8 GiB',88,14],['S02','1080p · WEB · x264','21.4 GiB',61,9]]},
+ {k:'show',t:'Chernobyl',y:2019,l:'English',o:'The 1986 nuclear disaster and the people who contained it, told over five episodes from the first explosion to the trial.',r:[['S01','2160p · WEB · x265','24.0 GiB',190,33],['S01','1080p · WEB · x264','9.1 GiB',402,57]]},
+ {k:'show',t:'Severance',y:2022,l:'English',o:'Employees at a corporation have their memories surgically divided between work and home, until one of them starts to ask why.',r:[['S01','1080p · WEB · x264','11.2 GiB',310,44],['S02','1080p · WEB · x264','10.6 GiB',275,39]]},
+ {t:'Solaris',y:1972,l:'Russian',o:'A psychologist is sent to a station orbiting a living ocean planet, where the crew is visited by people from their pasts.',r:[['1080p','BluRay · x264','2.4 GiB',76,8]]},
+ {t:'Alphaville',y:1965,l:'French',o:'A secret agent enters a city ruled by a computer that has outlawed emotion, and sets out to find a missing scientist.',r:[['1080p','BluRay · x264','1.6 GiB',51,6],['720p','BluRay · x264','0.8 GiB',40,5]]}
+];
+const $=s=>document.querySelector(s),esc=v=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const dests={local:{label:'This PC',path:'C:\\Users\\you\\Videos\\Movies',ok:true},server:{label:'Server',path:'',ok:false}};
+const ICON={movie:'<svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M8 5v14M16 5v14"/></svg>',show:'<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2.5"/><path d="M8 21h8"/></svg>'};
+let kind='movie',target='local',query='',sent=new Set(),seeding=null,xfers={local:[],server:[]},open=null,tt;
+const hue=t=>{let h=0;for(const c of t)h=(h*31+c.charCodeAt(0))%360;return h};
+const check='<svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>';
+function toast(m){const n=$('#toast');n.textContent=m;n.hidden=false;clearTimeout(tt);tt=setTimeout(()=>n.hidden=true,3600)}
+
+function drawDest(){
+  for(const k of ['local','server'])$('#d-'+k).setAttribute('aria-pressed',String(k===target));
+  const d=dests[target];$('#path').textContent=d.ok?d.path:'Open Download settings to connect this destination';
+  $('#dot').className='status-dot'+(d.ok?'':' off');$('#active-title').textContent='On '+d.label;
+}
+function drawResults(){
+  const q=query.trim().toLowerCase(),list=CATALOG.filter(m=>(m.k||'movie')===kind&&m.t.toLowerCase().includes(q)),w=kind==='show'?'show':'movie';
+  $('#count').textContent=`${list.length} ${list.length===1?w:w+'s'} · catalog: YTS`;
+  $('#results').innerHTML=list.length?`<div class="grid">${list.map((m,i)=>{
+    const added=m.r.some((_,j)=>sent.has(target+':'+m.t+':'+j));
+    return `<button class="card" data-open="${esc(m.t)}"><span class="cover art ${i%4?'v'+i%4:''}" style="--h:${hue(m.t)}"><span class="format-badge">${m.r[0][0].toUpperCase()}</span>${added?`<span class="status-badge" title="Added">${check}</span>`:''}<span class="cover-title">${esc(m.t)}</span></span><span class="card-name">${esc(m.t)}</span><span class="card-meta">${m.y} · ${m.r.length} ${m.r.length===1?'release':'releases'}</span></button>`}).join('')}</div>
+    <div class="pager"><button class="pill" disabled>Previous page</button><button class="pill" disabled>Next page</button></div>`
+   :`<div class="empty-results"><h2>No ${w}s found.</h2><p>Try another title or spelling.</p></div>`;
+}
+function drawX(){
+  const l=xfers[target];$('#active').hidden=!l.length;
+  $('#xfers').innerHTML=l.map(x=>`<div class="xfer art ${x.p>=1?'done':''}" style="--h:${hue(x.m)}"><div class="xfer-state"><b>${x.p>=1?'Complete':x.p===0?'Preparing':'Downloading'}</b><span class="mono">${x.p>0&&x.p<1?x.s.toFixed(1)+' MiB/s':''}</span></div>
+   <div class="xfer-text"><div class="xfer-line"><span class="card-name">${esc(x.n)}</span><span class="card-meta mono">${Math.round(x.p*100)}%</span></div><span class="progress-track"><span class="progress-fill" style="width:${x.p*100}%"></span></span><span class="xfer-path mono">${x.seed?'Seed after completion':'Stop after completion'} · ${esc(x.f)}</span></div></div>`).join('');
+}
+setInterval(()=>{let ch=false;for(const k in xfers)for(const x of xfers[k])if(x.p<1&&Date.now()>x.t0){x.p=Math.min(1,x.p+.012+Math.random()*.02);x.s=2+Math.random()*9;ch=true}if(ch)drawX()},1000);
+
+function openDetail(title){
+  const m=CATALOG.find(x=>x.t===title);open=m;const d=dests[target];
+  $('#detail').innerHTML=`<div class="section-heading"><h2 id="d-title">${esc(m.t)} <span class="dim" style="font-weight:400;font-size:16px">${m.y}</span></h2><button class="icon-button" data-close aria-label="Close">×</button></div>
+   <p class="dlg-meta">${esc(m.l)}</p><p class="muted">${esc(m.o)}</p>
+   ${m.r.map((r,j)=>{const k=target+':'+m.t+':'+j,done=sent.has(k);return `<div class="release"><span><strong>${esc(r[0]+' · '+r[1])}</strong><small>${r[2]} · ${r[3]} seeds · ${r[4]} peers</small></span><button class="pill small" data-dl="${j}" ${!d.ok||done?'disabled':''}>${done?'Added':'Download to '+d.label}</button></div>`}).join('')}
+   ${d.ok?'':'<p class="dim" style="margin-top:14px;font-size:13px">Configure this destination in Download settings first.</p>'}`;
+  $('#detail').showModal();
+}
+function askSeed(){
+  if(seeding!==null)return Promise.resolve(seeding);
+  return new Promise(res=>{const d=$('#seed');let out=null;
+    d.onclick=e=>{const v=e.target.closest('[data-seed]')?.dataset.seed;if(!v)return;out=v==='x'?null:v==='yes';if(out!==null&&$('#remember').checked)seeding=out;d.close()};
+    d.onclose=()=>res(out);d.showModal()});
+}
+document.addEventListener('click',async e=>{
+  const o=e.target.closest('[data-open]');if(o){openDetail(o.dataset.open);return}
+  if(e.target.closest('[data-close]')||e.target===$('#detail')){$('#detail').close();return}
+  const dl=e.target.closest('[data-dl]');if(dl){
+    const m=open,j=+dl.dataset.dl,seed=await askSeed();if(seed===null)return;
+    sent.add(target+':'+m.t+':'+j);
+    xfers[target].unshift({m:m.t,n:`${m.t} (${m.y}) [${m.r[j][0]}]`,p:0,s:0,seed,t0:Date.now()+2500,f:dests[target].path+'\\'+m.t});
+    toast(`Sent to qBittorrent on ${dests[target].label}. Preparing media files before starting.`);
+    $('#detail').close();drawResults();drawX();return}
+  if(e.target.closest('#settings-btn')){openSettings();return}
+  if(e.target.closest('#refresh'))drawX();
+});
+for(const k of ['local','server'])$('#d-'+k).onclick=()=>{target=k;drawDest();drawResults();drawX()};
+function drawKind(){
+  const b=$('#kind'),next=kind==='movie'?'shows':'movies';
+  b.innerHTML=ICON[kind];b.setAttribute('aria-label',`Searching ${kind}s. Switch to ${next}`);b.title=`Searching ${kind}s. Press to search ${next}`;
+  $('#q').placeholder=`Search a ${kind} title`;$('#results-title').textContent='Results';
+}
+$('#kind').onclick=()=>{kind=kind==='movie'?'show':'movie';drawKind();drawResults()};
+$('#search').onsubmit=e=>{e.preventDefault();query=$('#q').value;drawResults()};
+$('#q').oninput=e=>{query=e.target.value;drawResults()};
+const OPT={
+  mlayout:[['title','Title','Perfect Days'],['title-year','Title (Year)','Perfect Days (2023)'],['flat','All in one folder',''],['original','Keep torrent folders','Perfect.Days.2023.1080p.WEB.x264-GRP']],
+  slayout:[['season','Title / Season','Severance/S01'],['title','Title only','Severance'],['flat','All in one folder',''],['original','Keep torrent folders','Severance.S01.1080p.WEB.x264-GRP']]
+};
+const NAMES={clean:{m:'Perfect Days (2023) [1080p]',s:'S01E01 Severance (2022) [1080p]'},original:{m:'Perfect.Days.2023.1080p.WEB.x264-GRP',s:'Severance.S01E01.1080p.WEB.x264-GRP'}};
+const baseCfg=(url,movies,shows)=>({url,user:'',movies,shows,mlayout:'title',slayout:'season',naming:'clean',subs:true});
+let cfg={local:baseCfg('http://127.0.0.1:8080','C:\\Users\\you\\Videos\\Movies','C:\\Users\\you\\Videos\\Shows'),server:baseCfg('http://192.168.1.10:8080','/mnt/media/Movies','/mnt/media/Shows')};
+let editing='local',seedPref='ask',tab='conn',snap=null,testing=false;
+const sepOf=k=>k==='server'?'/':'\\',cur=()=>cfg[editing];
+const rootName=p=>p.split(/[\\/]/).filter(Boolean).pop()||'Library';
+function tree(root,folders,file){const lines=[rootName(root),...folders.split('/').filter(Boolean),file];return lines.map((l,i)=>i?' '.repeat((i-1)*3)+'└─ '+l:l).join('\n')}
+const folderFor=(kind,id)=>OPT[kind].find(x=>x[0]===id)[2];
+function drawLayouts(){
+  const c=cur();
+  for(const [kind,node,rootKey,sample] of [['mlayout','#lay-m','movies','m'],['slayout','#lay-s','shows','s']]){
+    $(node).innerHTML=OPT[kind].map(([id,label])=>`<button type="button" class="radio" role="radio" data-radio="${kind}" data-v="${id}" aria-checked="${c[kind]===id}"><b>${label}</b><pre>${esc(tree(c[rootKey],folderFor(kind,id),NAMES[c.naming][sample]+'.mkv'))}</pre><span class="tick">${check}</span></button>`).join('');
+  }
+}
+function drawPreview(){
+  const c=cur(),s=sepOf(editing),j=(r,f,file)=>[r.replace(/[\\/]+$/,''),...f.split('/').filter(Boolean),file].join(s);
+  const m=j(c.movies,folderFor('mlayout',c.mlayout),NAMES[c.naming].m+'.mkv'),sh=j(c.shows,folderFor('slayout',c.slayout),NAMES[c.naming].s+'.mkv');
+  $('#pv-m').innerHTML='Movie  <em>'+esc(m)+'</em>';$('#pv-s').innerHTML='Show   <em>'+esc(sh)+'</em>';
+  $('#pv-sub').innerHTML=c.subs?'Subs   <em>'+esc(m.replace(/\.mkv$/,'.en.srt'))+'</em>':'Subs   skipped (video only)';
+  $('#eg-naming').innerHTML='Example: <span class="mono">'+esc(NAMES[c.naming].m+'.mkv')+'</span>';
+}
+const SEED_TEXT={ask:'You will be asked before the first download, and can remember your answer.',yes:'Finished downloads keep seeding with no limit. qBittorrent enforces this even when Matro is closed.',no:'Downloads stop when they finish and the files stay where they are. BitTorrent may still upload while downloading.'};
+function syncSegs(){
+  const vals={tab,naming:cur().naming,seed:seedPref};
+  document.querySelectorAll('#settings [data-seg]').forEach(g=>{const bs=[...g.querySelectorAll('button')],i=Math.max(0,bs.findIndex(b=>b.dataset.v===vals[g.dataset.seg]));g.style.setProperty('--i',i);bs.forEach((b,k)=>b.setAttribute('aria-selected',String(k===i)))});
+  for(const p of ['conn','files','after'])$('#p-'+p).hidden=p!==tab;
+  $('#seed-note').textContent=SEED_TEXT[seedPref];
+}
+function drawDests(){
+  document.querySelectorAll('#settings [data-edit]').forEach(b=>{const k=b.dataset.edit;b.setAttribute('aria-checked',String(k===editing));b.querySelector('.status-dot').className='status-dot'+(dests[k].ok?'':' off');b.querySelector('[data-status]').textContent=dests[k].ok?'Connected':'Not configured';b.querySelector('[data-url]').textContent=cfg[k].url});
+}
+function fillFields(){const c=cur();$('#f-url').value=c.url;$('#f-user').value=c.user;$('#f-pass').value='';$('#f-pass').placeholder=dests[editing].ok?'Saved. Leave blank to keep':'Web UI password';$('#f-movies').value=c.movies;$('#f-shows').value=c.shows;$('#subs').setAttribute('aria-checked',String(c.subs));setMsg('')}
+function redraw(){drawDests();drawLayouts();drawPreview();syncSegs()}
+function setMsg(t,cls='',spin=false){const n=$('#test-msg');n.className='test-msg '+cls;n.innerHTML=(spin?'<span class="spin"></span>':'')+esc(t)}
+function runTest(){
+  const c=cur();testing=true;$('#test-btn').disabled=$('#save').disabled=true;setMsg('Testing the qBittorrent connection…','',true);
+  return new Promise(res=>setTimeout(()=>{
+    testing=false;$('#test-btn').disabled=$('#save').disabled=false;
+    const ok=/^https?:\/\/[^\s/]+/.test(c.url);
+    if(ok)setMsg('Connected to qBittorrent 5.1.4','good');
+    else{setMsg('Can’t reach that address. Check the Web UI address and that the Web UI is on.','bad');if(tab!=='conn'){tab='conn';syncSegs()}}
+    res(ok)},900));
+}
+function openSettings(){snap=JSON.stringify({cfg,seedPref});editing=target;tab='conn';fillFields();redraw();$('#settings').showModal()}
+function closeSettings(revert){if(revert&&snap){const s=JSON.parse(snap);cfg=s.cfg;seedPref=s.seedPref}$('#settings').close()}
+const dlg=$('#settings');
+dlg.addEventListener('click',e=>{
+  if(e.target===dlg||e.target.closest('[data-close-settings]')){closeSettings(true);return}
+  const sg=e.target.closest('[data-seg] button');if(sg){const g=sg.closest('[data-seg]').dataset.seg,v=sg.dataset.v;if(g==='tab')tab=v;if(g==='seed')seedPref=v;if(g==='naming')cur().naming=v;syncSegs();if(g==='naming'){drawLayouts();drawPreview()}return}
+  const ed=e.target.closest('[data-edit]');if(ed){editing=ed.dataset.edit;fillFields();redraw();return}
+  const rd=e.target.closest('[data-radio]');if(rd){cur()[rd.dataset.radio]=rd.dataset.v;drawLayouts();drawPreview();return}
+  if(e.target.closest('#subs')){const c=cur();c.subs=!c.subs;$('#subs').setAttribute('aria-checked',String(c.subs));drawPreview();return}
+  if(e.target.closest('#eye')){const p=$('#f-pass'),show=p.type==='password';p.type=show?'text':'password';$('#eye').setAttribute('aria-label',show?'Hide password':'Show password');return}
+  if(e.target.closest('#test-btn'))runTest();
+});
+dlg.addEventListener('input',e=>{const c=cur(),m={'f-url':'url','f-user':'user','f-movies':'movies','f-shows':'shows'}[e.target.id];if(!m)return;c[m]=e.target.value;if(m==='url')drawDests();else if(m!=='user'){drawLayouts();drawPreview()}});
+dlg.addEventListener('cancel',e=>{e.preventDefault();closeSettings(true)});
+$('#config').onsubmit=async e=>{e.preventDefault();if(testing)return;const ok=await runTest();if(!ok)return;const k=editing;
+  dests[k]={label:k==='local'?'This PC':'Server',ok:true,path:cfg[k].movies};seeding=seedPref==='ask'?null:seedPref==='yes';target=k;$('#f-pass').value='';
+  closeSettings(false);toast(`Connected to ${dests[k].label}. Settings saved.`);drawDest();drawResults();drawX()};
+drawDest();drawKind();drawResults();drawX();
+</script>

@@ -1,12 +1,12 @@
 {
   "name": "matro",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "A local-first, open-source desktop media player.",
   "main": "electron/main.cjs",
   "scripts": {
     "postinstall": "install-electron --no",
     "start": "electron .",
-    "test": "node --test --test-concurrency=1 tests/media.test.cjs tests/segments.test.cjs tests/segment-scheduler.test.cjs tests/metadata.test.cjs tests/ssh-media.test.cjs",
+    "test": "node --test --test-concurrency=1 tests/media.test.cjs tests/segments.test.cjs tests/segment-scheduler.test.cjs tests/metadata.test.cjs tests/ssh-media.test.cjs tests/torrents.test.cjs tests/download-layout.test.cjs tests/movie-upgrades.test.cjs tests/subtitles.test.cjs tests/series.test.cjs",
     "test:e2e": "playwright test",
     "icons": "node scripts/build-icons.cjs",
     "pack": "electron-builder --dir",
@@ -30,12 +30,12 @@
     "files": [
       "electron/**/*",
       "src/**/*",
-      ".env",
       "assets/icon.png",
       "assets/icon.ico",
       "package.json",
       "LICENSE",
-      "THIRD_PARTY_NOTICES.md"
+      "THIRD_PARTY_NOTICES.md",
+      "licenses/**/*"
     ],
     "asarUnpack": [
       "node_modules/ffmpeg-static/**",

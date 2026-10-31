@@ -12,7 +12,7 @@ npx install-electron --no
 npm start
 ```
 
-Electron, FFmpeg, and FFprobe are downloaded during installation; no separate codec installation is required. No server or account is needed. Add a folder, open files, or drop media files into the window. Mounted NAS/network folders work as ordinary folders.
+Electron, FFmpeg, and FFprobe are downloaded during installation; no separate codec installation is required. No server or account is needed for playback. Add a folder, open files, or drop media files into the window. Mounted NAS/network folders work as ordinary folders.
 
 ```sh
 npm test          # Scanner, metadata, and real FFmpeg stream checks
@@ -21,7 +21,7 @@ npm run pack     # Unpacked desktop application in dist/
 npm run dist     # Windows NSIS installer
 ```
 
-The UI tests generate their own small MKV/audio/subtitle fixtures and an isolated profile under `.test-media/`; they do not modify your library. `test-results/` contains screenshots after UI tests. No separate Playwright browser download is needed: tests launch Electron. UI tests set `MATRO_METADATA=off`, so they never contact TMDB.
+The UI tests generate their own small MKV/audio/subtitle fixtures and an isolated profile under `.test-media/`; they do not modify your library. `test-results/` contains screenshots after UI tests. No separate Playwright browser download is needed: tests launch Electron. Download-browser tests use mock HTTP services and never download real torrents. UI tests set `MATRO_METADATA=off`, so they never contact TMDB.
 
 ### Posters and metadata (TMDB, optional)
 
@@ -31,7 +31,7 @@ Matro can fill in posters, backdrops, director/creator, year, genres, overview, 
 TMDB_ACCESS_TOKEN=your-read-access-token   # or TMDB_API_KEY=...; VITE_-prefixed names also work
 ```
 
-`.env` is git-ignored, so it is never committed, but `npm run dist` packs the one in the project folder into the installer so a packaged app works without setup. Anyone with that installer can read the token, so only use a free, low-privilege key, and build releases for others without a `.env` present. Only the main process reads it; the renderer never sees the token. When enabled, Matro sends cleaned title names (and a release year when the file name has one) to TMDB, downloads artwork once into `artwork/` in the user-data folder, and caches results in `metadata.json`. Titles with no match keep generated covers and are checked again after a week. On a title page, **Fix match** (or **Find on TMDB** for unmatched titles) searches TMDB so you can pick the right entry, or drop the match and keep the file name; manual choices are never overwritten by automatic matching. The TMDB credit, local-library status and background scan progress live in the panel behind the **?** button in the bottom-right corner. Set `MATRO_METADATA=off` to disable lookups even when a key is present. IMDb and community ratings are not shown: there is no source for them yet.
+`.env` is git-ignored and excluded from packaged installers. For a packaged app, keep your own credentials in `.env` inside the user-data folder; development can use the project-local file. Only the main process reads it; the renderer never sees the token. When enabled, Matro sends cleaned title names (and a release year when the file name has one) to TMDB, downloads artwork once into `artwork/` in the user-data folder, and caches results in `metadata.json`. Titles with no match keep generated covers and are checked again after a week. On a title page, **Fix match** (or **Find on TMDB** for unmatched titles) searches TMDB so you can pick the right entry, or drop the match and keep the file name; manual choices are never overwritten by automatic matching. The TMDB credit, local-library status and background scan progress live in the panel behind the **?** button in the bottom-right corner. Set `MATRO_METADATA=off` to disable lookups even when a key is present. IMDb and community ratings are not shown: there is no source for them yet.
 
 ## What works
 
@@ -61,6 +61,20 @@ Starting a series replaces an old mixed queue with that show's episodes in seaso
 
 On Windows, a native Electron `0x80000003` startup crash can come from runtime folder ACLs. If stderr explicitly reports `install_dir_access.cc` and missing `ALL APPLICATION PACKAGES` access, grant read/execute to the reported runtime folder with `icacls "node_modules\electron\dist" /grant "*S-1-15-2-1:(OI)(CI)(RX)"`. Codex's restricted process sandbox may still prevent desktop launches; run desktop tests in an ordinary terminal or with approved execution outside that sandbox. Keep Electron's renderer sandbox enabled.
 
+### Movie browser and downloads
+
+Open **Downloads** in the dock to choose **Movies** or **Series**, search releases, inspect quality/size/seeds,
+and send a selected release to qBittorrent on **This PC** or a **Server**. Configure
+each destination under **Download settings** with its Web UI address, credentials,
+and separate movie/show roots and layouts; then choose **Download to**. qBittorrent 5.1+ with Web UI
+enabled must already run on the destination. Passwords use OS encryption. Searches
+contact YTS only when submitted; Series uses explicit TVmaze show search and EZTV release lookup with separate season/episode/resolution filters. Downloads require an explicit click.
+New downloads select video/subtitle files, skip extras, use title/year/resolution filenames, and remember the seeding choice. Movie details offer higher-resolution upgrades, edition comparison and saved favorites; originals are kept. The page shows transfer progress; completed shows can be added through Folders
+and Rescan. CineCLI is a reference, not a required dependency.
+
+See [download setup and troubleshooting](docs/downloads.md) for configuration,
+storage, limitations, and tests.
+
 ### SSH media folders
 
 Choose **Connect SSH** on the welcome page or under **Folders**. Enter the server,
@@ -74,7 +88,7 @@ ssh michu@192.168.100.6
 
 Accept the host key in that terminal after checking it. Matro requires a known host
 and noninteractive key authentication; it does not store or prompt for passwords.
-Windows OpenSSH must be installed on the PC and Python 3 on the Linux server.
+Windows OpenSSH must be installed on the PC and Python 3 on the Linux server. Embedded text subtitles also require FFmpeg on the server.
 Encrypted keys work when loaded into the SSH agent.
 
 Matro scans and reads the configured directory over SSH. Videos stream in chunks
@@ -96,6 +110,8 @@ restart. If the server goes offline, cached entries stay in the library; use
 **Folders** to close its connection without deleting server files. Importing an old
 local library under the new SSH source creates new path-based item IDs; previous
 local watch progress is not automatically migrated.
+
+Embedded text subtitles are extracted on the server and cached on this PC, avoiding a full movie transfer for caption extraction. See [subtitle setup and troubleshooting](docs/subtitles.md).
 
 Remote catalog browsing outside the configured folder, web/mobile clients, and sync remain planned.
 

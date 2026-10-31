@@ -111,3 +111,37 @@ test('SSH subtitles upload beside the video, avoid collisions and persist with c
     await execute('ssh', ['-o', 'BatchMode=yes', 'michu@192.168.100.6', `python3 -c 'import shutil,sys; p=sys.argv[1]; assert p.startswith("/mnt/media/.matro-subtitle-test."); shutil.rmtree(p)' '${directory}'`]);
   }
 });
+
+
+test('embedded SSH subtitles load from a real movie, survive seeks and reuse the cache after restart', async () => {
+  test.skip(process.env.MATRO_TEST_SSH !== '1', 'Set MATRO_TEST_SSH=1 for the read-only embedded subtitle server check.');
+  const { rootFor } = require('../electron/ssh-media.cjs');
+  const { describe } = require('../electron/media.cjs');
+  const profile = path.resolve(__dirname, '../.test-media', 'embedded-ssh-' + Date.now());
+  const config = { host: '192.168.100.6', user: 'michu', port: 22, directory: '/mnt/media/Movies/Ghost in the Shell', identity: '' };
+  const root = rootFor(config), movie = path.join(root, 'Ghost.in.the.Shell.1995.mkv'), item = describe(movie, root);
+  await fs.mkdir(profile, { recursive: true });
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, folders: [root], items: [item], progress: {}, queue: [], preferences: { volume: .5, autoplay: false }, sshConnections: [{ ...config, root }] }));
+  let app;
+  try {
+    app = await electron.launch(options(profile)); let page = await app.firstWindow();
+    await page.locator('[data-detail="' + item.id + '"]').first().click();
+    await page.getByRole('button', { name: 'Play now', exact: true }).click();
+    await expect.poll(() => page.locator('video').evaluate(video => video.currentTime), { timeout: 30000 }).toBeGreaterThan(.1);
+    await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
+    await page.locator('[data-subtitle="2"]').click();
+    await expect.poll(() => page.locator('video').evaluate(video => video.textTracks[0]?.cues?.length || 0), { timeout: 30000 }).toBeGreaterThan(800);
+    const future = await page.locator('video').evaluate(video => Array.from(video.textTracks[0].cues).find(cue => cue.startTime > 130)?.endTime);
+    expect(future).toBeGreaterThan(130);
+    await page.locator('#seek').evaluate(input => { input.value = '120'; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); });
+    await expect.poll(() => page.locator('video').evaluate((video, end) => Array.from(video.textTracks[0]?.cues || []).some(cue => Math.abs(cue.endTime - (end - 120)) < .05), future), { timeout: 30000 }).toBe(true);
+    const cacheDir = path.join(profile, 'subtitles'), cacheFiles = await fs.readdir(cacheDir);
+    expect(cacheFiles.filter(name => name.endsWith('.vtt'))).toHaveLength(1);
+    const cachePath = path.join(cacheDir, cacheFiles.find(name => name.endsWith('.vtt'))), before = await fs.stat(cachePath);
+    await app.close(); app = await electron.launch(options(profile)); page = await app.firstWindow();
+    const loaded = await page.evaluate(async id => { const value = await window.matro.subtitles({ id, index: 2 }); return { valid: value.startsWith('WEBVTT'), cues: (value.match(/ --> /g) || []).length }; }, item.id);
+    expect(loaded.valid).toBe(true); expect(loaded.cues).toBeGreaterThan(800);
+    expect((await fs.stat(cachePath)).mtimeMs).toBe(before.mtimeMs);
+    await page.screenshot({ path: 'test-results/embedded-ssh-subtitles.png' });
+  } finally { await app?.close(); }
+});
