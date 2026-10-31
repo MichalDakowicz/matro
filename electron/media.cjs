@@ -26,6 +26,7 @@ async function scan(root) {
   async function walk(dir) {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
+      if (entry.isDirectory() && entry.name.startsWith('.')) continue;
       const file = path.join(dir, entry.name);
       if (entry.isDirectory()) { try { await walk(file); } catch { /* A missing or unreadable nested folder should not stop the scan. */ } }
       else if (entry.isFile() && extensions.has(path.extname(file).slice(1).toLowerCase())) items.push(describe(file, root));

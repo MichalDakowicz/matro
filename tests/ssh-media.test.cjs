@@ -25,6 +25,7 @@ function fakeSSH({ fail = false } = {}) {
       if (q.path.includes('missing')) { answer({ error: 'No such file' }); return; }
       if (q.op === 'stat') answer({ result: { size: bytes.length, mtimeMs: 123, file: !!q.path, directory: !q.path } });
       if (q.op === 'list') answer({ result: [{ name: 'Movie space.mkv', file: true, directory: false }, { name: 'Movie space.en.srt', file: true, directory: false }, { name: 'Shows', file: false, directory: true }] });
+      if (q.op === 'subtitles') answer({ result: Buffer.from('WEBVTT\n\n00:00.100 --> 00:02.000\nEmbedded SSH — zażółć\n').toString('base64') });
       if (q.op === 'read') answer({ result: bytes.subarray(q.offset, q.offset + q.length).toString('base64') });
       if (q.op === 'subtitle') {
         if (uploads.has(q.path)) answer({ error: 'File exists', code: 'EEXIST' });
@@ -104,4 +105,15 @@ test('subtitle uploads preserve bytes, never overwrite and reject unsupported or
     const file = await fs.open(large, 'w'); await file.truncate(16 * 1024 * 1024 + 1); await file.close();
     await assert.rejects(media.copySubtitle(large, target, fs.constants.COPYFILE_EXCL), /16 MiB/);
   } finally { media.close(); await fs.rm(temp, { recursive: true, force: true }); }
+});
+
+
+test('embedded subtitle extraction validates stream indexes and returns server WebVTT', async () => {
+  const media = new SSHMedia(fakeSSH()), root = media.register(config), movie = path.join(root, 'Movie space.mkv');
+  try {
+    assert.match(await media.extractSubtitles(movie, 2), /Embedded SSH — zażółć/);
+    await assert.rejects(media.extractSubtitles(movie, -1), /Invalid subtitle track/);
+    await assert.rejects(media.extractSubtitles(movie, 1.5), /Invalid subtitle track/);
+    await assert.rejects(media.extractSubtitles(movie, 10001), /Invalid subtitle track/);
+  } finally { media.close(); }
 });

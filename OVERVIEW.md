@@ -22,6 +22,17 @@ Users can add local or mounted network folders, open multiple files, or drop fil
 
 Folder scans preserve title directories: one video in a title folder becomes a movie; multiple videos become a show. Collection roots such as Media, Shows, and Movies are traversed into individual title directories. Nested S01/S02 or Season 1 folders remain seasons of the parent title. Folder identity keeps equally named shows in different directories separate. Season and episode numbers come from S01E02/1x02 filenames, season directories, or chapter/episode numbers; natural filename order provides fallback numbering. Any file, whatever its name or folder, can be picked as a show's prelude from the Episodes panel (Add prelude…): it plays first as episode 0 of the first season, is labelled Prelude, survives rescans, and can be changed or removed. Audio files remain under Music and do not affect video counts. Individually opened files retain filename-based classification. Search matches show and file titles. The drawer exposes file location, playback, and queue actions. Existing folder libraries are rescanned automatically once when upgrading to this grouping version; file IDs, watch progress, and queues remain stable.
 
+### Movie browser and downloads
+
+The Downloads dock adds an optional, explicit YTS movie search and release picker.
+Users configure independent qBittorrent Web UI destinations for This PC and Server,
+each with its own credentials and save folder, then select where a release goes.
+The main process performs requests, encrypts saved passwords using OS storage,
+and polls client progress while the page is visible. CineCLI supplied the reference
+flow; no CineCLI or Python runtime is needed. Playback does not depend on a torrent
+client. Completed downloads enter the library through folder import and rescan.
+See [docs/downloads.md](docs/downloads.md) for setup and boundaries.
+
 ### Playback
 
 FFprobe reads real streams, duration, and chapters. FFmpeg decodes the selected input and serves H.264 video/AAC stereo audio as fragmented MP4 over an ephemeral loopback HTTP port. Electron's video element displays that stream within the player UI. Seeking inside buffered media uses the video element; seeking elsewhere starts FFmpeg at the requested position. Audio selection also restarts at the current position.
@@ -70,9 +81,9 @@ tests/                     Real media and Electron integration tests
 design/                    Original design references
 ```
 
-The renderer has no Node.js integration and runs sandboxed with context isolation. Only packaged UI files are served through `matro://app`. New windows, navigation, and permission requests are denied. Main-process IPC checks its sender and frame. Playback and embedded subtitle requests reference catalog IDs instead of arbitrary renderer-provided input paths. The stream service binds only to `127.0.0.1` and uses random session tokens. FFmpeg subprocesses use argument arrays, not shell command interpolation. Media decoding is limited to local-file protocols; server URLs are not accepted in this milestone.
+The renderer has no Node.js integration and runs sandboxed with context isolation. Only packaged UI files are served through `matro://app`. New windows, navigation, and permission requests are denied. Main-process IPC checks its sender and frame. Playback and embedded subtitle requests reference catalog IDs instead of arbitrary renderer-provided input paths. The stream service binds only to `127.0.0.1` and uses random session tokens. FFmpeg subprocesses use argument arrays, not shell command interpolation. Media decoding is limited to local-file protocols; arbitrary renderer-provided server URLs are not accepted as playback inputs; configured SSH sources use the authenticated media gateway.
 
-Library state lives in `library.json` in Electron's user-data directory and is written through a temporary file and rename. Media files are left in place. No telemetry, accounts, external font requests, or server calls are included. The one optional network service is TMDB metadata (`electron/metadata.cjs`): it runs only when TMDB credentials are configured in a local `.env` or the environment, lives entirely in the main process, sends cleaned title names, and serves downloaded artwork to the renderer through `matro://app/artwork/` so the renderer's content security policy stays `'self'`-only.
+Library state lives in `library.json` in Electron's user-data directory and is written through a temporary file and rename. Media files are left in place. No telemetry, accounts, or external font requests are included. Network features are optional: configured SSH media access, TMDB metadata, and explicit movie browsing with qBittorrent download management. Optional movie browsing and qBittorrent download management use `electron/torrents.cjs`, with separate OS-encrypted settings in `downloads.json`; see [download documentation](docs/downloads.md). Another optional network service is TMDB metadata (`electron/metadata.cjs`): it runs only when TMDB credentials are configured in a local `.env` or the environment, lives entirely in the main process, sends cleaned title names, and serves downloaded artwork to the renderer through `matro://app/artwork/` so the renderer's content security policy stays `'self'`-only.
 
 ## Tradeoffs and known gaps
 

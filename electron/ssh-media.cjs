@@ -9,7 +9,7 @@ const { createHash, randomBytes } = require('node:crypto');
 // confines reads and non-overwriting subtitle uploads to the configured directory.
 const MAX_SUBTITLE_BYTES = 16 * 1024 * 1024;
 const subtitleExtension = file => /\.(srt|vtt|ass|ssa)$/i.test(file);
-const helper = `import sys,json,os,stat,base64,concurrent.futures,threading,tempfile,errno
+const helper = `import sys,json,os,stat,base64,concurrent.futures,threading,tempfile,errno,subprocess,shutil
 root=os.path.realpath(sys.argv[1])
 lock=threading.Lock()
 def info(st):
@@ -29,6 +29,21 @@ def request(q):
    if not stat.S_ISREG(os.stat(name).st_mode): raise ValueError('Not a regular file')
    with open(name,'rb') as f:
     f.seek(offset); result=base64.b64encode(f.read(count)).decode('ascii')
+  elif op=='subtitles':
+   index=q.get('index')
+   if type(index)!=int or not 0<=index<=10000: raise ValueError('Invalid subtitle track')
+   binary=shutil.which('ffmpeg')
+   if binary is None: raise ValueError('Embedded SSH subtitles need FFmpeg on the server; install the ffmpeg package or load an external subtitle file')
+   if not stat.S_ISREG(os.stat(name).st_mode): raise ValueError('Not a regular media file')
+   with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+    try:
+     extraction=subprocess.run([binary,'-v','error','-nostdin','-protocol_whitelist','file,pipe,crypto','-i',name,'-map','0:'+str(index),'-c:s','webvtt','-fs','16777217','-f','webvtt','pipe:1'],stdin=subprocess.DEVNULL,stdout=output,stderr=errors,timeout=180)
+    except subprocess.TimeoutExpired: raise ValueError('Embedded subtitle extraction exceeded 180 seconds on the server; try another track or an external subtitle file')
+    if extraction.returncode!=0:
+     errors.seek(0,2); errors.seek(max(0,errors.tell()-2000)); detail=errors.read().decode('utf-8',errors='replace').strip()
+     raise ValueError('Embedded subtitle extraction failed: '+(detail or 'FFmpeg could not read this track'))
+    if output.tell()>16777216: raise ValueError('Embedded subtitles exceeded 16 MiB')
+    output.seek(0); result=base64.b64encode(output.read()).decode('ascii')
   elif op=='subtitle':
    if os.path.splitext(name)[1].lower() not in ('.srt','.vtt','.ass','.ssa'): raise ValueError('Only subtitle files can be uploaded')
    encoded=q['data']
@@ -121,14 +136,22 @@ class SSHMedia {
     });
     return session;
   }
-  async request(file, op, values = {}) {
+  async request(file, op, values = {}, timeout = 30000) {
     const match = this.resolve(file); if (!match) throw new Error('Unknown SSH media folder.');
     const session = this.session(match.root, match.config), id = ++session.sequence;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { session.pending.delete(id); reject(new Error('SSH timed out. Check authentication and that Python 3 is installed on the server.')); session.child.kill(); }, 30000);
+      const timer = setTimeout(() => { session.pending.delete(id); reject(new Error('SSH timed out. Check authentication and that Python 3 is installed on the server.')); session.child.kill(); }, timeout);
       session.pending.set(id, { resolve, reject, timer });
       session.child.stdin.write(JSON.stringify({ id, op, path: match.relative, ...values }) + '\n');
     });
+  }
+  async extractSubtitles(file, index) {
+    if (!Number.isInteger(index) || index < 0 || index > 10000) throw new Error('Invalid subtitle track.');
+    const encoded = await this.request(file, 'subtitles', { index }, 195000);
+    if (typeof encoded !== 'string' || encoded.length > 22369624) throw new Error('Embedded subtitle response exceeded 16 MiB.');
+    const value = Buffer.from(encoded, 'base64').toString('utf8');
+    if (!value.startsWith('WEBVTT')) throw new Error('The server did not return valid embedded subtitles.');
+    return value;
   }
   async stat(file) {
     const value = await this.request(file, 'stat');
