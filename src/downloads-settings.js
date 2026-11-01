@@ -13,12 +13,13 @@ const rootName = path => path.split(/[\\/]/).filter(Boolean).pop() || 'Library';
 const tree = (root, folders, file) => [rootName(root), ...folders.split('/').filter(Boolean), file].map((line, index) => index ? ' '.repeat((index - 1) * 3) + '└─ ' + line : line).join('\n');
 const seedValue = value => value === true ? 'yes' : value === false ? 'no' : 'ask';
 
-export function createSettingsDialog({ labels, defaults, getConfig, configure, announce, saved }) {
+export function createSettingsDialog({ hostOnly = false, labels, defaults, getConfig, configure, announce, saved }) {
+  if (hostOnly) return createHostSettingsDialog({ getConfig, configure, announce, saved });
   let drafts = {}, editing = 'local', seed = 'ask', tab = 'conn', saving = false;
   const dialog = document.createElement('dialog');
   dialog.id = 'download-settings'; dialog.className = 'settings-dialog'; dialog.setAttribute('aria-labelledby', 'download-settings-title');
   const $ = selector => dialog.querySelector(selector);
-  const cardMarkup = (id, icon) => `<button type="button" class="dest-card" role="radio" data-edit="${id}"><span class="dest-ico">${icon}</span><span><b>${labels[id]}</b><small><span class="status-dot"></span><span data-status></span></small><span class="url mono" data-url></span></span></button>`;
+  const cardMarkup = (id, icon) => !labels[id] ? '' : `<button type="button" class="dest-card" role="radio" data-edit="${id}"><span class="dest-ico">${icon}</span><span><b>${labels[id]}</b><small><span class="status-dot"></span><span data-status></span></small><span class="url mono" data-url></span></span></button>`;
   dialog.innerHTML = `<form id="download-config" novalidate>
     <div class="section-heading"><h2 id="download-settings-title">Download settings</h2><button type="button" class="icon-button" data-close aria-label="Close download settings">×</button></div>
     <p class="lede">Connect qBittorrent, choose how finished files are laid out, and decide what happens after. Each destination keeps its own folders.</p>
@@ -28,7 +29,7 @@ export function createSettingsDialog({ labels, defaults, getConfig, configure, a
         ${cardMarkup('local', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12" rx="2.5"/><path d="M8 20h8M12 16.5V20"/></svg>')}
         ${cardMarkup('server', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4" width="17" height="7" rx="2"/><rect x="3.5" y="13" width="17" height="7" rx="2"/><path d="M7.5 7.5h.01M7.5 16.5h.01"/></svg>')}
       </div></div>
-      <div class="st-block"><h3>qBittorrent Web UI</h3><p class="hint">Turn on the Web UI in qBittorrent first. For a server outside your trusted network, use HTTPS or an SSH tunnel. Server destinations also need a matching SSH media folder under Folders so existing files can be protected.</p>
+      <div class="st-block"><h3>qBittorrent Web UI</h3><p class="hint">Turn on the Web UI in qBittorrent first. For a server outside your trusted network, use HTTPS or an SSH tunnel. ${hostOnly ? 'The client must share the Matro host’s filesystem paths. Add destination folders under Folders first.' : 'Server destinations also need a matching SSH media folder under Folders so existing files can be protected.'}</p>
         <div class="fields">
           <label class="field wide" data-ssh-host>SSH server address (if different)<input name="sshHost" class="mono" autocomplete="off" placeholder="For example, 192.168.100.6"><small>Use the address saved under Folders → Connect SSH. Leave blank when it matches the Web UI hostname.</small></label>
           <label class="field wide">Web UI address<input name="url" class="mono" type="url" required autocomplete="off"></label>
@@ -90,7 +91,7 @@ export function createSettingsDialog({ labels, defaults, getConfig, configure, a
   function fill() {
     const d = draft(editing), password = $('[name="password"]');
     $('[name="url"]').value = d.url; $('[name="username"]').value = d.username; $('[name="movieRoot"]').value = d.movieRoot; $('[name="showRoot"]').value = d.showRoot;
-    $('[name="sshHost"]').value = d.sshHost; $('[data-ssh-host]').hidden = editing !== 'server';
+    $('[name="sshHost"]').value = d.sshHost; $('[data-ssh-host]').hidden = hostOnly || editing !== 'server';
     $('[name="url"]').placeholder = editing === 'local' ? 'http://127.0.0.1:8080' : 'http://192.168.1.10:8080';
     password.value = ''; password.type = 'password'; password.placeholder = getConfig()[editing]?.passwordSaved ? 'Saved. Leave blank to keep' : 'Web UI password';
     drawChoices(); drawChrome();
@@ -132,6 +133,46 @@ export function createSettingsDialog({ labels, defaults, getConfig, configure, a
   document.body.append(dialog);
   return {
     open(target) { drafts = {}; editing = target; tab = 'conn'; seed = seedValue(getConfig().seeding); status(''); fill(); if (!dialog.open) dialog.showModal(); },
+    close() { if (dialog.open) dialog.close(); },
+    destroy() { dialog.remove(); }
+  };
+}
+
+// The web server owns its connection address and destinations; browsers only supply credentials.
+function createHostSettingsDialog({ getConfig, configure, announce, saved }) {
+  const dialog = document.createElement('dialog');
+  dialog.id = 'download-settings'; dialog.className = 'settings-dialog';
+  dialog.setAttribute('aria-labelledby', 'download-settings-title');
+  dialog.innerHTML = `<form><div class="section-heading"><h2 id="download-settings-title">Download settings</h2><button type="button" class="icon-button" data-close aria-label="Close download settings">×</button></div>
+    <p class="lede">Downloads go straight to this server’s movie and series library. Sign in to qBittorrent to connect.</p>
+    <div class="fields"><label class="field">Username<input name="username" autocomplete="username" required></label>
+    <label class="field">Password<input name="password" type="password" autocomplete="current-password"></label></div>
+    <p class="settings-status" role="status" aria-live="polite"></p>
+    <div class="st-foot"><button class="pill primary" type="submit">Connect</button><button class="pill" type="button" data-close>Close settings</button></div></form>`;
+  const form = dialog.querySelector('form'), status = dialog.querySelector('[role="status"]');
+  let saving = false;
+  dialog.addEventListener('click', event => { if (!saving && (event.target === dialog || event.target.closest('[data-close]'))) dialog.close(); });
+  dialog.addEventListener('close', () => { form.elements.password.value = ''; });
+  form.addEventListener('submit', async event => {
+    event.preventDefault(); if (saving) return;
+    const values = { username: form.elements.username.value, password: form.elements.password.value };
+    form.elements.password.value = ''; saving = true;
+    form.querySelectorAll('input,button').forEach(node => { node.disabled = true; });
+    status.classList.remove('bad'); status.textContent = 'Connecting to qBittorrent…';
+    try {
+      const next = await configure(values);
+      saved(next, 'server'); announce('Connected to qBittorrent. Downloads use this server.'); dialog.close();
+    } catch (error) { status.textContent = error.message; status.classList.add('bad'); }
+    finally { values.password = ''; saving = false; form.querySelectorAll('input,button').forEach(node => { node.disabled = false; }); }
+  });
+  document.body.append(dialog);
+  return {
+    open() {
+      form.elements.username.value = getConfig().server?.username || '';
+      form.elements.password.value = ''; form.elements.password.placeholder = getConfig().server?.passwordSaved ? 'Saved. Leave blank to keep' : 'qBittorrent password';
+      status.textContent = ''; status.classList.remove('bad');
+      if (!dialog.open) dialog.showModal();
+    },
     close() { if (dialog.open) dialog.close(); },
     destroy() { dialog.remove(); }
   };

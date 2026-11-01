@@ -51,6 +51,10 @@ Audio tracks are read from the media file. Track rows place the full language na
 
 Embedded bitmap tracks (PGS, DVD/VobSub, DVB, XSUB) use FFmpeg's bitmap-to-video overlay path, composited into the selected playback stream. Selecting a bitmap, turning it off, switching back to text, or changing bitmap delay reloads playback at the current position while preserving play/pause intent. Bitmap size/styling is preserved and its text-size controls are disabled. External bitmap sidecar files are not supported yet. PGS and DVD rendering, clearing, seeking into active captions, and positive/negative delay are covered by generated media tests; a DVD bitmap clip from the local Akira file was also decoded during development. ASS text survives conversion, but advanced styling and animation do not. Audio output currently downmixes to stereo. Track language choices are not yet retained across different files; the next file selects its default audio track and disables subtitles.
 
+### Theme and zoom
+
+The footer (the ? button) has a Theme row: System follows the OS, or pick Light or Dark; the choice is kept per device. The light theme is warm paper with the same single motion curve, and the player stays dark over the picture. Ctrl + / Ctrl = zoom in, Ctrl - zoom out, Ctrl 0 reset.
+
 ### Keyboard
 
 | Shortcut | Action |
@@ -101,7 +105,9 @@ Other gaps: file watching, background scan progress/cancel, real artwork/metadat
 4. **Desktop server linking:** URL plus credentials/token, connection test, useful connection errors, server discovery if justified, local/server source switching, and resilient reconnects. Mounted folders already work without this API.
 5. **Web and mobile:** reuse product language and interaction models; implement platform playback adapters and sync against the server contract. Electron-specific APIs stay out of shared catalog models.
 
-No hosting provider, server authentication scheme, sync protocol, or mobile framework is committed yet. Do not add a fake server connection screen before there is a real, testable server contract.
+A first self-hosted server and web app now live in [`server/`](server/README.md): Node with built-in SQLite, one head account that manages the library, viewer accounts with their own progress and sub/dub choices, and shared labelled subtitles. The desktop app does not talk to it yet (step 4), so there is still no connection screen.
+
+No hosting provider beyond that, sync protocol for the desktop app, or mobile framework is committed yet. Do not add a fake server connection screen before there is a real, testable server contract.
 
 ## Running, testing, and releases
 

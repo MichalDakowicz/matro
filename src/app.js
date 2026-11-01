@@ -245,11 +245,11 @@ async function loadFrames() {
 }
 function dock() {
   const items = [['movie', 'Movies', 'movies'], ['show', 'Shows', 'shows'], ...(library.items.some(i => i.kind === 'audio') ? [['audio', 'Music', 'music']] : []), ['search', 'Search', 'search'], ['folders', 'Folders', 'folder'], ['downloads', 'Downloads', 'download']];
-  return `<div class="dock-wrap"><button class="dock-back" data-action="close-detail" aria-label="Close details" title="Back (Esc)">${icon('back')}</button><nav class="dock" aria-label="Library">${items.map(([id, label, glyph]) => `<button class="dock-item" data-tab="${id}" ${id === 'downloads' ? 'aria-label="Downloads"' : ''} ${tab === id && !folderFilter ? `aria-current="page" title="Back to the landing page"` : ''}>${icon(glyph)}<span class="dock-label">${label}</span>${['movie', 'show', 'audio'].includes(id) ? `<span class="sr-only"> ${groups(id).length}</span>` : ''}</button>`).join('')}</nav></div>`;
+  return `<div class="dock-wrap"><button class="dock-back" data-action="close-detail" aria-label="Close details" title="Back (Esc)">${icon('back')}</button><nav class="dock" aria-label="Library">${items.filter(([id]) => !api.hiddenTabs?.includes(id)).map(([id, label, glyph]) => `<button class="dock-item" data-tab="${id}" ${id === 'downloads' ? 'aria-label="Downloads"' : ''} ${tab === id && !folderFilter ? `aria-current="page" title="Back to the landing page"` : ''}>${icon(glyph)}<span class="dock-label">${label}</span>${['movie', 'show', 'audio'].includes(id) ? `<span class="sr-only"> ${groups(id).length}</span>` : ''}</button>`).join('')}</nav></div>`;
 }
 let footerOpen = false;
 function footer() {
-  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
+  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
 }
 const sectionGrid = (title, items, count, more) => items.length ? `<section class="section"><div class="section-heading"><h2>${title}</h2><span>${count}${more ? ` · <button class="text-button" data-tab="${more}">See all</button>` : ''}</span></div><div class="grid">${items.map(poster).join('')}</div></section>` : '';
 const kinds = [['show', 'Shows', 'shows'], ['movie', 'Movies', 'titles'], ['audio', 'Music & audio', 'files']];
@@ -312,6 +312,11 @@ const LINES = [
 // Motion follows Windows' animation setting unless the user overrides it (preferences.motion: 'system' | 'on' | 'off').
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const motionReduced = () => library.preferences.motion === 'off' || (library.preferences.motion !== 'on' && reduceMotion.matches);
+// Theme changes (footer chips, OS setting) keep the chips and the poster reel in step.
+window.addEventListener('matro-theme', event => {
+  document.querySelectorAll('[data-theme-mode]').forEach(chip => chip.setAttribute('aria-pressed', String(chip.dataset.themeMode === window.matroTheme.get())));
+  if (document.querySelector('.reel')) updateReel();
+});
 function applyMotion() { document.body.classList.toggle('reduce-motion', motionReduced()); }
 reduceMotion.addEventListener('change', () => { applyMotion(); if (view === 'library') renderLibrary(); });
 // The reel is driven frame by frame: mode is 'idle', 'drag' (follows the pointer), 'wheel' (follows trackpad deltas),
@@ -370,7 +375,10 @@ function updateReel() {
     poster.style.transform = `translate(-50%, -50%) translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px) perspective(900px) rotateX(${tilt ? tilt.rx.toFixed(2) : 0}deg) rotateY(${tilt ? tilt.ry.toFixed(2) : 0}deg) rotate(${p.r.toFixed(2)}deg) scale(${(p.s * (tilt ? 1.05 : 1) * f.k).toFixed(3)})`;
     // Nearer posters stack above farther ones; the whole reel stays below the rest of the page.
     poster.style.zIndex = String(100 - Math.round(Math.abs(off) * 10));
-    poster.style.filter = `brightness(${p.b.toFixed(3)}) saturate(${Math.min(1, .55 + .45 * p.b).toFixed(3)})`;
+    // Distant posters sink into the page: toward black on dark, washed toward paper on light (a page-coloured veil, so dark artwork fades too).
+    const light = document.documentElement.dataset.theme === 'light';
+    poster.style.filter = `brightness(${(light ? 1 : p.b).toFixed(3)}) saturate(${Math.min(1, .55 + .45 * p.b).toFixed(3)})`;
+    poster.style.setProperty('--wash', light ? Math.min(.8, (1 - p.b) * 1.15).toFixed(3) : '0');
     poster.style.opacity = p.o.toFixed(3); poster.style.visibility = p.o < .01 ? 'hidden' : 'visible'; poster.style.pointerEvents = p.o < .5 ? 'none' : 'auto';
     if (tilt) { poster.style.setProperty('--gx', `${tilt.gx}%`); poster.style.setProperty('--gy', `${tilt.gy}%`); }
   });
@@ -566,7 +574,7 @@ function detail(id, focus = true) {
       ${m?.people?.length ? `<p class="detail-sub">${esc(m.peopleLabel)} <strong>${esc(m.people.slice(0, 3).join(', '))}</strong></p>` : ''}
       <p class="detail-sub">${[...facts, selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie', selected.format].map(esc).join(' <span aria-hidden="true">·</span> ')}</p>
       ${m?.overview ? `<p class="detail-overview">${esc(m.overview)}</p>` : ''}
-      <div class="detail-actions">${selected.kind === 'movie' ? `<button class="pill" data-upgrade="${selected.id}">Find better quality / compare editions</button>` : ''}<button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
+      <div class="detail-actions">${selected.kind === 'movie' && api.canCompareEditions !== false ? `<button class="pill" data-upgrade="${selected.id}">Find better quality / compare editions</button>` : ''}<button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
       ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
       ${m?.rating ? `<div class="ratings"><div><p class="rating-label">TMDB</p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}</div>
     <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
@@ -1038,6 +1046,7 @@ function openDetail(id, source) {
 }
 const TAB_ORDER = ['home', 'movie', 'show', 'audio', 'search', 'folders', 'downloads'];
 function goTab(next) {
+  if (api.hiddenTabs?.includes(next)) return;
   // Clicking the selected dock item again deselects it, which is the landing page.
   if (next === tab && next !== 'home' && !folderFilter && !selected) next = 'home';
   // Back to the landing page slides vertically; moving between tabs slides in the dock's direction.
@@ -1048,6 +1057,7 @@ function goTab(next) {
   pageTransition(x, y, () => goTabNow(next));
 }
 function goTabNow(next) {
+  if (api.hiddenTabs?.includes(next)) return;
   if (selected) { $('#detail-overlay')?.remove(); selected = null; } if (next !== tab) statusFilter = 'all'; tab = next; folderFilter = null; renderLibrary(); $('.shell')?.scrollTo(0, 0); }
 const actions = {
   ssh: openSSH,
@@ -1103,12 +1113,13 @@ document.addEventListener('click', event => {
     if (btn.dataset.matchPick) return assignMatch(Number(btn.dataset.matchPick));
     if (btn.dataset.matchNone !== undefined) return assignMatch(null);
     if (btn.dataset.restart) { const old = library.progress[btn.dataset.restart]; if (old) library.progress[btn.dataset.restart] = { ...old, position: 0, updated: Date.now() }; return play(btn.dataset.restart); }
-    if (btn.dataset.upgrade) { await downloads.openUpgrade(btn.dataset.upgrade); goTab('downloads'); return; }
+    if (btn.dataset.upgrade && api.canCompareEditions !== false) { await downloads.openUpgrade(btn.dataset.upgrade); goTab('downloads'); return; }
     if (btn.dataset.play) return play(btn.dataset.play, !!btn.closest('.queue-panel'));
     if (btn.dataset.detail) return openDetail(btn.dataset.detail, btn);
     if (btn.dataset.enqueue) return enqueue(btn.dataset.enqueue);
     if (btn.dataset.enqueueShow) return enqueue(btn.dataset.enqueueShow, true);
     if (btn.dataset.tab) return goTab(btn.dataset.tab);
+    if (btn.dataset.themeMode) { window.matroTheme.set(btn.dataset.themeMode); return; }
     if (btn.dataset.motion) {
       library.preferences.motion = btn.dataset.motion; applyMotion(); await save();
       document.querySelectorAll('[data-motion]').forEach(chip => chip.setAttribute('aria-pressed', String(chip.dataset.motion === btn.dataset.motion)));

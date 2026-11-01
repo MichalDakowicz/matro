@@ -1,0 +1,16 @@
+services:
+  matro:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8484:8484"
+    environment:
+      # Set when the server sits behind an HTTPS reverse proxy.
+      MATRO_TRUST_PROXY: "1"
+    volumes:
+      - matro-data:/data
+      # Your library. Uploads from the head account are written here too, so keep it writable to use them
+      # (append :ro to make it read-only and rely on folders you add under Manage instead).
+      - ./media:/media
+volumes:
+  matro-data:

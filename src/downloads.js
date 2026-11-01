@@ -1,7 +1,5 @@
 import { createSettingsDialog } from './downloads-settings.js';
 import { esc, icons, paint, movieCard, showCard, transferCard, jobCard, movieDetail, seriesDetail, upgradePanel } from './downloads-view.js';
-const labels = { local: 'This PC', server: 'Server' };
-const defaults = { local: 'http://127.0.0.1:8080', server: '' };
 const rate = value => value >= 1048576 ? `${(value / 1048576).toFixed(1)} MiB/s` : `${Math.round(value / 1024)} KiB/s`;
 const qualityHeight = value => /4k/i.test(value) ? 2160 : +(String(value).match(/(\d{3,4})p/i)?.[1] || 0);
 const seedLabel = job => job.seed ? 'Seed after completion' : 'Stop after completion';
@@ -35,7 +33,11 @@ function seedChoice(saved) {
 }
 
 export function createDownloadBrowser(api, { play = () => {} } = {}) {
+  const hostOnly = api.downloadHostOnly === true;
+  const labels = hostOnly ? { server: 'Matro host' } : { local: 'This PC', server: 'Server' };
+  const defaults = hostOnly ? { server: 'http://127.0.0.1:8080' } : { local: 'http://127.0.0.1:8080', server: '' };
   let config = { local: null, server: null }, target = localStorage.getItem('download-destination') === 'server' ? 'server' : 'local';
+  if (hostOnly) target = 'server';
   let results = null, query = '', searchText = '', message = '', searching = false;
   let container, detail, settings, timer, mountId = 0, searchId = 0, listId = 0, open = null;
   let list = [], jobs = [], listError = '', loaded = false, refreshing = false, upgrade = null, searchOnMount = false;
@@ -244,7 +246,7 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
       detail.addEventListener('close', () => { if (open === 'show') { searchId++; searching = false; seriesSelected = null; } open = null; });
       detail.addEventListener('click', event => { if (event.target === detail) closeDetail(); else void click(event); });
       detail.addEventListener('submit', submit);
-      settings = createSettingsDialog({ labels, defaults, getConfig: () => config, configure: values => api.downloadConfigure(values), announce, saved: (next, destination) => { config = next; target = destination; localStorage.setItem('download-destination', target); list = []; jobs = []; listError = ''; listRetryable = false; nextRefreshAt = 0; connectionFailures = 0; if (current()) draw(); void refresh(); } });
+      settings = createSettingsDialog({ hostOnly, labels, defaults, getConfig: () => config, configure: values => api.downloadConfigure(values), announce, saved: (next, destination) => { config = next; target = destination; localStorage.setItem('download-destination', target); list = []; jobs = []; listError = ''; listRetryable = false; nextRefreshAt = 0; connectionFailures = 0; if (current()) draw(); void refresh(); } });
       draw(); container.addEventListener('click', click); container.addEventListener('submit', submit); container.addEventListener('input', remember);
       try {
         config = await api.downloadConfig();

@@ -1,0 +1,14 @@
+node_modules/
+data/
+.test-data/
+.dev-data/
+# Copied from ../src by scripts/sync-ui.js
+/public/app.js
+/public/styles.css
+/public/theme.js
+/public/downloads*.js
+/public/downloads.css
+/public/assets/
+/src/vendor/
+.deploy-stamp
+.deploy-target

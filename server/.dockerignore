@@ -1,0 +1,12 @@
+node_modules
+data
+.dev-data
+.test-data
+test
+scripts
+tunnel
+README.md
+*.env
+compose*.yml
+docker-compose.yml
+.deploy-stamp

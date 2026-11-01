@@ -73,7 +73,7 @@ app.whenReady().then(async () => {
   streams = await createStreamServer();
   protocol.handle('matro', request => {
     const url = new URL(request.url);
-    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg','/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
+    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg','/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
     const artwork = url.hostname === 'app' && url.pathname.startsWith('/artwork/') && metadata.artworkFile(url.pathname.slice('/artwork/'.length));
     if (artwork) return net.fetch(pathToFileURL(artwork).href);
     const file = url.hostname === 'app' && files[url.pathname];
@@ -84,6 +84,12 @@ app.whenReady().then(async () => {
   win.once('ready-to-show', () => { win.maximize(); win.show(); });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
+  // Page zoom: Ctrl + / Ctrl = zoom in (the default menu only binds Ctrl+Shift+=), Ctrl - out, Ctrl 0 reset.
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
+    const wc = win.webContents, step = delta => { event.preventDefault(); wc.setZoomLevel(Math.max(-3, Math.min(5, wc.getZoomLevel() + delta))); };
+    if (['=', '+'].includes(input.key)) step(.5); else if (['-', '_'].includes(input.key)) step(-.5); else if (input.key === '0') { event.preventDefault(); wc.setZoomLevel(0); }
+  });
   // Let the renderer save playback progress before the window goes away; a stuck renderer still closes after a moment.
   let closing = false;
   win.on('close', event => {
