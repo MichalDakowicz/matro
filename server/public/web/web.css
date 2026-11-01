@@ -1,0 +1,41 @@
+/* Only what the web adds to the desktop's own stylesheet: sign-in, profile, and hiding desktop-only controls. */
+.window-zone{gap:14px}
+.window-zone .brand{padding-left:10px}
+/* Downloads and Folders belong to the head account. SSH remains desktop-only. */
+body.role-viewer .dock-item[data-tab="downloads"],[data-action="ssh"],[data-action="pick-prelude"]{display:none!important}
+body.role-viewer .dock-item[data-tab="folders"],body.role-viewer [data-action="fix-match"]{display:none!important}
+body.role-viewer [data-action="folder"],body.role-viewer [data-action="files"]{display:none!important}
+
+.web-avatar{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;flex:none;font-weight:600;font-size:15px;color:#fff;border:1px solid rgb(var(--ink) / 0.18);background:linear-gradient(160deg,hsl(var(--h) 45% 40%),hsl(calc(var(--h) + 30) 40% 16%))}
+.web-avatar.big{width:84px;height:84px;font-size:34px}
+.web-profile{display:block;padding:0;border-radius:50%;transition:transform .35s cubic-bezier(.2,.75,.15,1)}
+.web-profile:hover,.web-profile:focus-visible{transform:scale(1.08)}
+.web-layer{position:fixed;inset:0;z-index:120;background:var(--bg);overflow-y:auto}
+.web-back{position:fixed;top:18px;left:28px;z-index:121;width:50px;height:50px;border-radius:50%;background:rgb(var(--glass) / .55);border:1px solid rgb(var(--ink) / 0.08);backdrop-filter:blur(18px);box-shadow:0 10px 30px #0006;color:var(--soft);font-size:20px;display:flex;align-items:center;justify-content:center}
+.web-back:hover{color:var(--text);background:rgb(var(--glass-hi) / .8)}
+.web-page{max-width:1000px}
+.web-who{display:flex;align-items:center;gap:24px}
+.web-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:22px 24px}.web-stats div{display:flex;flex-direction:column;gap:4px}.web-stats strong{font-size:32px;font-weight:500;letter-spacing:-.03em}.web-stats span{font-size:12px;color:var(--dim)}
+.web-row{grid-template-columns:44px minmax(0,1fr) auto auto}
+.web-row .source-icon{font-size:11px}
+.web-fields{margin:18px 0 8px;grid-template-columns:1fr 1fr}
+.web-fields select,.ssh-fields.web-fields input{width:100%;box-sizing:border-box;padding:12px;border:1px solid rgb(var(--ink) / 0.19);border-radius:8px;background:rgb(var(--ink) / 0.03);color:var(--text);font:inherit}
+.web-fields select option{background:var(--panel)}
+.web-fields input[type=file]{padding:9px 12px}
+.web-form,.web-inline{display:flex;flex-direction:column;gap:6px}
+.web-inline{flex-direction:row;flex-wrap:wrap;gap:10px;margin-top:16px}.web-inline input{flex:1;min-width:160px;height:44px;padding:0 14px;border:1px solid rgb(var(--ink) / 0.19);border-radius:8px;background:rgb(var(--ink) / 0.03);color:var(--text);font:inherit}
+.web-error,.web-status{min-height:1.4em;margin:0;font-size:13px;color:var(--warn)}.web-status{color:var(--muted)}
+.web-command{margin:22px 0 0;padding:14px 18px;border-radius:12px;background:rgb(var(--ink) / 0.05);border:1px solid var(--line);font-size:13px;user-select:all;overflow-x:auto;max-width:520px}
+.web-login{display:flex;flex-direction:column;gap:12px;margin-top:26px;max-width:420px}
+.web-login .search-field{height:56px}.web-login .search-field input{font-size:17px}.web-login .pill{height:52px;font-size:15px}
+.web-login .show-hint{margin-top:6px}
+.web-picker{display:flex;flex-direction:column;gap:12px}.web-picker .picker{display:flex;flex-direction:column;max-height:46vh;overflow:auto}
+dialog.web-dialog{width:min(520px,calc(100vw - 32px));max-height:calc(100vh - 48px);overflow:auto}
+dialog.web-dialog .muted{margin:10px 0}
+@media(max-width:720px){.web-back{left:12px}.web-fields{grid-template-columns:1fr}.web-who{gap:16px}}
+/* The player owns the whole window; segment (intro/outro) detection is desktop-only for now. */
+body.in-player .web-profile,body.fullscreen .web-profile{display:none}
+#segments-button,#segment-tools,.marker-controls,.marker-scan,.scan-note{display:none!important}
+.web-code{margin:18px 0 8px;padding:18px;border-radius:12px;background:rgb(var(--ink) / 0.05);border:1px solid var(--line);font-size:28px;letter-spacing:.12em;text-align:center;user-select:all}
+.web-sub{margin:26px 0 12px;font-size:12px;color:var(--dim);font-weight:600}
+.web-link{user-select:all;cursor:text}.web-code{cursor:text}

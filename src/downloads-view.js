@@ -24,7 +24,7 @@ export function showCard(show, index) {
   return `<button class="card download-series" data-open-show="${esc(show.id)}"><span class="cover art${variant(index)}" data-hue="${hueOf(show.title)}">${show.indexed ? '' : '<span class="format-badge">NO INDEX</span>'}<span class="cover-title">${esc(show.title)}</span></span><span class="card-name">${esc(show.title)}</span><span class="card-meta">${esc([show.year, show.status].filter(Boolean).join(' · '))}</span></button>`;
 }
 const stateText = item => item.progress >= 1 ? 'Complete' : String(item.state || 'queued');
-const banner = item => /^artwork\/(?:movie|tv)-\d+-(?:backdrop|poster)\.jpg$/.test(item?.banner || '') ? `<img class="xfer-banner" src="${esc(item.banner)}" alt="" draggable="false">` : '';
+const banner = item => /^(?:\/api\/)?artwork\/(?:movie|tv)-\d+-(?:backdrop|poster)\.jpg$/.test(item?.banner || '') ? `<img class="xfer-banner" src="${esc(item.banner)}" alt="" draggable="false">` : '';
 const removeButton = (hash, title) => `<button type="button" class="xfer-remove" data-remove-download="${esc(hash)}" aria-label="Remove ${esc(title)} from downloads" title="Remove download (keep files)">×</button>`;
 export function transferCard(item, job, rate, seedLabel) {
   const percent = Math.round(item.progress * 100), done = ['ready', 'complete'].includes(job?.phase);

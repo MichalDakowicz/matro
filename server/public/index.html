@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a0a0b">
+  <title>Matro</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/downloads.css">
+  <link rel="stylesheet" href="/web/web.css">
+</head>
+<body>
+  <div class="window-zone"><span class="title-links" id="title-links" hidden><button data-action="open-tmdb" title="Open on TMDB" aria-label="Open on TMDB"><span class="mark tmdb"></span></button><button data-action="open-imdb" id="imdb-link" title="Open on IMDb" aria-label="Open on IMDb"><span class="mark imdb"></span></button></span><button class="brand" data-tab="home" aria-label="Matro, back to landing"><span>Matro</span><img class="brand-mark" src="/assets/logo.svg" alt="" draggable="false"></button></div>
+  <div id="app"></div>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="shortcuts"><form method="dialog"><div class="section-heading"><h2>Make yourself at home.</h2><button class="icon-button" aria-label="Close shortcuts">×</button></div><p class="muted">A few shortcuts for a quieter movie night.</p><dl><dt>Play / pause</dt><dd>Space</dd><dt>Seek 5 seconds</dt><dd>← / →</dd><dt>Browse featured titles</dt><dd>← / → on the poster reel</dd><dt>Search</dt><dd>Ctrl / ⌘ + K</dd><dt>Volume</dt><dd>↑ / ↓</dd><dt>Fullscreen</dt><dd>F</dd><dt>Mute</dt><dd>M</dd><dt>Back to library</dt><dd>Esc</dd></dl><button class="pill primary">Got it</button></form></dialog>
+  <dialog id="ssh-dialog"><form id="ssh-form"></form></dialog>
+  <script type="module" src="/web/boot.js"></script>
+</body>
+</html>
