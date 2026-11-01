@@ -39,3 +39,95 @@ body.in-player .web-profile,body.fullscreen .web-profile{display:none}
 .web-code{margin:18px 0 8px;padding:18px;border-radius:12px;background:rgb(var(--ink) / 0.05);border:1px solid var(--line);font-size:28px;letter-spacing:.12em;text-align:center;user-select:all}
 .web-sub{margin:26px 0 12px;font-size:12px;color:var(--dim);font-weight:600}
 .web-link{user-select:all;cursor:text}.web-code{cursor:text}
+/* Phones: one calm column, a bottom dock, thumb-sized player controls. Desktop styles above and in styles.css are untouched. */
+body.no-fullscreen [data-action="fullscreen"]{display:none!important}
+@media(max-width:720px){
+  #app{height:100dvh}
+  .page{padding:76px 18px calc(104px + env(safe-area-inset-bottom))}
+  .page-head{margin-bottom:18px}.page-title{font-size:34px}.section{margin-bottom:32px}
+  .section-heading h2{font-size:18px}
+  /* Top corner: just the mark and the avatar. */
+  .window-zone{padding:12px 14px 8px;gap:10px}.brand{height:44px;padding:0}.brand span{display:none}.brand-mark{width:34px;height:34px}.web-avatar{width:36px;height:36px;font-size:14px}
+  .title-links{display:none!important}
+  /* Dock moves to the bottom as an icon-only pill. */
+  .dock-wrap{top:auto;left:14px;right:14px;margin:0 auto;bottom:calc(14px + env(safe-area-inset-bottom));max-width:420px}
+  .dock{width:100%;justify-content:space-between;padding:4px}.dock-item{flex:1;justify-content:center;height:46px;padding:0}.dock-item svg{width:20px;height:20px}.dock-label{display:none}
+  body:has(#detail-overlay) .dock,body:has(#detail-overlay) .help-button{display:none}
+  .dock-back{position:fixed;top:12px;left:14px;z-index:90;width:44px;height:44px;margin:0}
+  body:not(:has(#detail-overlay)) .dock-back{position:absolute}
+  .help-button{right:auto;left:14px;top:calc(14px + env(safe-area-inset-top));bottom:auto;width:40px;height:40px;font-size:15px}
+  .library-footer{padding:20px 18px calc(96px + env(safe-area-inset-bottom));gap:12px}.scanner-status{min-width:0;flex-basis:100%}
+  #toast{bottom:calc(90px + env(safe-area-inset-bottom));max-width:calc(100vw - 32px)}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:22px 12px}
+  .card .card-name{font-size:12.5px;margin-top:8px}.card>.card-meta{font-size:11px}
+  .format-badge{display:none}.grid .cover-title{font-size:14px;left:9px;right:9px;bottom:10px}.grid .v1 .cover-title,.grid .v2 .cover-title{font-size:10px}
+  .cw-row{gap:12px}.continue-card{width:240px}.cw-art{height:138px}.remove-continue{opacity:1}
+  /* Landing: poster reel on top, details beneath. */
+  .showcase{--reel-start:1px;height:auto;margin:0 -18px 24px;padding:438px 18px 0}
+  .reel{top:-30px;height:440px;overflow:clip}.reel-lines,.reel-top,.reel-ratings,.reel-glow{display:none}
+  .show-meta{position:relative;left:auto;top:auto;width:auto}.show-meta:before{display:none}
+  .show-title,.show-title.mid,.show-title.long,.show-title.longer{font-size:34px;margin-bottom:18px}
+  .reel-dots{right:auto;left:50%;top:408px;transform:translateX(-50%)}
+  .show-actions{margin-top:20px}.show-actions .pill{flex:1}.show-hint{display:none}
+  .welcome{min-height:calc(100dvh - 240px)}.welcome h1{font-size:38px}
+  /* Title page */
+  .detail-hero{width:100%;height:420px}.detail-hero .cover-title{font-size:56px;left:18px;top:120px}
+  .detail-hero-fade,:root[data-theme=light] .detail-hero-fade{background:linear-gradient(180deg,rgb(var(--bg-rgb) / .3),rgb(var(--bg-rgb) / 0) 24%,rgb(var(--bg-rgb) / .55) 64%,var(--bg) 96%)}
+  .detail-body{padding:260px 18px calc(40px + env(safe-area-inset-bottom))}.detail-head{margin-left:0;max-width:none;min-height:0}
+  .detail-poster{display:none}
+  .detail-head h2{font-size:36px}.detail-title-row{gap:2px 12px}.detail-sub{margin-top:12px}.detail-overview{font-size:14px;margin-top:14px;max-width:none}
+  /* Play stays a wide pill; the rest shrink to round icon buttons (their text stays for screen readers). */
+  .detail-actions{margin-top:20px;gap:8px}.detail-actions .pill{height:50px;font-size:15px}.detail-actions .pill.primary{flex:1 1 150px}
+  .detail-actions .pill:not(.primary){flex:none;width:50px;padding:0;gap:0;font-size:0}.detail-actions .pill:not(.primary) svg{width:20px;height:20px}
+  .detail-actions .pill[data-upgrade]{order:9;flex:1 1 100%;width:auto;height:44px;font-size:14px}
+  .ratings{margin-top:26px;max-width:none}.ratings div{padding:0 12px}.ratings strong{font-size:22px}
+  .detail-panels{gap:16px;margin-top:28px}.panel{flex-basis:100%;padding:18px}.panel.flat{padding:0}
+  .panel-head{flex-wrap:wrap}.season-tabs{margin-left:0;flex-basis:100%;order:3;overflow-x:auto;flex-wrap:nowrap;padding-bottom:4px}.season-tabs .chip{flex:none}
+  /* Episodes sit straight on the page, and Mark complete is a round check on the episode's picture. */
+  .panel.episodes{padding:0;background:none;border:0}.panel.episodes .panel-head{margin-bottom:10px}
+  .episode-entry{position:relative}.episode-entry>.text-button{position:absolute;left:105px;top:5px;z-index:2;width:24px;height:24px;padding:0;border-radius:50%;font-size:0;color:#fff;background:#0a0a0b99;border:1px solid rgb(255 255 255 / .35);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center}
+  .episode-entry>.text-button::before{content:'';width:13px;height:13px;background:currentColor;opacity:.5;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5'/%3E%3C/svg%3E") center/contain no-repeat}
+  .episode-entry>.text-button[aria-label^="Mark incomplete"]{background:var(--white);color:var(--on-primary);border-color:var(--white)}.episode-entry>.text-button[aria-label^="Mark incomplete"]::before{opacity:1}.episode-entry>.text-button[aria-label^="Mark incomplete"]{border-color:var(--white)}
+  .episode-still .status-badge{display:none}
+  .path-box{display:none}.episode-grid{grid-template-columns:minmax(0,1fr)}.episode-still{width:128px}
+  .panel.flat .facts{grid-template-columns:1fr 1fr;gap:16px}
+  .cast-grid{grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:18px 10px}.cast-member strong{font-size:12.5px;margin-top:8px}
+  /* Search, folders, profile */
+  .search-field{height:54px;padding:0 8px 0 18px}.search-field input{font-size:17px}.search-field kbd{display:none}.search-hero{margin-bottom:28px}
+  .source-row{grid-template-columns:40px minmax(0,1fr) auto;gap:12px;padding:14px}.source-icon{width:40px;height:40px}.source-count{display:none}
+  .web-row{grid-template-columns:40px minmax(0,1fr) auto}
+  dialog{padding:22px;max-width:calc(100vw - 24px)}.match-dialog,#ssh-dialog{width:calc(100vw - 24px)}
+  .web-stats strong{font-size:26px}.web-page{padding-top:76px}
+  /* Player: transport on one row, utilities on another, nothing hover-only. */
+  body.in-player .window-zone{display:none}
+  .player-top{padding:calc(12px + env(safe-area-inset-top)) 14px 20px;min-height:0;gap:8px}.player-chips{display:none}.player-heading h1{font-size:15px}.player-heading p{font-size:12px}
+  .player-actions{display:none}
+  .player-controls{padding:56px 14px calc(12px + env(safe-area-inset-bottom))}
+  .timeline{flex-wrap:wrap;gap:0 10px}.seek-area{order:-1;flex-basis:100%;height:34px}
+  .timeline .time-pair{margin-right:auto}.timeline #remaining{display:none}.time{font-size:12px}
+  input[type=range].seek::-webkit-slider-thumb{width:20px;height:20px;margin-top:-7px}input[type=range]{height:34px}
+  .control-row{flex-direction:column;gap:4px;margin-top:4px}
+  .control-group{width:100%;justify-content:space-between}
+  .control-group:first-child{justify-content:center;gap:10px}
+  .control-group .volume,.control-group .volume-value,.control-group [data-action="mute"]{display:none}
+  .player-controls .icon-button{width:46px;height:46px}.play-toggle.icon-button{width:60px;height:60px}.skip-button svg{width:28px;height:28px}
+  .speed.icon-button{width:auto;min-width:46px}
+  .stage-message{padding:90px 24px 170px}
+  .player-layout.with-queue .stage{right:0}
+  .queue-panel{top:auto;left:0;right:0;bottom:0;width:auto;max-width:none;height:62%;border-radius:22px 22px 0 0;animation:sheet-in .35s cubic-bezier(.2,.75,.15,1);z-index:20}
+  body.fullscreen .queue-panel{top:auto}
+  @keyframes sheet-in{from{transform:translateY(40px);opacity:0}}
+  .queue-thumb{width:88px;height:50px}
+  .tracks-panel,.segments-panel{left:10px;right:10px;bottom:calc(150px + env(safe-area-inset-bottom));width:auto;max-width:none;max-height:calc(100% - 200px);padding:14px}
+  .track-columns{grid-template-columns:1fr}.track-option{min-height:48px}
+  .sub-style-row .volume{display:block;width:100%}.sub-style-row>span{width:100%}
+}
+/* Landscape phone: the video needs the height, so the chrome shrinks. */
+@media(max-width:960px) and (max-height:480px){
+  .player-top{padding-top:8px;min-height:0}
+  .player-controls{padding:36px 18px 6px}
+  .control-row{flex-direction:row}.control-group{width:auto}.control-group:first-child{justify-content:flex-start}
+  .player-controls .icon-button{width:40px;height:40px}.play-toggle.icon-button{width:48px;height:48px}
+  .tracks-panel{bottom:90px;max-height:calc(100% - 110px)}.queue-panel{height:100%;width:340px;left:auto;border-radius:20px 0 0 20px}
+}
+@media(hover:none){.seek-preview{display:none!important}.queue-actions{opacity:1}}
