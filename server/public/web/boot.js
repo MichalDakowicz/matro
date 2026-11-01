@@ -17,3 +17,4 @@ window.matro = adapter.matro;
 const signOut = async () => { await post('/api/logout').catch(() => {}); location.reload(); };
 profileButton(session, () => openProfile({ session, getState: adapter.state, save: () => adapter.matro.save(adapter.state()), signOut }));
 await import('/app.js');
+await import('./history.js');

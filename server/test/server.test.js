@@ -262,6 +262,23 @@ test('watch state is saved per person and merged into the catalog they load', as
   assert.equal((await call(null, 'PUT', '/api/state', state)).status, 401);
 });
 
+test('saving progress never drops or rewinds a title another page already saved', async () => {
+  const { groups } = await catalog('eve');
+  const [a, b] = [groups[1][0].id, groups[1][1].id];
+  const put = progress => call('eve', 'PUT', '/api/state', { progress });
+  assert.equal((await put({ [a]: { position: 50, updated: 200 } })).status, 200);
+  // A page that reloaded mid-startup saves empty defaults: nothing is lost.
+  assert.equal((await put({})).status, 200);
+  assert.equal((await catalog('eve')).progress[a].position, 50);
+  // A stale copy is ignored, a newer one wins, and other titles are added alongside.
+  await put({ [a]: { position: 10, updated: 100 } });
+  assert.equal((await catalog('eve')).progress[a].position, 50);
+  await put({ [a]: { position: 70, updated: 300 }, [b]: { position: 5, updated: 250 } });
+  const now = (await catalog('eve')).progress;
+  assert.equal(now[a].position, 70);
+  assert.equal(now[b].position, 5);
+});
+
 test('head account upload lands in the library; logout and password reset end sessions', async () => {
   const bytes = fs.readFileSync(path.join(mediaDir, 'Heat (1995)', 'Heat.1995.mp4'));
   const up = await call('admin', 'POST', '/api/admin/upload?path=' + encodeURIComponent('Up Movie (2001)/../Up.Movie.mp4'), bytes, { 'content-type': 'application/octet-stream' });
