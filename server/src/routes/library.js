@@ -33,9 +33,11 @@ function register(app) {
     await sendFile(ctx.req, ctx.res, file, 'image/jpeg', { 'Cache-Control': 'private, max-age=604800' }).catch(() => { throw new HttpError(404, 'No such artwork.'); });
   });
 
+  // A device can only add or advance a title's progress, never drop one: a stale or half-started page saving old data cannot erase what another device wrote.
+  const mergeProgress = (kept, sent) => { const out = { ...kept }; for (const [id, entry] of Object.entries(sent)) if (!isObject(entry) || !isObject(out[id]) || (entry.updated || 0) >= (out[id].updated || 0)) out[id] = entry; return out; };
   router.add('PUT', '/api/state', async ctx => {
     const body = await readJson(ctx.req, 4 * 1024 * 1024), state = stateOf(ctx.user.id);
-    if (body.progress !== undefined) { if (!isObject(body.progress)) throw new HttpError(400, 'Bad progress.'); state.progress = body.progress; }
+    if (body.progress !== undefined) { if (!isObject(body.progress)) throw new HttpError(400, 'Bad progress.'); state.progress = mergeProgress(state.progress, body.progress); }
     if (body.queue !== undefined) { if (!Array.isArray(body.queue) || body.queue.length > 1000 || body.queue.some(id => typeof id !== 'string')) throw new HttpError(400, 'Bad queue.'); state.queue = body.queue; }
     if (body.preferences !== undefined) { if (!isObject(body.preferences)) throw new HttpError(400, 'Bad preferences.'); state.preferences = body.preferences; }
     if (body.markers !== undefined) { if (!isObject(body.markers)) throw new HttpError(400, 'Bad markers.'); state.markers = body.markers; }

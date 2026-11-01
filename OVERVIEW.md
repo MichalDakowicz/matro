@@ -105,7 +105,7 @@ Other gaps: file watching, background scan progress/cancel, real artwork/metadat
 4. **Desktop server linking:** URL plus credentials/token, connection test, useful connection errors, server discovery if justified, local/server source switching, and resilient reconnects. Mounted folders already work without this API.
 5. **Web and mobile:** reuse product language and interaction models; implement platform playback adapters and sync against the server contract. Electron-specific APIs stay out of shared catalog models.
 
-A first self-hosted server and web app now live in [`server/`](server/README.md): Node with built-in SQLite, one head account that manages the library, viewer accounts with their own progress and sub/dub choices, and shared labelled subtitles. The desktop app does not talk to it yet (step 4), so there is still no connection screen.
+A first self-hosted server and web app now live in [`server/`](server/README.md): Node with built-in SQLite, one head account that manages the library, viewer accounts with their own progress and sub/dub choices, and shared labelled subtitles. The desktop app does not talk to it yet (step 4), so there is still no connection screen. An Android receiver app in [`mobile/`](mobile/README.md) links to a server by address, signs in and shows that web UI full screen.
 
 No hosting provider beyond that, sync protocol for the desktop app, or mobile framework is committed yet. Do not add a fake server connection screen before there is a real, testable server contract.
 

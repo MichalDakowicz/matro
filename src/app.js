@@ -34,6 +34,8 @@ const base = file => file.split(/[\\/]/).filter(Boolean).pop() || file;
 const titleKey = item => item.groupId || item.group;
 const sameTitle = (left, right) => titleKey(left) === titleKey(right);
 const SKIP = 5;
+// Nothing is written back until the saved state has been read once: a reload that interrupts startup would otherwise save these empty defaults over the real progress.
+let stateLoaded = false;
 let library = { items: [], folders: [], progress: {}, queue: [], preferences: { autoplay: true, volume: .72 } };
 let metadata = {}, metadataEnabled = false;
 const sshSource = file => (library.sshConnections || []).find(config => config.root && (file === config.root || file.startsWith(config.root + '\\') || file.startsWith(config.root + '/')));
@@ -119,7 +121,7 @@ function hoverSeek(event) {
 const finishMargin = duration => Math.min(10, duration * .05);
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 5000); }
 async function attempt(fn) { try { return await fn(); } catch (error) { toast(error.message || String(error)); return null; } }
-function save() { return api.save({ progress: library.progress, queue: library.queue, preferences: library.preferences, markers: library.markers || {} }); }
+function save() { if (!stateLoaded) return Promise.resolve(); return api.save({ progress: library.progress, queue: library.queue, preferences: library.preferences, markers: library.markers || {} }); }
 const completed = id => !!library.progress[id]?.completed;
 const orderedEpisodes = item => library.items.filter(i => i.kind === 'show' && sameTitle(i, item)).sort((a, b) => a.season - b.season || a.episode - b.episode);
 function statusLabel(id) { return completed(id) ? ' · Completed' : library.progress[id]?.position > 0 ? ' · In progress' : ''; }
@@ -1167,7 +1169,7 @@ api?.onSegments(update => {
   renderSegments(); renderTracks();
 });
 if (!api) { root.innerHTML = '<main class="page"><h1 class="page-title">Open Matro in its desktop app.</h1><p class="page-sub">Run npm start from the project folder.</p></main>'; }
-else void attempt(async () => { library = await api.load();
+else void attempt(async () => { library = await api.load(); stateLoaded = true;
   metadata = library.metadata || {}; metadataEnabled = !!library.metadataEnabled;
   scannerSummary = library.scanner || await api.scannerStatus();
   library.markers ||= {};
