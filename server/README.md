@@ -133,7 +133,7 @@ revocation and throttling.
 
 ## Not here yet
 
-Artwork and metadata from TMDB, HLS/adaptive bitrate, hardware transcoding, a mobile layout beyond
+Artwork and metadata from TMDB, HLS/adaptive bitrate, hardware transcoding, a native mobile player (the Android receiver in [`../mobile`](../mobile/README.md) wraps the web UI), a mobile layout beyond
 the responsive web app, and linking the desktop app to a server (desktop `OVERVIEW.md` roadmap
 step 4). Uploaded subtitles belong to one file; they are not copied to other episodes.
 

@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Matro",
+    "slug": "matro-receiver",
+    "version": "0.2.1",
+    "orientation": "default",
+    "scheme": "matro",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0a0a0b",
+    "icon": "./assets/icon.png",
+    "android": {
+      "package": "com.michaldakowicz.matroreceiver",
+      "versionCode": 3,
+      "predictiveBackGestureEnabled": false,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "monochromeImage": "./assets/monochrome-icon.png",
+        "backgroundColor": "#0a0a0b"
+      }
+    },
+    "plugins": [
+      "expo-font",
+      ["expo-build-properties", { "android": { "usesCleartextTraffic": true } }],
+      ["expo-splash-screen", { "backgroundColor": "#0a0a0b", "image": "./assets/splash-icon.png", "imageWidth": 200 }]
+    ]
+  }
+}
