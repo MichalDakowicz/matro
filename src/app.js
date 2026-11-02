@@ -54,7 +54,7 @@ $('#server-form').addEventListener('submit', async event => {
   event.preventDefault();
   const button = $('#server-connect'), status = $('#server-status');
   button.disabled = true; status.textContent = 'Looking for the server…';
-  try { await api.serverConnect($('#server-form').elements.namedItem('address').value); $('#server-dialog').close(); }
+  try { await api.serverConnect(Object.fromEntries(new FormData($('#server-form')))); $('#server-form').reset(); $('#server-dialog').close(); }
   catch (error) { status.textContent = (error.message || String(error)).replace(/^Error invoking remote method '[^']*': (Error: )?/, ''); }
   finally { button.disabled = false; }
 });
@@ -259,12 +259,12 @@ function dock() {
 }
 let footerOpen = false;
 function footer() {
-  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
+  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="receiver-setting" role="group" aria-label="Receiver mode"><span>Receiver</span><button class="chip" data-action="receiver" aria-pressed="false">Off · set up…</button></span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
 }
 const sectionGrid = (title, items, count, more) => items.length ? `<section class="section"><div class="section-heading"><h2>${title}</h2><span>${count}${more ? ` · <button class="text-button" data-tab="${more}">See all</button>` : ''}</span></div><div class="grid">${items.map(poster).join('')}</div></section>` : '';
 const kinds = [['show', 'Shows', 'shows'], ['movie', 'Movies', 'titles'], ['audio', 'Music & audio', 'files']];
 function landingPage() {
-  if (!library.items.length) return `<section class="welcome"><p class="show-kicker">Matro · local library</p><h1>Your collection.<br>Your kind of player.</h1><p>All your films, shows and favourite files in one quiet place. Add a folder to build your library, or drop media anywhere in this window — seasons and episodes are picked up from file names.</p><div class="show-actions"><button class="pill" data-action="ssh">${icon('network')}Connect SSH</button><button class="pill" data-action="server">${icon('network')}Connect server</button><button class="pill primary" data-action="folder">${icon('folder')}Add folder</button><button class="pill" data-action="files">${icon('plus')}Open files</button></div><div class="formats">${['MKV', 'MP4', 'AVI', 'MOV', 'WEBM', 'FLAC', '+ MORE'].map(f => `<span>${f}</span>`).join('')}</div></section>`;
+  if (!library.items.length) return `<section class="welcome"><p class="show-kicker">Matro · local library</p><h1>Your collection.<br>Your kind of player.</h1><p>All your films, shows and favourite files in one quiet place. Add a folder to build your library, or drop media anywhere in this window — seasons and episodes are picked up from file names.</p><div class="show-actions"><button class="pill" data-action="ssh">${icon('network')}Connect SSH</button><button class="pill primary" data-action="folder">${icon('folder')}Add folder</button><button class="pill" data-action="files">${icon('plus')}Open files</button></div><div class="formats">${['MKV', 'MP4', 'AVI', 'MOV', 'WEBM', 'FLAC', '+ MORE'].map(f => `<span>${f}</span>`).join('')}</div></section>`;
   const continues = continueItems();
   const featured = !folderFilter ? featuredTitles() : [];
   return `${folderFilter ? `<div class="page-head"><div><h1 class="page-title">${esc(base(folderFilter))}</h1><p class="page-sub">${esc(folderFilter)}</p></div><button class="text-button" data-action="all-folders">Show all folders</button></div>` : ''}
@@ -1071,7 +1071,12 @@ function goTabNow(next) {
   if (selected) { $('#detail-overlay')?.remove(); selected = null; } if (next !== tab) statusFilter = 'all'; tab = next; folderFilter = null; renderLibrary(); $('.shell')?.scrollTo(0, 0); }
 const actions = {
   ssh: openSSH,
-  server: () => { $('#server-status').textContent = ''; $('#server-dialog').showModal(); },
+  receiver: async () => {
+    $('#server-status').textContent = '';
+    const link = await api.serverGet().catch(() => null);
+    if (link) $('#server-form').elements.namedItem('address').value = link.url;
+    $('#server-dialog').showModal();
+  },
   'close-server': () => $('#server-dialog').close(),
   'close-ssh': () => $('#ssh-dialog').close(),
   folder: async () => { toast('Choose a folder. Large collections may take a moment to scan.'); library = await api.addFolder(); renderLibrary(); },

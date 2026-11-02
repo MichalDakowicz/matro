@@ -33,12 +33,16 @@
   </dialog>
   <dialog id="server-dialog" aria-labelledby="server-title">
     <form id="server-form">
-      <div class="section-heading"><h2 id="server-title">Connect to a Matro server</h2><button type="button" class="icon-button" data-action="close-server" aria-label="Close server settings">×</button></div>
-      <p class="muted">Watch a library hosted on your own Matro server. You sign in on the server's page; the address is the only thing saved here.</p>
-      <div class="ssh-fields"><label class="ssh-wide">Server address<input name="address" required autocomplete="off" placeholder="matro.example.com or 192.168.1.5:8484"></label></div>
-      <p class="note">Matro then opens the server in this window. Its menu (Alt) has <em>Use local library</em> and <em>Disconnect from server</em>. Start with MATRO_LOCAL=1 to open the local library once.</p>
+      <div class="section-heading"><h2 id="server-title">Receiver mode</h2><button type="button" class="icon-button" data-action="close-server" aria-label="Close server settings">×</button></div>
+      <p class="muted">Turn this PC into a receiver for your Matro server: the whole app then works like the web client, with your account's library, progress and queue. Your local library stays untouched for when you switch back.</p>
+      <div class="ssh-fields">
+        <label class="ssh-wide">Server address<input name="address" required autocomplete="off" placeholder="matro.example.com or 192.168.1.5:8484"></label>
+        <label>Username<input name="username" autocomplete="username" placeholder="Leave empty if already signed in"></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password"></label>
+      </div>
+      <p class="note">Only the address is saved here; the sign-in session stays in this app's own profile. The window menu (Alt) has <em>Switch to local mode</em> and <em>Disconnect and sign out</em>. Start with MATRO_LOCAL=1 to open the local library for one run.</p>
       <p id="server-status" role="status" aria-live="polite"></p>
-      <div class="show-actions"><button id="server-connect" class="pill primary" type="submit">Connect</button><button class="pill" type="button" data-action="close-server">Cancel</button></div>
+      <div class="show-actions"><button id="server-connect" class="pill primary" type="submit">Switch to receiver mode</button><button class="pill" type="button" data-action="close-server">Cancel</button></div>
     </form>
   </dialog>
   <script type="module" src="app.js"></script>

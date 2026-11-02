@@ -2,7 +2,7 @@
 .window-zone{gap:14px}
 .window-zone .brand{padding-left:10px}
 /* Downloads and Folders belong to the head account. SSH remains desktop-only. */
-body.role-viewer .dock-item[data-tab="downloads"],[data-action="ssh"],[data-action="server"],[data-action="pick-prelude"]{display:none!important}
+body.role-viewer .dock-item[data-tab="downloads"],[data-action="ssh"],.receiver-setting,[data-action="pick-prelude"]{display:none!important}
 body.role-viewer .dock-item[data-tab="folders"],body.role-viewer [data-action="fix-match"]{display:none!important}
 body.role-viewer [data-action="folder"],body.role-viewer [data-action="files"]{display:none!important}
 

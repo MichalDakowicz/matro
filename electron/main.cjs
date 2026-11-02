@@ -9,7 +9,7 @@ const { remote } = require('./ssh-media.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { scan, describe, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
-const { connect: connectServer, createServerLink, sameOrigin, savedUrlSync, insecureOrigin, failurePage } = require('./server-link.cjs');
+const { PARTITION, signIn, connect: connectServer, createServerLink, sameOrigin, savedUrlSync, insecureOrigin, failurePage } = require('./server-link.cjs');
 const { createStreamServer } = require('./stream.cjs');
 const { createPreviews } = require('./previews.cjs');
 const { createSegments } = require('./segments.cjs');
@@ -60,14 +60,15 @@ async function rescan() {
 // The linked server's web UI in its own framed window: no preload (the page brings its own window.matro) and its own cookie jar.
 function openServerWindow(url) {
   if (serverWin && !serverWin.isDestroyed()) { serverWin.loadURL(url); serverWin.focus(); win.hide(); return; }
-  const partition = 'persist:matro-server';
+  const partition = PARTITION;
   serverWin = new BrowserWindow({ width: 1280, height: 860, minWidth: 360, minHeight: 480, backgroundColor: '#0a0a0b', title: 'Matro', icon: path.join(__dirname, '../assets/icon.png'), autoHideMenuBar: true, show: false, webPreferences: { partition, contextIsolation: true, sandbox: true, nodeIntegration: false } });
   const contents = serverWin.webContents;
   session.fromPartition(partition).setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   const local = () => { serverWin.destroy(); win.maximize(); win.show(); };
+  const leave = async forget => { const link = await serverLink.get(); if (link) { if (forget) await serverLink.clear(); else await serverLink.set({ ...link, enabled: false }); } if (forget) await session.fromPartition(partition).clearStorageData({ storages: ['cookies'] }); local(); };
   serverWin.setMenu(Menu.buildFromTemplate([{ label: 'Matro', submenu: [
-    { label: 'Use local library', click: local },
-    { label: 'Disconnect from server', click: async () => { await serverLink.clear(); local(); } },
+    { label: 'Switch to local mode', click: () => leave(false) },
+    { label: 'Disconnect and sign out', click: () => leave(true) },
     { type: 'separator' }, { role: 'reload' }, { role: 'togglefullscreen' }, { role: 'quit' }] }]));
   contents.setWindowOpenHandler(({ url: target }) => { if (/^https?:/.test(target)) void shell.openExternal(target); return { action: 'deny' }; });
   contents.on('will-navigate', (event, target) => { if (!sameOrigin(url, target)) { event.preventDefault(); if (/^https?:/.test(target)) void shell.openExternal(target); } });
@@ -95,8 +96,9 @@ app.whenReady().then(async () => {
   if (state.libraryVersion !== 2) await rescan();
   streams = await createStreamServer();
   serverLink = createServerLink(app.getPath('userData'));
-  // A saved server link is the opt-in: Matro opens that server's web UI, like the Android receiver. MATRO_LOCAL=1 skips it for a run.
-  const linked = process.env.MATRO_LOCAL ? null : await serverLink.get();
+  // Receiver mode is a persisted switch: while it is on, Matro opens the linked server's web UI like the Android receiver. MATRO_LOCAL=1 skips it for a run.
+  const link = await serverLink.get();
+  const linked = !process.env.MATRO_LOCAL && link?.enabled ? link.url : null;
   protocol.handle('matro', request => {
     const url = new URL(request.url);
     const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg','/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
@@ -149,7 +151,11 @@ app.whenReady().then(async () => {
     return downloadArtwork(items);
   });
   handle('server:get', () => serverLink.get());
-  handle('server:connect', async address => { const { url } = await connectServer(address, (target, options) => net.fetch(target, options)); await serverLink.set(url); openServerWindow(url); return url; });
+  handle('server:connect', async ({ address, username, password } = {}) => {
+    const { url } = await connectServer(address, (target, options) => net.fetch(target, options));
+    if (username) await signIn(url, String(username), String(password ?? ''), (target, options) => session.fromPartition(PARTITION).fetch(target, options));
+    await serverLink.set({ url, enabled: true }); openServerWindow(url); return url;
+  });
   handle('library:load', async () => { await metadata.loaded; return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
   handle('library:ssh', async options => {
     const root = remote.register(options);

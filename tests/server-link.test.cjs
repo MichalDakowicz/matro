@@ -4,7 +4,7 @@ const http = require('node:http');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { candidates, connect, createServerLink, sameOrigin } = require('../electron/server-link.cjs');
+const { candidates, connect, createServerLink, sameOrigin, signIn, savedUrlSync } = require('../electron/server-link.cjs');
 
 const listen = handler => new Promise(resolve => { const server = http.createServer(handler).listen(0, '127.0.0.1', () => resolve(server)); });
 
@@ -33,17 +33,38 @@ test('connect rejects something that is not a Matro server', async () => {
   } finally { server.close(); }
 });
 
-test('the saved link round-trips and clears', async () => {
+test('the saved link round-trips, keeps the mode switch, and clears', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-link-'));
   const link = createServerLink(dir);
   assert.equal(await link.get(), null);
-  await link.set('http://192.168.1.5:8484');
-  assert.equal(await createServerLink(dir).get(), 'http://192.168.1.5:8484');
+  await link.set({ url: 'http://192.168.1.5:8484', enabled: true });
+  assert.deepEqual(await createServerLink(dir).get(), { url: 'http://192.168.1.5:8484', enabled: true });
+  assert.equal(savedUrlSync(dir), 'http://192.168.1.5:8484');
+  await link.set({ url: 'http://192.168.1.5:8484', enabled: false });
+  assert.deepEqual(await link.get(), { url: 'http://192.168.1.5:8484', enabled: false });
+  assert.equal(savedUrlSync(dir), null);
   await link.clear();
   assert.equal(await link.get(), null);
   await fs.writeFile(path.join(dir, 'server.json'), '{"url":"file:///etc/passwd"}');
   assert.equal(await link.get(), null);
   await fs.rm(dir, { recursive: true, force: true });
+});
+
+test('signIn posts credentials with the x-matro header and surfaces the server error', async () => {
+  const seen = [];
+  const server = await listen((req, res) => {
+    let body = ''; req.on('data', chunk => { body += chunk; }); req.on('end', () => {
+      const { username, password } = JSON.parse(body); seen.push([req.method, req.url, req.headers['x-matro']]);
+      res.setHeader('content-type', 'application/json');
+      if (password === 'right') res.end(JSON.stringify({ user: { id: 1, username, role: 'head' } })); else { res.statusCode = 401; res.end(JSON.stringify({ error: 'Wrong username or password.' })); }
+    });
+  });
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    assert.equal((await signIn(base, 'ann', 'right')).username, 'ann');
+    await assert.rejects(signIn(base, 'ann', 'wrong'), /Wrong username or password/);
+    assert.deepEqual(seen[0], ['POST', '/api/login', '1']);
+  } finally { server.close(); }
 });
 
 test('only the linked origin stays in the window', () => {
@@ -53,7 +74,7 @@ test('only the linked origin stays in the window', () => {
 });
 
 test('offline support: only http origins get the secure-origin switch, and the failure page escapes the address', () => {
-  const { insecureOrigin, failurePage, savedUrlSync } = require('../electron/server-link.cjs');
+  const { insecureOrigin, failurePage } = require('../electron/server-link.cjs');
   assert.equal(insecureOrigin('http://192.168.1.5:8484/x'), 'http://192.168.1.5:8484');
   assert.equal(insecureOrigin('https://matro.example.com'), null);
   assert.equal(insecureOrigin('nonsense'), null);
