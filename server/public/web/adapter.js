@@ -2,6 +2,8 @@
 // Everything here turns those calls into requests to the server.
 import { get, post, put, del, api } from './http.js';
 import { h, say, dialog, languageSelect } from './dom.js';
+import * as offline from './offline.js';
+import { toVtt } from './offline-store.js';
 
 const SIDECAR = 10000; // uploaded subtitle tracks get indexes from here up, as sidecar files do on the desktop
 const KIND = { full: '', forced: ' (forced)', sdh: ' (SDH)' };
@@ -23,12 +25,31 @@ export function createAdapter(session) {
   };
   const details = new Map();
   let latest = null;
+  const saved = new Set();
+  // The set mirrors what is stored, whoever changed it (this page, the profile list, a finished download).
+  const sync = () => offline.store.list().then(list => { saved.clear(); for (const r of list) if (r.complete) saved.add(r.id); }).catch(() => {});
+  sync().then(offline.refresh); offline.onChange(sync);
+  window.addEventListener('online', () => offline.flushSubtitles().then(n => { if (n) say(`Sent ${n} subtitle file${n === 1 ? '' : 's'} added while offline.`); }).catch(() => {}));
 
+  // Without a connection the catalog comes from the last visit, so saved titles can still be opened. Progress made meanwhile
+  // is kept on this device and sent the next time the server answers.
   async function load() {
-    const data = await get('/api/library');
-    data.metadata = artwork(data.metadata);
+    let data;
+    try {
+      const pending = await offline.recall('pending');
+      if (pending) { try { await put('/api/state', pending); await offline.remember('pending', null); } catch (error) { if (!offline.isOffline(error)) throw error; } }
+      offline.flushSubtitles().then(n => { if (n) say(`Sent ${n} subtitle file${n === 1 ? '' : 's'} added while offline.`); }).catch(() => {});
+      data = await get('/api/library');
+      data.metadata = artwork(data.metadata);
+      offline.remember('library', data);
+    } catch (error) {
+      data = offline.isOffline(error) ? await offline.recall('library') : null;
+      if (!data) throw error;
+      data = { ...data, progress: { ...data.progress, ...(await offline.recall('pending'))?.progress }, offline: true };
+      say('You are offline. Saved titles still play.');
+    }
     session.user = data.user; latest = data;
-    if (data.metadataEnabled) follow();
+    if (data.metadataEnabled && !data.offline) follow();
     return data;
   }
   // TMDB matching runs on the server in the background; keep asking for a short while so posters appear as they arrive.
@@ -46,6 +67,8 @@ export function createAdapter(session) {
     })();
   }
   async function inspect(id) {
+    const local = await offline.savedInfo(id);
+    if (local) { details.set(id, local); return local; }
     const info = await get(`/api/items/${id}/info`);
     const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay,
       subtitles: [...info.embedded.map(({ forced: _f, ...t }) => t), ...info.uploaded.map(u => track(u))] };
@@ -69,17 +92,32 @@ export function createAdapter(session) {
         const q = new URLSearchParams({ name: name.value, lang: language.value, kind: kind.value, filename: file.files[0].name });
         const { subtitle } = await api('POST', `/api/items/${id}/subtitles?${q}`, file.files[0]);
         box.close(subtitle);
-      } catch (error) { status.textContent = error.message; submit.disabled = false; }
+      } catch (error) {
+        // No connection: keep the file on this device (shown now, sent when the server is reachable again).
+        if (offline.isOffline(error) && saved.has(id)) {
+          const raw = await file.files[0].text(), vtt = toVtt(raw, file.files[0].name);
+          if (!vtt) { status.textContent = 'Without a connection only SRT and WebVTT files can be added. Try ASS and SSA files when you are back online.'; submit.disabled = false; return; }
+          const index = SIDECAR * 1000 + Date.now() % 1000000, local = track({ id: index - SIDECAR, name: `${name.value} · sends when online`, language: language.value, kind: kind.value, addedBy: session.user.username });
+          await offline.queueSubtitle({ id, query: new URLSearchParams({ name: name.value, lang: language.value, kind: kind.value, filename: file.files[0].name }).toString(), body: raw });
+          await offline.store.addSubtitle(id, String(index), local, vtt);
+          details.delete(id);
+          box.close({ local, vtt }); return;
+        }
+        status.textContent = error.message; submit.disabled = false;
+      }
     } }, h('p', { class: 'muted' }, 'Everyone who watches this title can pick these subtitles. You and the head account can change or remove them later from your profile.'),
     h('div', { class: 'ssh-fields web-fields' }, h('label', { class: 'ssh-wide' }, 'Subtitle file (SRT, VTT, ASS or SSA)', file), h('label', { class: 'ssh-wide' }, 'Name shown to everyone', name), h('label', {}, 'Language', language), h('label', {}, 'Type', kind)),
     status, h('div', { class: 'show-actions' }, submit, h('button', { class: 'pill', type: 'button', onclick: () => box.close(null) }, 'Cancel')));
     const box = dialog('Add subtitles', form);
     const subtitle = await box.done;
     if (!subtitle) return null;
+    if (subtitle.local) return { text: subtitle.vtt, track: subtitle.local };
     const text = await subtitles({ id, index: SIDECAR + subtitle.id });
     return { text, track: track({ ...subtitle, addedBy: session.user.username }) };
   }
   async function subtitles({ id, index }) {
+    const local = await offline.savedSubtitles(id, String(index));
+    if (local !== null) return local;
     const res = await fetch(`/api/items/${id}/subtitles/${index >= SIDECAR ? `u${index - SIDECAR}` : `e${index}`}`, { credentials: 'same-origin' });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not load subtitles.');
     return res.text();
@@ -88,6 +126,8 @@ export function createAdapter(session) {
   // Direct play when the browser can handle the file as-is; otherwise a transcode that starts at `offset`.
   async function stream({ id, offset = 0, audio = null, bitmapSubtitle = null, subtitleDelay = 0, preload = false }) {
     const d = details.get(id) || await inspect(id), first = d.audio[0];
+    // The copy on this device wins: it needs no connection and no server work.
+    if (saved.has(id) && bitmapSubtitle === null) { const url = await offline.playUrl(id); if (url) return { url: `${url}${offset > 0 ? `#t=${offset}` : ''}`, offset: 0 }; }
     if (d.directPlay && bitmapSubtitle === null && (audio === null || !first || audio === first.index)) return { url: `/api/items/${id}/direct${offset > 0 ? `#t=${offset}` : ''}`, offset: 0 };
     const q = new URLSearchParams({ t: String(Math.floor(offset * 10) / 10) });
     if (audio !== null) q.set('audio', audio);
@@ -132,9 +172,38 @@ export function createAdapter(session) {
     return files.length ? upload(files) : load();
   }
 
+  // Saving a title to watch without a connection (see offline.js). The page asks has/progress while drawing and toggle on a click.
+  const offlineApi = {
+    has: id => saved.has(id), progress: id => offline.progressOf(id), onChange: offline.onChange,
+    async toggle(id) {
+      if (offline.progressOf(id) !== null) { offline.cancel(id); say('Download stopped. What was fetched is kept, so saving again resumes.'); return; }
+      if (saved.has(id)) {
+        if (!confirm('Remove the offline copy from this device?')) return;
+        await offline.remove(id); saved.delete(id); say('Removed from this device.'); return;
+      }
+      const item = latest?.items.find(i => i.id === id);
+      say('Download started. You can keep browsing; it continues while the app is open.');
+      try {
+        const info = await get(`/api/items/${id}/info`);
+        const embedded = info.embedded.filter(t => t.text).map(({ forced: _f, ...t }) => t);
+        const tracks = [...embedded.map(t => ({ ...t, key: String(t.index) })), ...info.uploaded.map(u => ({ ...track(u), key: String(SIDECAR + u.id) }))];
+        // The saved file carries one audio track and no image subtitles, so that is all the player is offered offline.
+        const shaped = { duration: info.duration, video: info.video, audio: info.audio.slice(0, 1), chapters: info.chapters, directPlay: true,
+          subtitles: tracks.map(({ key: _k, ...t }) => t) };
+        await offline.save(id, { info: shaped, title: item ? `${item.group || item.title}${item.kind === 'show' ? ` · ${item.title}` : ''}` : id, subtitleTracks: tracks,
+          fetchText: t => subtitles({ id, index: Number(t.key) }) });
+        saved.add(id); say('Saved. It will play without a connection.');
+      } catch (error) { if (error.name !== 'AbortError') say(error.message || 'Could not save that title.'); }
+    },
+    list: () => offline.store.list(), usage: offline.usage, remove: async id => { await offline.remove(id); saved.delete(id); }, sizeLabel: offline.sizeLabel
+  };
+
   const matro = {
     load, inspect, prepare: inspect, subtitles, loadSubtitle, stream,
-    save: state => put('/api/state', { progress: state.progress, queue: state.queue, preferences: state.preferences, markers: state.markers || {} }, { keepalive: JSON.stringify(state).length < 60000 }).catch(() => {}),
+    save: state => {
+      const body = { progress: state.progress, queue: state.queue, preferences: state.preferences, markers: state.markers || {} };
+      return put('/api/state', body, { keepalive: JSON.stringify(state).length < 60000 }).catch(error => { if (offline.isOffline(error)) offline.remember('pending', body); });
+    },
     stop: async () => {}, playbackState: async () => {},
     preview: async ({ id, time, hover }) => `/api/items/${id}/frame?t=${Math.max(0, Number(time) || 0)}&w=${hover ? 320 : 480}`,
     segments: async () => [], removeMarker: async () => ({}), scannerStatus: async () => latest?.scanner || { message: 'Library is up to date', running: false, total: 0, ready: 0 },
@@ -154,7 +223,10 @@ export function createAdapter(session) {
     },
     connectSSH: unsupported('SSH sources'), setPrelude: unsupported('Preludes'), 
     downloadHostOnly: true,
+    offline: offlineApi,
+    // Viewers cannot open these pages at all. The head account reaches them from its profile page, not the nav dock.
     hiddenTabs: session.user.role === 'admin' ? [] : ['folders', 'downloads'],
+    navHidden: ['folders', 'downloads'],
     canCompareEditions: session.user.role === 'admin',
     downloadSeriesSearch: value => download('series-search', value), downloadSeriesReleases: value => download('series-releases', value),
     downloadSeriesSource: async () => { say('Release information is provided by EZTV.'); },

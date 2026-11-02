@@ -2,7 +2,7 @@
 // history has nothing to step through and a back swipe leaves the site. This mirrors those layers into history entries:
 // opening one pushes an entry, and Back closes the topmost layer the same way Escape does. Forward is not restorable
 // (the layer is gone), so it is stepped back out of rather than left pointing at nothing.
-const at = () => document.querySelector('.dock-item[aria-current="page"]')?.dataset.tab || 'home';
+const at = () => document.querySelector('.dock-item[aria-current="page"]')?.dataset.tab || document.querySelector('.dock')?.dataset.current || 'home';
 const depth = () => (at() !== 'home' ? 1 : 0)
   + (document.querySelector('#detail-overlay') ? 1 : 0)
   + (document.body.classList.contains('in-player') ? 1 : 0)

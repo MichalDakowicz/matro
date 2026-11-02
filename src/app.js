@@ -24,6 +24,7 @@ const icons = {
   trash: '<path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13"/>', upload: '<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/>',
   arrows: '<path d="M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4"/>', network: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/>',
   download: '<path d="M12 4v11m-4.5-4.5 4.5 4.5 4.5-4.5M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/>',
+  downloading: '<g class="dl-arrow"><path d="M12 3v10m-4.5-4.5 4.5 4.5 4.5-4.5"/></g><path d="M4 16v2.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V16"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>'
 };
 const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.file}</svg>`;
@@ -120,6 +121,12 @@ function hoverSeek(event) {
 }
 const finishMargin = duration => Math.min(10, duration * .05);
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 5000); }
+// Offline copies exist only where the host app offers them (the web and phone apps); the desktop plays files in place.
+const offlineText = id => { const o = api.offline, p = o.progress(id); return p !== null ? `Saving ${p}%` : o.has(id) ? 'Saved' : 'Save offline'; };
+const offlineIcon = id => { const o = api.offline; return icon(o.progress(id) !== null ? 'downloading' : o.has(id) ? 'check' : 'download'); };
+const offlineBtn = (id, pill) => api.offline ? `<button class="${pill ? 'pill' : 'text-button'} offline-btn ${api.offline.progress(id) !== null ? 'saving' : ''}" data-offline="${id}" style="--p:${api.offline.progress(id) ?? 0}" aria-label="Save for offline viewing" aria-pressed="${api.offline.has(id)}"><span class="offline-icon">${offlineIcon(id)}</span><span class="offline-text">${offlineText(id)}</span></button>` : '';
+function refreshOffline() { for (const btn of document.querySelectorAll('[data-offline]')) { const id = btn.dataset.offline, p = api.offline.progress(id); btn.querySelector('.offline-text').textContent = offlineText(id); btn.classList.toggle('saving', p !== null); btn.style.setProperty('--p', p ?? 0); const icon = btn.querySelector('.offline-icon'), name = p !== null ? 'downloading' : api.offline.has(id) ? 'check' : 'download'; if (icon.dataset.name !== name) { icon.dataset.name = name; icon.innerHTML = offlineIcon(id); } btn.setAttribute('aria-pressed', String(api.offline.has(btn.dataset.offline))); } }
+api?.offline?.onChange(refreshOffline);
 async function attempt(fn) { try { return await fn(); } catch (error) { toast(error.message || String(error)); return null; } }
 function save() { if (!stateLoaded) return Promise.resolve(); return api.save({ progress: library.progress, queue: library.queue, preferences: library.preferences, markers: library.markers || {} }); }
 const completed = id => !!library.progress[id]?.completed;
@@ -247,7 +254,7 @@ async function loadFrames() {
 }
 function dock() {
   const items = [['movie', 'Movies', 'movies'], ['show', 'Shows', 'shows'], ...(library.items.some(i => i.kind === 'audio') ? [['audio', 'Music', 'music']] : []), ['search', 'Search', 'search'], ['folders', 'Folders', 'folder'], ['downloads', 'Downloads', 'download']];
-  return `<div class="dock-wrap"><button class="dock-back" data-action="close-detail" aria-label="Close details" title="Back (Esc)">${icon('back')}</button><nav class="dock" aria-label="Library">${items.filter(([id]) => !api.hiddenTabs?.includes(id)).map(([id, label, glyph]) => `<button class="dock-item" data-tab="${id}" ${id === 'downloads' ? 'aria-label="Downloads"' : ''} ${tab === id && !folderFilter ? `aria-current="page" title="Back to the landing page"` : ''}>${icon(glyph)}<span class="dock-label">${label}</span>${['movie', 'show', 'audio'].includes(id) ? `<span class="sr-only"> ${groups(id).length}</span>` : ''}</button>`).join('')}</nav></div>`;
+  return `<div class="dock-wrap"><button class="dock-back" data-action="close-detail" aria-label="Close details" title="Back (Esc)">${icon('back')}</button><nav class="dock" aria-label="Library" data-current="${tab}">${items.filter(([id]) => !api.hiddenTabs?.includes(id) && !api.navHidden?.includes(id)).map(([id, label, glyph]) => `<button class="dock-item" data-tab="${id}" ${id === 'downloads' ? 'aria-label="Downloads"' : ''} ${tab === id && !folderFilter ? `aria-current="page" title="Back to the landing page"` : ''}>${icon(glyph)}<span class="dock-label">${label}</span>${['movie', 'show', 'audio'].includes(id) ? `<span class="sr-only"> ${groups(id).length}</span>` : ''}</button>`).join('')}</nav></div>`;
 }
 let footerOpen = false;
 function footer() {
@@ -577,7 +584,7 @@ function detail(id, focus = true) {
       <p class="detail-sub">${[...facts, selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie', selected.format].map(esc).join(' <span aria-hidden="true">·</span> ')}</p>
       ${m?.overview ? `<p class="detail-overview">${esc(m.overview)}</p>` : ''}
       <div class="detail-actions">${selected.kind === 'movie' && api.canCompareEditions !== false ? `<button class="pill" data-upgrade="${selected.id}">Find better quality / compare editions</button>` : ''}<button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
-      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
+      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button>${selected.kind === 'show' && items.length > 1 ? '' : offlineBtn(selected.id, true)}<button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
       ${m?.rating ? `<div class="ratings"><div><p class="rating-label">TMDB</p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}</div>
     <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
       ${castPanel(m)}${productionPanel(m)}${filePanel(selected, m)}</div></div>`;
@@ -604,7 +611,7 @@ const episodeInfo = item => meta(item)?.episodes?.[item.season]?.[item.episode] 
 function episodeCard(i, resume) {
   const e = episodeInfo(i), p = library.progress[i.id], done = completed(i.id), now = resume?.id === i.id, pct = p?.duration ? Math.min(100, p.position / p.duration * 100) : 0;
   const facts = [e?.runtime ? `${e.runtime}m` : null, i.format, now ? `${fmt(p.position)} watched` : done ? 'Watched' : p?.position > 0 ? 'In progress' : null].filter(Boolean);
-  return `<div class="episode-entry ${now ? 'current' : ''}"><button class="episode-row" data-play="${i.id}"><span class="episode-still ${artFor(i)}">${e?.still ? `<img src="${esc(e.still)}" alt="" loading="lazy" draggable="false">` : ''}<span class="episode-code">${code(i)}</span>${done ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : ''}${pct && !done ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}<span class="episode-play">${icon('play')}</span></span><span class="episode-text min"><strong>${i.prelude ? '' : `${i.episode}. `}${esc(episodeName(i))}</strong><small>${facts.map(esc).join(' · ')}</small>${e?.overview ? `<span class="episode-overview">${esc(e.overview)}</span>` : ''}</span></button><button class="text-button" data-complete="${i.id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(i.title)}">${done ? 'Completed' : 'Mark complete'}</button></div>`;
+  return `<div class="episode-entry ${now ? 'current' : ''}"><button class="episode-row" data-play="${i.id}"><span class="episode-still ${artFor(i)}">${e?.still ? `<img src="${esc(e.still)}" alt="" loading="lazy" draggable="false">` : ''}<span class="episode-code">${code(i)}</span>${done ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : ''}${pct && !done ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}<span class="episode-play">${icon('play')}</span></span><span class="episode-text min"><strong>${i.prelude ? '' : `${i.episode}. `}${esc(episodeName(i))}</strong><small>${facts.map(esc).join(' · ')}</small>${e?.overview ? `<span class="episode-overview">${esc(e.overview)}</span>` : ''}</span></button><button class="text-button" data-complete="${i.id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(i.title)}">${done ? 'Completed' : 'Mark complete'}</button>${offlineBtn(i.id)}</div>`;
 }
 function episodesPanel(selected, items, resume, target) {
   const seasons = [...new Set(items.map(i => i.season))], key = titleKey(selected);
@@ -1104,6 +1111,7 @@ const actions = {
 document.addEventListener('click', event => {
   const btn = event.target.closest('button'); if (!btn || btn.disabled) return;
   void attempt(async () => {
+    if (btn.dataset.offline) return api.offline.toggle(btn.dataset.offline);
     if (btn.dataset.complete) return markComplete(btn.dataset.complete);
     if (btn.dataset.removeContinue) return removeContinue(btn.dataset.removeContinue);
     if (btn.dataset.markerStart) { markerDraft = { type: btn.dataset.markerStart, start: offset + video.currentTime }; renderTracks(); return; }

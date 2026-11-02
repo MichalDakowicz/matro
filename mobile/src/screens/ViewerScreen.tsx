@@ -5,6 +5,7 @@ import * as ScreenOrientation from 'expo-screen-orientation';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { colors, fonts } from '../theme';
 import { PrimaryPill, TextButton } from '../ui';
+import { onDownloadMessage } from '../lib/notify';
 
 type Props = { base: string; onSignedOut: () => void; onChangeServer: () => void };
 
@@ -33,6 +34,8 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const onMessage = useCallback((e: WebViewMessageEvent) => {
     const msg = e.nativeEvent.data;
     if (msg === 'logout') onSignedOut();
+    // A title is being saved for offline use: show its progress in a notification.
+    if (msg.startsWith('dl:')) void onDownloadMessage(msg);
     // Fullscreen: turn the phone sideways so the picture fills the screen, and back when it ends.
     if (msg === 'fs:1' && !fullscreen.current) {
       fullscreen.current = true;

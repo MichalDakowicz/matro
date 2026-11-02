@@ -1,12 +1,20 @@
 import { get, post } from './http.js';
 import { h } from './dom.js';
+import { recall, remember } from './offline.js';
 
 // The way in: nothing else loads until you are signed in. Two forms share the page: sign in, and join with a one-time
 // invite code from the head account (opened directly by a link ending in #/join/CODE). Enter moves between fields and submits.
 // The head account itself is created from the command line on the server, so a fresh server shows instructions instead.
 export async function signIn(root) {
-  const { setup, user } = await get('/api/status');
-  if (user) return user;
+  let status;
+  try { status = await get('/api/status'); } catch (error) {
+    // No connection: carry on as the person who was signed in last time, so saved titles can be played.
+    const known = error instanceof TypeError && await recall('user');
+    if (known) return known;
+    throw error;
+  }
+  const { setup, user } = status;
+  if (user) { remember('user', user); return user; }
   if (setup) {
     root.replaceChildren(h('main', { class: 'page' }, h('section', { class: 'welcome' }, h('p', { class: 'show-kicker' }, 'Matro · first run'), h('h1', {}, 'This server needs setting up.'),
       h('p', {}, 'Create the head account on the machine that runs Matro, then come back and sign in here. Everything after that happens in the browser.'),

@@ -11,11 +11,11 @@ const { createDownloads } = require('./downloads');
 function createApp({ dataDir = config.dataDir, tmdb: tmdbOptions, downloads: downloadOptions } = {}) {
   const db = open(require('node:path').join(dataDir, 'matro.db'));
   const auth = createAuth(db), library = createLibrary(db), router = createRouter();
-  const app = { db, auth, library, router, tmdb: createTmdb(db, tmdbOptions), invites: createInvites(db) };
+  const app = { db, dataDir, auth, library, router, tmdb: createTmdb(db, tmdbOptions), invites: createInvites(db) };
   app.downloads = createDownloads({ dataDir, library, tmdb: app.tmdb, ...downloadOptions });
   for (const name of ['account', 'library', 'play', 'admin', 'downloads']) require(`./routes/${name}`).register(app);
   const server = createServer({ router, publicDir: config.publicDir, authenticate: token => auth.user(token), config });
-  server.on('close', () => app.downloads.close());
+  server.on('close', () => { app.downloads.close(); app.offline?.close(); });
   return { app, server, db, library };
 }
 
