@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('matro', {
   downloadSearch: options => ipcRenderer.invoke('downloads:search', options),
   downloadAdd: options => ipcRenderer.invoke('downloads:add', options),
   downloadList: target => ipcRenderer.invoke('downloads:list', target),
+  serverConnect: address => ipcRenderer.invoke('server:connect', address),
   load: () => ipcRenderer.invoke('library:load'),
   addFolder: () => ipcRenderer.invoke('library:folder'),
   connectSSH: options => ipcRenderer.invoke('library:ssh', options),

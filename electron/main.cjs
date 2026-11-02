@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, protocol, net, session, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog, protocol, net, session, shell, safeStorage } = require('electron');
 const fs = require('node:fs/promises');
 const { createTorrents } = require('./torrents.cjs');
 const { createPathChecker, destinationFile } = require('./download-files.cjs');
@@ -9,6 +9,7 @@ const { remote } = require('./ssh-media.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { scan, describe, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
+const { connect: connectServer, createServerLink, sameOrigin } = require('./server-link.cjs');
 const { createStreamServer } = require('./stream.cjs');
 const { createPreviews } = require('./previews.cjs');
 const { createSegments } = require('./segments.cjs');
@@ -16,7 +17,7 @@ const { createSegmentScheduler } = require('./segment-scheduler.cjs');
 const { readEnv, credentials, createMetadata, cleanQuery, yearOf } = require('./metadata.cjs');
 const previews = createPreviews();
 protocol.registerSchemesAsPrivileged([{ scheme: 'matro', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
-let win, streams, storage, segments, scanner, metadata, torrents, upgrades, embeddedSubtitles;
+let serverWin, serverLink, win, streams, storage, segments, scanner, metadata, torrents, upgrades, embeddedSubtitles;
 if (!app.isPackaged && process.env.MATRO_USER_DATA) app.setPath('userData', path.resolve(process.env.MATRO_USER_DATA));
 let state = { folders: [], items: [], progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 } };
 let writeQueue = Promise.resolve();
@@ -54,6 +55,25 @@ async function rescan() {
   state.libraryVersion = 2;
   await persist(); scanner?.invalidate(); void metadata?.sync(state.items); return { ...state, warnings: results.filter(r => r.error).map(r => `${r.root}: ${r.error}`) };
 }
+// The linked server's web UI in its own framed window: no preload (the page brings its own window.matro) and its own cookie jar.
+function openServerWindow(url) {
+  if (serverWin && !serverWin.isDestroyed()) { serverWin.loadURL(url); serverWin.focus(); win.hide(); return; }
+  const partition = 'persist:matro-server';
+  serverWin = new BrowserWindow({ width: 1280, height: 860, minWidth: 360, minHeight: 480, backgroundColor: '#0a0a0b', title: 'Matro', icon: path.join(__dirname, '../assets/icon.png'), autoHideMenuBar: true, show: false, webPreferences: { partition, contextIsolation: true, sandbox: true, nodeIntegration: false } });
+  const contents = serverWin.webContents;
+  session.fromPartition(partition).setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  const local = () => { serverWin.destroy(); win.maximize(); win.show(); };
+  serverWin.setMenu(Menu.buildFromTemplate([{ label: 'Matro', submenu: [
+    { label: 'Use local library', click: local },
+    { label: 'Disconnect from server', click: async () => { await serverLink.clear(); local(); } },
+    { type: 'separator' }, { role: 'reload' }, { role: 'togglefullscreen' }, { role: 'quit' }] }]));
+  contents.setWindowOpenHandler(({ url: target }) => { if (/^https?:/.test(target)) void shell.openExternal(target); return { action: 'deny' }; });
+  contents.on('will-navigate', (event, target) => { if (!sameOrigin(url, target)) { event.preventDefault(); if (/^https?:/.test(target)) void shell.openExternal(target); } });
+  serverWin.once('ready-to-show', () => { serverWin.maximize(); serverWin.show(); });
+  serverWin.on('closed', () => { if (!win.isDestroyed() && !win.isVisible()) win.destroy(); });
+  serverWin.loadURL(url).catch(() => { /* an unreachable server shows Chromium's error page; the menu still leads back to the local library */ });
+  win.hide();
+}
 app.whenReady().then(async () => {
   storage = path.join(app.getPath('userData'), 'library.json');
   embeddedSubtitles = createEmbeddedSubtitles({ dir: path.join(app.getPath('userData'), 'subtitles'), stat: mediaFS.stat, probe, remote,
@@ -71,6 +91,9 @@ app.whenReady().then(async () => {
   }
   if (state.libraryVersion !== 2) await rescan();
   streams = await createStreamServer();
+  serverLink = createServerLink(app.getPath('userData'));
+  // A saved server link is the opt-in: Matro opens that server's web UI, like the Android receiver. MATRO_LOCAL=1 skips it for a run.
+  const linked = process.env.MATRO_LOCAL ? null : await serverLink.get();
   protocol.handle('matro', request => {
     const url = new URL(request.url);
     const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg','/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
@@ -81,7 +104,7 @@ app.whenReady().then(async () => {
   });
   win = new BrowserWindow({ width: 1440, height: 940, minWidth: 900, minHeight: 640, backgroundColor: '#0a0a0b', title: 'Matro', icon: path.join(__dirname, '../assets/icon.png'), frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false } });
   // Open maximized, shown only once the first frame is ready so the window never flashes at its default size.
-  win.once('ready-to-show', () => { win.maximize(); win.show(); });
+  win.once('ready-to-show', () => { if (linked) openServerWindow(linked); else { win.maximize(); win.show(); } });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
   // Page zoom: Ctrl + / Ctrl = zoom in (the default menu only binds Ctrl+Shift+=), Ctrl - out, Ctrl 0 reset.
@@ -122,6 +145,8 @@ app.whenReady().then(async () => {
     });
     return downloadArtwork(items);
   });
+  handle('server:get', () => serverLink.get());
+  handle('server:connect', async address => { const { url } = await connectServer(address, (target, options) => net.fetch(target, options)); await serverLink.set(url); openServerWindow(url); return url; });
   handle('library:load', async () => { await metadata.loaded; return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
   handle('library:ssh', async options => {
     const root = remote.register(options);

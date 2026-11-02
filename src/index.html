@@ -31,6 +31,16 @@
       <div class="show-actions"><button id="ssh-connect" class="pill primary" type="submit">Connect and add folder</button><button class="pill" type="button" data-action="close-ssh">Cancel</button></div>
     </form>
   </dialog>
+  <dialog id="server-dialog" aria-labelledby="server-title">
+    <form id="server-form">
+      <div class="section-heading"><h2 id="server-title">Connect to a Matro server</h2><button type="button" class="icon-button" data-action="close-server" aria-label="Close server settings">×</button></div>
+      <p class="muted">Watch a library hosted on your own Matro server. You sign in on the server's page; the address is the only thing saved here.</p>
+      <div class="ssh-fields"><label class="ssh-wide">Server address<input name="address" required autocomplete="off" placeholder="matro.example.com or 192.168.1.5:8484"></label></div>
+      <p class="note">Matro then opens the server in this window. Its menu (Alt) has <em>Use local library</em> and <em>Disconnect from server</em>. Start with MATRO_LOCAL=1 to open the local library once.</p>
+      <p id="server-status" role="status" aria-live="polite"></p>
+      <div class="show-actions"><button id="server-connect" class="pill primary" type="submit">Connect</button><button class="pill" type="button" data-action="close-server">Cancel</button></div>
+    </form>
+  </dialog>
   <script type="module" src="app.js"></script>
 </body>
 </html>
