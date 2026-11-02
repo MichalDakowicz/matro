@@ -1,6 +1,14 @@
 import { createDownloadBrowser } from './downloads.js';
 const api = window.matro;
-if (api.receiver?.active) document.body.classList.add('receiver');
+if (api.receiver?.active) {
+  document.body.classList.add('receiver');
+  // The signed-in account, next to the logo, opens the account screen (as the profile button does in the browser).
+  let hue = 2166136261; for (const c of api.receiver.username) hue = Math.imul(hue ^ c.codePointAt(0), 16777619);
+  const avatar = document.createElement('button');
+  avatar.className = 'account-button'; avatar.dataset.action = 'account'; avatar.title = api.receiver.username; avatar.setAttribute('aria-label', `Account: ${api.receiver.username}`);
+  avatar.style.setProperty('--h', String((hue >>> 0) % 360)); avatar.textContent = api.receiver.username.slice(0, 1).toUpperCase();
+  document.querySelector('.window-zone .brand')?.after(avatar);
+}
 const downloads = createDownloadBrowser(api, { play: id => { void attempt(() => play(id, false, true)); } });
 const $ = selector => document.querySelector(selector);
 const root = $('#app');
