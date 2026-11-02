@@ -64,3 +64,17 @@ test('removing a title frees every piece', async () => {
   assert.deepEqual(await backend.keys(''), []);
   assert.deepEqual(await store.usage(), { bytes: 0, titles: 0 });
 });
+
+test('subtitles added offline are kept with the saved title; SRT becomes WebVTT, ASS waits for the server', async () => {
+  const { createStore, memoryBackend, toVtt, CHUNK } = await load();
+  assert.equal(toVtt('1\r\n00:00:01,500 --> 00:00:02,000\r\nHi\r\n', 'a.srt'), 'WEBVTT\n\n1\n00:00:01.500 --> 00:00:02.000\nHi\n');
+  assert.equal(toVtt('WEBVTT\n\nx', 'a.vtt'), 'WEBVTT\n\nx');
+  assert.equal(toVtt('[Script Info]', 'a.ass'), null);
+  const store = createStore(memoryBackend());
+  assert.equal(await store.addSubtitle('missing', '1', {}, 'x'), false);
+  await store.download({ id: 'f', size: CHUNK, type: 'video/mp4', info: { subtitles: [] }, fetchRange: source(CHUNK).fetchRange });
+  assert.equal(await store.addSubtitle('f', '77', { index: 77, language: 'pl' }, 'WEBVTT'), true);
+  const record = await store.meta('f');
+  assert.deepEqual(record.info.subtitles.map(s => s.index), [77]);
+  assert.equal(record.subtitles[77], 'WEBVTT');
+});

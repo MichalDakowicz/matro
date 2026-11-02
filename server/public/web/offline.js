@@ -38,6 +38,18 @@ const urls = new Map(); // id -> blob: address, kept for the page's lifetime
 const jobs = new Map(); // id -> { controller, percent }
 const listeners = new Set();
 const changed = () => { for (const callback of listeners) callback(); };
+// Subtitle files added with no connection wait here and are sent to the server when it answers again.
+export const queueSubtitle = entry => backend.set(`pending:sub:${Date.now()}${Math.random().toString(36).slice(2, 6)}`, entry);
+export async function flushSubtitles() {
+  let sent = 0;
+  for (const key of (await backend.keys('pending:sub:')).sort()) {
+    const entry = await backend.get(key);
+    try { await api('POST', `/api/items/${entry.id}/subtitles?${entry.query}`, new Blob([entry.body])); } catch (error) { if (isOffline(error)) break; }
+    await backend.delete(key); sent++; // a rejected file (bad format) is dropped rather than retried for ever
+  }
+  return sent;
+}
+export const pendingSubtitles = async () => (await backend.keys('pending:sub:')).length;
 export const refresh = changed;
 export const onChange = callback => { listeners.add(callback); return () => listeners.delete(callback); };
 export const progressOf = id => jobs.get(id)?.percent ?? null;
@@ -53,17 +65,23 @@ export async function playUrl(id) {
 export async function savedInfo(id) { const record = await store.meta(id); return record?.complete ? record.info : null; }
 export async function savedSubtitles(id, key) { const record = await store.meta(id); return record?.complete ? record.subtitles[key] ?? null : null; }
 
-const fetchRange = id => async (start, end) => {
+// One byte range, read as a stream so progress moves smoothly instead of once per piece.
+const fetchRange = id => async (start, end, onBytes = () => {}) => {
   const res = await fetch(`/api/items/${id}/offline/file`, { credentials: 'same-origin', headers: { range: `bytes=${start}-${end}` }, signal: jobs.get(id)?.controller.signal });
   if (res.status !== 206 && res.status !== 200) throw new Error(`The server answered ${res.status}.`);
-  return res.blob();
+  const parts = [], reader = res.body.getReader(); let got = 0;
+  for (;;) { const { done, value } = await reader.read(); if (done) break; parts.push(value); got += value.length; onBytes(got); }
+  return new Blob(parts);
 };
+// The phone app (a WebView) turns these into a notification with the progress; the browser ignores them.
+const tell = payload => { try { window.ReactNativeWebView?.postMessage(`dl:${JSON.stringify(payload)}`); } catch { /* not in the app */ } };
 
 // `shape` turns the server's /info into what the player shows; here only what the saved file can actually do is kept.
 export async function save(id, { info, title, subtitleTracks, fetchText }) {
   if (jobs.has(id)) return;
   navigator.storage?.persist?.().catch(() => {}); // ask the browser not to evict saved titles under storage pressure
-  const job = { controller: new AbortController(), percent: 0 }; jobs.set(id, job); changed();
+  const job = { controller: new AbortController(), percent: 0 }; jobs.set(id, job); changed(); tell({ id, title, state: 'saving', percent: 0 });
+  let outcome = 'failed';
   try {
     let ready;
     for (let tries = 0; ; tries++) {
@@ -76,9 +94,11 @@ export async function save(id, { info, title, subtitleTracks, fetchText }) {
     const subtitles = {};
     for (const track of subtitleTracks) { try { subtitles[track.key] = await fetchText(track); } catch { /* a missing subtitle must not block the video */ } }
     await store.download({ id, size: ready.size, type: ready.type, info, subtitles, title, fetchRange: fetchRange(id), signal: job.controller.signal,
-      onProgress: (done, size) => { job.percent = Math.round(done / size * 100); changed(); } });
+      onProgress: (done, size) => { const percent = Math.floor(done / size * 100); if (percent === job.percent) return; job.percent = percent; changed(); tell({ id, title, state: 'saving', percent }); } });
+    outcome = 'saved';
     if (urls.has(id)) { URL.revokeObjectURL(urls.get(id)); urls.delete(id); }
-  } finally { jobs.delete(id); changed(); }
+  } catch (error) { outcome = error.name === 'AbortError' ? 'stopped' : 'failed'; throw error;
+  } finally { jobs.delete(id); changed(); tell({ id, title, state: outcome }); }
 }
 export const cancel = id => jobs.get(id)?.controller.abort();
 export async function remove(id) {

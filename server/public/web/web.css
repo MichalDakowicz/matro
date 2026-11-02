@@ -134,3 +134,11 @@ body.no-fullscreen [data-action="fullscreen"]{display:none!important}
 .offline-btn[aria-pressed="true"] .offline-text{color:var(--good,#9fd6b0)}
 .episode-entry>.offline-btn{margin-left:auto}
 @media (max-width:760px){.episode-entry>.offline-btn{position:absolute;right:8px;top:5px;z-index:2;font-size:12px}}
+/* Save offline: the arrow bobs while saving and a ring fills around the button as the file arrives. */
+.offline-btn{position:relative;display:inline-flex;align-items:center;gap:6px}
+.offline-btn .offline-icon{display:inline-flex}.offline-btn .offline-icon svg{width:16px;height:16px}
+.pill.offline-btn .offline-icon svg{width:20px;height:20px}
+.offline-btn.saving::after{content:'';position:absolute;inset:-2px;border-radius:inherit;padding:2px;pointer-events:none;background:conic-gradient(var(--primary) calc(var(--p,0) * 1%),transparent 0);-webkit-mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0);mask-composite:exclude;transition:background .3s}
+.offline-btn.saving .dl-arrow{animation:dl-bob 1.1s cubic-bezier(.2,.75,.15,1) infinite}
+@keyframes dl-bob{0%{transform:translateY(-3px);opacity:0}40%{opacity:1}100%{transform:translateY(4px);opacity:0}}
+@media (prefers-reduced-motion:reduce){.offline-btn.saving .dl-arrow{animation:none}}

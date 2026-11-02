@@ -21,6 +21,8 @@ export function openProfile({ session, getState, save, signOut }) {
   const onKey = e => { if (e.key === 'Escape' && !document.querySelector('dialog[open]')) { e.stopPropagation(); close(); } };
   document.addEventListener('keydown', onKey, true);
 
+  // The nav dock has no Folders or Downloads tab on the web; a click on a throwaway tab button takes the page there.
+  const open = tab => { close(); const go = h('button', { 'data-tab': tab, hidden: true }); document.body.append(go); go.click(); go.remove(); };
   const user = session.user, admin = user.role === 'admin', state = getState();
   const done = Object.values(state?.progress || {}).filter(p => p.completed).length;
   const going = Object.values(state?.progress || {}).filter(p => !p.completed && p.position > 10 && !p.hidden).length;
@@ -109,7 +111,7 @@ export function openProfile({ session, getState, save, signOut }) {
       h('header', { class: 'page-head' }, h('div', { class: 'web-who' }, avatar(user.username, true), h('div', {}, h('h1', { class: 'page-title' }, user.username), h('p', { class: 'page-sub' }, admin ? 'Head account · looks after the library and everyone on it' : 'Viewer · watches and adds subtitles')))),
       section('Your watching', null, stats), section('Dub and subtitles', forget, h('p', { class: 'muted' }, 'The player remembers which audio and subtitle language you pick for each show or film, so a dub chosen in one episode carries through the series.')),
       section('Saved for offline', null, space, saved), section('Subtitles you added', null, added), section('Password', null, password),
-      admin ? section('Downloads', null, h('p', { class: 'muted' }, 'Find films and series, add magnet links, and manage downloads on the Matro host.'), h('button', { class: 'pill primary', type: 'button', onclick: () => { close(); document.querySelector('.dock-item[data-tab="downloads"]')?.click(); } }, 'Open downloads')) : null,
+      admin ? section('Library and downloads', null, h('p', { class: 'muted' }, 'Add or remove folders and uploads, find films and series, add magnet links, and manage downloads on the Matro host.'), h('div', { class: 'show-actions' }, h('button', { class: 'pill primary', type: 'button', onclick: () => open('downloads') }, 'Open downloads'), h('button', { class: 'pill', type: 'button', onclick: () => open('folders') }, 'Open folders'))) : null,
       admin ? section('People', null, h('p', { class: 'page-sub', style: { margin: '-6px 0 16px' } }, 'Viewers keep their own progress and choices and can add subtitles. Only you can add or remove films and shows (Folders). To add someone, create a one-time invite code and send it to them: they sign up with it and pick their own password.'), people, h('h3', { class: 'web-sub' }, 'Invites'), invites, addPerson) : null,
       h('div', { class: 'show-actions' }, h('button', { class: 'pill', type: 'button', onclick: signOut }, 'Sign out'))));
   document.body.append(layer); document.body.classList.add('web-layer-open');

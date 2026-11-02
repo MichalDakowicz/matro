@@ -3,6 +3,7 @@
 import { get, post, put, del, api } from './http.js';
 import { h, say, dialog, languageSelect } from './dom.js';
 import * as offline from './offline.js';
+import { toVtt } from './offline-store.js';
 
 const SIDECAR = 10000; // uploaded subtitle tracks get indexes from here up, as sidecar files do on the desktop
 const KIND = { full: '', forced: ' (forced)', sdh: ' (SDH)' };
@@ -28,6 +29,7 @@ export function createAdapter(session) {
   // The set mirrors what is stored, whoever changed it (this page, the profile list, a finished download).
   const sync = () => offline.store.list().then(list => { saved.clear(); for (const r of list) if (r.complete) saved.add(r.id); }).catch(() => {});
   sync().then(offline.refresh); offline.onChange(sync);
+  window.addEventListener('online', () => offline.flushSubtitles().then(n => { if (n) say(`Sent ${n} subtitle file${n === 1 ? '' : 's'} added while offline.`); }).catch(() => {}));
 
   // Without a connection the catalog comes from the last visit, so saved titles can still be opened. Progress made meanwhile
   // is kept on this device and sent the next time the server answers.
@@ -36,6 +38,7 @@ export function createAdapter(session) {
     try {
       const pending = await offline.recall('pending');
       if (pending) { try { await put('/api/state', pending); await offline.remember('pending', null); } catch (error) { if (!offline.isOffline(error)) throw error; } }
+      offline.flushSubtitles().then(n => { if (n) say(`Sent ${n} subtitle file${n === 1 ? '' : 's'} added while offline.`); }).catch(() => {});
       data = await get('/api/library');
       data.metadata = artwork(data.metadata);
       offline.remember('library', data);
@@ -89,13 +92,26 @@ export function createAdapter(session) {
         const q = new URLSearchParams({ name: name.value, lang: language.value, kind: kind.value, filename: file.files[0].name });
         const { subtitle } = await api('POST', `/api/items/${id}/subtitles?${q}`, file.files[0]);
         box.close(subtitle);
-      } catch (error) { status.textContent = error.message; submit.disabled = false; }
+      } catch (error) {
+        // No connection: keep the file on this device (shown now, sent when the server is reachable again).
+        if (offline.isOffline(error) && saved.has(id)) {
+          const raw = await file.files[0].text(), vtt = toVtt(raw, file.files[0].name);
+          if (!vtt) { status.textContent = 'Without a connection only SRT and WebVTT files can be added. Try ASS and SSA files when you are back online.'; submit.disabled = false; return; }
+          const index = SIDECAR * 1000 + Date.now() % 1000000, local = track({ id: index - SIDECAR, name: `${name.value} · sends when online`, language: language.value, kind: kind.value, addedBy: session.user.username });
+          await offline.queueSubtitle({ id, query: new URLSearchParams({ name: name.value, lang: language.value, kind: kind.value, filename: file.files[0].name }).toString(), body: raw });
+          await offline.store.addSubtitle(id, String(index), local, vtt);
+          details.delete(id);
+          box.close({ local, vtt }); return;
+        }
+        status.textContent = error.message; submit.disabled = false;
+      }
     } }, h('p', { class: 'muted' }, 'Everyone who watches this title can pick these subtitles. You and the head account can change or remove them later from your profile.'),
     h('div', { class: 'ssh-fields web-fields' }, h('label', { class: 'ssh-wide' }, 'Subtitle file (SRT, VTT, ASS or SSA)', file), h('label', { class: 'ssh-wide' }, 'Name shown to everyone', name), h('label', {}, 'Language', language), h('label', {}, 'Type', kind)),
     status, h('div', { class: 'show-actions' }, submit, h('button', { class: 'pill', type: 'button', onclick: () => box.close(null) }, 'Cancel')));
     const box = dialog('Add subtitles', form);
     const subtitle = await box.done;
     if (!subtitle) return null;
+    if (subtitle.local) return { text: subtitle.vtt, track: subtitle.local };
     const text = await subtitles({ id, index: SIDECAR + subtitle.id });
     return { text, track: track({ ...subtitle, addedBy: session.user.username }) };
   }
@@ -166,6 +182,7 @@ export function createAdapter(session) {
         await offline.remove(id); saved.delete(id); say('Removed from this device.'); return;
       }
       const item = latest?.items.find(i => i.id === id);
+      say('Download started. You can keep browsing; it continues while the app is open.');
       try {
         const info = await get(`/api/items/${id}/info`);
         const embedded = info.embedded.filter(t => t.text).map(({ forced: _f, ...t }) => t);
@@ -207,7 +224,9 @@ export function createAdapter(session) {
     connectSSH: unsupported('SSH sources'), setPrelude: unsupported('Preludes'), 
     downloadHostOnly: true,
     offline: offlineApi,
+    // Viewers cannot open these pages at all. The head account reaches them from its profile page, not the nav dock.
     hiddenTabs: session.user.role === 'admin' ? [] : ['folders', 'downloads'],
+    navHidden: ['folders', 'downloads'],
     canCompareEditions: session.user.role === 'admin',
     downloadSeriesSearch: value => download('series-search', value), downloadSeriesReleases: value => download('series-releases', value),
     downloadSeriesSource: async () => { say('Release information is provided by EZTV.'); },

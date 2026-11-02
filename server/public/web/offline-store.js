@@ -8,6 +8,14 @@ export const chunkKey = (id, n) => `chunk:${id}:${n}`;
 export const chunkCount = size => Math.ceil(size / CHUNK);
 export const chunkRange = (size, n) => ({ start: n * CHUNK, end: Math.min(size, (n + 1) * CHUNK) - 1 });
 
+// SRT and WebVTT can be shown as they are with a small fix; anything else (ASS/SSA) needs the server to convert it.
+export function toVtt(text, filename = '') {
+  const t = String(text).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+  if (/^WEBVTT/.test(t)) return t;
+  if (/\.srt$/i.test(filename)) return 'WEBVTT\n\n' + t.replace(/(\d\d:\d\d:\d\d),(\d{3})/g, '$1.$2');
+  return null;
+}
+
 export function memoryBackend() {
   const map = new Map();
   return { get: async key => map.get(key), set: async (key, value) => { map.set(key, value); }, delete: async key => { map.delete(key); },
@@ -37,7 +45,7 @@ export function createStore(backend) {
     onProgress(have * CHUNK > size ? size : have * CHUNK, size);
     for (let n = have; n < total; n++) {
       if (signal?.aborted) throw new DOMException('Download paused.', 'AbortError');
-      const { start, end } = chunkRange(size, n), blob = await fetchRange(start, end);
+      const { start, end } = chunkRange(size, n), blob = await fetchRange(start, end, got => onProgress(Math.min(size, start + got), size));
       if (blob.size !== end - start + 1) throw new Error('The server sent an incomplete piece.');
       await backend.set(chunkKey(id, n), blob);
       record.have = n + 1;
@@ -68,5 +76,12 @@ export function createStore(backend) {
     for (const record of await list()) { titles += record.complete ? 1 : 0; bytes += Math.min(record.have * CHUNK, record.size); }
     return { bytes, titles };
   }
-  return { meta, list, download, remove: id => purge(id), file, usage };
+  // A subtitle added on this device to a saved title (works with no connection).
+  async function addSubtitle(id, key, track, text) {
+    const record = await meta(id);
+    if (!record) return false;
+    await backend.set(metaKey(id), { ...record, info: { ...record.info, subtitles: [...record.info.subtitles, track] }, subtitles: { ...record.subtitles, [key]: text } });
+    return true;
+  }
+  return { meta, list, addSubtitle, download, remove: id => purge(id), file, usage };
 }
