@@ -53,6 +53,14 @@ export const pendingSubtitles = async () => (await backend.keys('pending:sub:'))
 export const refresh = changed;
 export const onChange = callback => { listeners.add(callback); return () => listeners.delete(callback); };
 export const progressOf = id => jobs.get(id)?.percent ?? null;
+// What the Downloads page shows: saves in flight (with speed and time left) and the ones that stopped on an error.
+const failures = new Map();
+export const activeJobs = () => [...jobs].map(([id, j]) => {
+  const seconds = (Date.now() - j.started) / 1000, speed = j.state === 'saving' && seconds > 1 && j.got > 0 ? j.got / seconds : 0;
+  return { id, title: j.title, state: j.state, percent: j.percent, done: j.done || 0, size: j.size || 0, speed, left: speed ? Math.max(0, (j.size - j.done) / speed) : null };
+});
+export const failedJobs = () => [...failures].map(([id, f]) => ({ id, ...f }));
+export const dismissFailure = id => { failures.delete(id); changed(); };
 export const isSaved = async id => !!(await store.meta(id))?.complete;
 
 export async function playUrl(id) {
@@ -80,7 +88,8 @@ const tell = payload => { try { window.ReactNativeWebView?.postMessage(`dl:${JSO
 export async function save(id, { info, title, subtitleTracks, fetchText }) {
   if (jobs.has(id)) return;
   navigator.storage?.persist?.().catch(() => {}); // ask the browser not to evict saved titles under storage pressure
-  const job = { controller: new AbortController(), percent: 0 }; jobs.set(id, job); changed(); tell({ id, title, state: 'saving', percent: 0 });
+  failures.delete(id);
+  const job = { controller: new AbortController(), percent: 0, title, state: 'preparing', started: Date.now(), got: 0, done: 0, size: 0 }; jobs.set(id, job); changed(); tell({ id, title, state: 'saving', percent: 0 });
   let outcome = 'failed';
   try {
     let ready;
@@ -91,15 +100,18 @@ export async function save(id, { info, title, subtitleTracks, fetchText }) {
       await new Promise(resolve => setTimeout(resolve, 2000));
       if (job.controller.signal.aborted) throw new DOMException('Cancelled.', 'AbortError');
     }
+    job.state = 'saving'; job.started = Date.now(); changed();
     const subtitles = {};
     for (const track of subtitleTracks) { try { subtitles[track.key] = await fetchText(track); } catch { /* a missing subtitle must not block the video */ } }
     await store.download({ id, size: ready.size, type: ready.type, info, subtitles, title, fetchRange: fetchRange(id), signal: job.controller.signal,
-      onProgress: (done, size) => { const percent = Math.floor(done / size * 100); if (percent === job.percent) return; job.percent = percent; changed(); tell({ id, title, state: 'saving', percent }); } });
+      onProgress: (done, size) => { if (!job.base) job.base = done; job.got = done - job.base; job.done = done; job.size = size; const percent = Math.floor(done / size * 100); if (percent === job.percent) return; job.percent = percent; changed(); tell({ id, title, state: 'saving', percent }); } });
     outcome = 'saved';
     if (urls.has(id)) { URL.revokeObjectURL(urls.get(id)); urls.delete(id); }
-  } catch (error) { outcome = error.name === 'AbortError' ? 'stopped' : 'failed'; throw error;
+  } catch (error) { outcome = error.name === 'AbortError' ? 'stopped' : 'failed'; if (outcome === 'failed') failures.set(id, { title, error: error.message || 'The download failed.', at: Date.now() });
+    throw error;
   } finally { jobs.delete(id); changed(); tell({ id, title, state: outcome }); }
 }
+// Stored pieces of a save that is not running: nothing in flight and not finished.
 export const cancel = id => jobs.get(id)?.controller.abort();
 export async function remove(id) {
   cancel(id);
