@@ -4,7 +4,7 @@ const http = require('node:http');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { candidates, connect, createServerLink, sameOrigin, signIn, savedUrlSync } = require('../electron/server-link.cjs');
+const { candidates, connect, createServerLink, signIn } = require('../electron/server-link.cjs');
 
 const listen = handler => new Promise(resolve => { const server = http.createServer(handler).listen(0, '127.0.0.1', () => resolve(server)); });
 
@@ -39,10 +39,8 @@ test('the saved link round-trips, keeps the mode switch, and clears', async () =
   assert.equal(await link.get(), null);
   await link.set({ url: 'http://192.168.1.5:8484', enabled: true });
   assert.deepEqual(await createServerLink(dir).get(), { url: 'http://192.168.1.5:8484', enabled: true });
-  assert.equal(savedUrlSync(dir), 'http://192.168.1.5:8484');
   await link.set({ url: 'http://192.168.1.5:8484', enabled: false });
   assert.deepEqual(await link.get(), { url: 'http://192.168.1.5:8484', enabled: false });
-  assert.equal(savedUrlSync(dir), null);
   await link.clear();
   assert.equal(await link.get(), null);
   await fs.writeFile(path.join(dir, 'server.json'), '{"url":"file:///etc/passwd"}');
@@ -65,20 +63,4 @@ test('signIn posts credentials with the x-matro header and surfaces the server e
     await assert.rejects(signIn(base, 'ann', 'wrong'), /Wrong username or password/);
     assert.deepEqual(seen[0], ['POST', '/api/login', '1']);
   } finally { server.close(); }
-});
-
-test('only the linked origin stays in the window', () => {
-  assert.equal(sameOrigin('http://a:8484', 'http://a:8484/x?y=1'), true);
-  assert.equal(sameOrigin('http://a:8484', 'https://evil.example/'), false);
-  assert.equal(sameOrigin('http://a:8484', 'not a url'), false);
-});
-
-test('offline support: only http origins get the secure-origin switch, and the failure page escapes the address', () => {
-  const { insecureOrigin, failurePage } = require('../electron/server-link.cjs');
-  assert.equal(insecureOrigin('http://192.168.1.5:8484/x'), 'http://192.168.1.5:8484');
-  assert.equal(insecureOrigin('https://matro.example.com'), null);
-  assert.equal(insecureOrigin('nonsense'), null);
-  const page = decodeURIComponent(failurePage('http://a/"><script>x</script>').split(',')[1]);
-  assert.ok(!page.includes('<script>') && page.includes('Try again'));
-  assert.equal(savedUrlSync(path.join(os.tmpdir(), 'matro-no-such-dir')), null);
 });

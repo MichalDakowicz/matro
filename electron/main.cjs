@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, dialog, protocol, net, session, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, session, shell, safeStorage } = require('electron');
 const fs = require('node:fs/promises');
 const { createTorrents } = require('./torrents.cjs');
 const { createPathChecker, destinationFile } = require('./download-files.cjs');
@@ -9,7 +9,8 @@ const { remote } = require('./ssh-media.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { scan, describe, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
-const { PARTITION, signIn, connect: connectServer, createServerLink, sameOrigin, savedUrlSync, insecureOrigin, failurePage } = require('./server-link.cjs');
+const { signIn, connect: connectServer, createServerLink } = require('./server-link.cjs');
+const { createReceiver, proxyTarget } = require('./receiver.cjs');
 const { createStreamServer } = require('./stream.cjs');
 const { createPreviews } = require('./previews.cjs');
 const { createSegments } = require('./segments.cjs');
@@ -17,15 +18,13 @@ const { createSegmentScheduler } = require('./segment-scheduler.cjs');
 const { readEnv, credentials, createMetadata, cleanQuery, yearOf } = require('./metadata.cjs');
 const previews = createPreviews();
 protocol.registerSchemesAsPrivileged([{ scheme: 'matro', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
-let serverWin, serverLink, win, streams, storage, segments, scanner, metadata, torrents, upgrades, embeddedSubtitles;
+let receiver, linkInfo, receiverError, serverLink, win, streams, storage, segments, scanner, metadata, torrents, upgrades, embeddedSubtitles;
 if (!app.isPackaged && process.env.MATRO_USER_DATA) app.setPath('userData', path.resolve(process.env.MATRO_USER_DATA));
-// Offline saving in the server's web app needs a service worker, which Chromium allows only on secure origins.
-if (!process.env.MATRO_LOCAL) { const insecure = insecureOrigin(savedUrlSync(app.getPath('userData')) || ''); if (insecure) app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', insecure); }
 let state = { folders: [], items: [], progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 } };
 let writeQueue = Promise.resolve();
 function persist() { const contents = JSON.stringify(state); writeQueue = writeQueue.catch(() => {}).then(async () => { await fs.writeFile(storage + '.tmp', contents); await fs.rename(storage + '.tmp', storage); }); return writeQueue; }
 const find = id => { const item = state.items.find(i => i.id === id); if (!item) throw new Error('Media is no longer in the library.'); return item; };
-function handle(channel, fn) { ipcMain.handle(channel, (event, ...args) => { if (event.sender !== win.webContents || !event.senderFrame?.url.startsWith('matro://app/')) throw new Error('Untrusted caller'); return fn(...args); }); }
+function handle(channel, fn) { ipcMain.handle(channel, (event, ...args) => { if (event.sender !== win.webContents || !event.senderFrame?.url.startsWith('matro://app/')) throw new Error('Untrusted caller'); return (receiver?.handlers[channel] ?? fn)(...args); }); }
 async function downloadArtwork(items) {
   const titles = items.map(item => {
     const title = item.title || cleanQuery(item.name), year = item.year || yearOf(item.name), kind = item.kind === 'show' ? 'show' : 'movie';
@@ -57,27 +56,15 @@ async function rescan() {
   state.libraryVersion = 2;
   await persist(); scanner?.invalidate(); void metadata?.sync(state.items); return { ...state, warnings: results.filter(r => r.error).map(r => `${r.root}: ${r.error}`) };
 }
-// The linked server's web UI in its own framed window: no preload (the page brings its own window.matro) and its own cookie jar.
-function openServerWindow(url) {
-  if (serverWin && !serverWin.isDestroyed()) { serverWin.loadURL(url); serverWin.focus(); win.hide(); return; }
-  const partition = PARTITION;
-  serverWin = new BrowserWindow({ width: 1280, height: 860, minWidth: 360, minHeight: 480, backgroundColor: '#0a0a0b', title: 'Matro', icon: path.join(__dirname, '../assets/icon.png'), autoHideMenuBar: true, show: false, webPreferences: { partition, contextIsolation: true, sandbox: true, nodeIntegration: false } });
-  const contents = serverWin.webContents;
-  session.fromPartition(partition).setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  const local = () => { serverWin.destroy(); win.maximize(); win.show(); };
-  const leave = async forget => { const link = await serverLink.get(); if (link) { if (forget) await serverLink.clear(); else await serverLink.set({ ...link, enabled: false }); } if (forget) await session.fromPartition(partition).clearStorageData({ storages: ['cookies'] }); local(); };
-  serverWin.setMenu(Menu.buildFromTemplate([{ label: 'Matro', submenu: [
-    { label: 'Switch to local mode', click: () => leave(false) },
-    { label: 'Disconnect and sign out', click: () => leave(true) },
-    { type: 'separator' }, { role: 'reload' }, { role: 'togglefullscreen' }, { role: 'quit' }] }]));
-  contents.setWindowOpenHandler(({ url: target }) => { if (/^https?:/.test(target)) void shell.openExternal(target); return { action: 'deny' }; });
-  contents.on('will-navigate', (event, target) => { if (!sameOrigin(url, target)) { event.preventDefault(); if (/^https?:/.test(target)) void shell.openExternal(target); } });
-  serverWin.once('ready-to-show', () => { serverWin.maximize(); serverWin.show(); });
-  serverWin.on('closed', () => { if (!win.isDestroyed() && !win.isVisible()) win.destroy(); });
-  contents.on('did-fail-load', (_event, code, _text, failed, mainFrame) => { if (mainFrame && code !== -3 && !failed.startsWith('data:')) void contents.loadURL(failurePage(url)); });
-  serverWin.loadURL(url).catch(() => { /* an unreachable server shows Chromium's error page; the menu still leads back to the local library */ });
-  win.hide();
+// Receiver mode: while it is on, the same renderer runs against a Matro server (electron/receiver.cjs) instead of the local library.
+async function activateReceiver(link) {
+  const fetchAs = (target, options) => session.defaultSession.fetch(target, options);
+  const status = await (await fetchAs(link.url + '/api/status', { headers: { 'x-matro': '1' } })).json();
+  if (!status.user) throw new Error('The saved sign-in has expired. Open Receiver mode in the library footer and sign in again.');
+  receiver = createReceiver({ base: link.url, fetch: fetchAs, user: status.user, openDialog: options => dialog.showOpenDialog(win, options), notifyMetadata: snapshot => { if (win && !win.isDestroyed()) win.webContents.send('library:metadata', snapshot); } });
 }
+const receiverInfo = () => ({ active: !!receiver, url: linkInfo?.url || '', saved: !!linkInfo, role: receiver?.role() || '', username: receiver?.username() || '' });
+const reloadSoon = () => setImmediate(() => { if (win && !win.isDestroyed()) win.webContents.reload(); });
 app.whenReady().then(async () => {
   storage = path.join(app.getPath('userData'), 'library.json');
   embeddedSubtitles = createEmbeddedSubtitles({ dir: path.join(app.getPath('userData'), 'subtitles'), stat: mediaFS.stat, probe, remote,
@@ -97,11 +84,14 @@ app.whenReady().then(async () => {
   streams = await createStreamServer();
   serverLink = createServerLink(app.getPath('userData'));
   // Receiver mode is a persisted switch: while it is on, Matro opens the linked server's web UI like the Android receiver. MATRO_LOCAL=1 skips it for a run.
-  const link = await serverLink.get();
-  const linked = !process.env.MATRO_LOCAL && link?.enabled ? link.url : null;
+  linkInfo = await serverLink.get();
+  if (linkInfo?.enabled && !process.env.MATRO_LOCAL) { try { await activateReceiver(linkInfo); } catch (error) { receiverError = error.message.startsWith('The saved') ? error.message : "Could not reach the server, so Matro opened the local library. Receiver mode is still on for the next start."; } }
   protocol.handle('matro', request => {
     const url = new URL(request.url);
     const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg','/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
+    if (receiver && url.hostname === 'app' && url.pathname.startsWith('/artwork/')) return session.defaultSession.fetch(linkInfo.url + '/api' + url.pathname, { headers: { 'x-matro': '1' } });
+    const target = receiver && proxyTarget(linkInfo.url, request.url);
+    if (target) return session.defaultSession.fetch(target, { method: request.method, headers: { 'x-matro': '1', ...(request.headers.get('range') ? { range: request.headers.get('range') } : {}) }, credentials: 'include' });
     const artwork = url.hostname === 'app' && url.pathname.startsWith('/artwork/') && metadata.artworkFile(url.pathname.slice('/artwork/'.length));
     if (artwork) return net.fetch(pathToFileURL(artwork).href);
     const file = url.hostname === 'app' && files[url.pathname];
@@ -109,7 +99,7 @@ app.whenReady().then(async () => {
   });
   win = new BrowserWindow({ width: 1440, height: 940, minWidth: 900, minHeight: 640, backgroundColor: '#0a0a0b', title: 'Matro', icon: path.join(__dirname, '../assets/icon.png'), frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false } });
   // Open maximized, shown only once the first frame is ready so the window never flashes at its default size.
-  win.once('ready-to-show', () => { if (linked) openServerWindow(linked); else { win.maximize(); win.show(); } });
+  win.once('ready-to-show', () => { win.maximize(); win.show(); if (receiverError) void dialog.showMessageBox(win, { type: 'warning', message: 'Receiver mode', detail: receiverError }); });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
   // Page zoom: Ctrl + / Ctrl = zoom in (the default menu only binds Ctrl+Shift+=), Ctrl - out, Ctrl 0 reset.
@@ -150,11 +140,21 @@ app.whenReady().then(async () => {
     });
     return downloadArtwork(items);
   });
-  handle('server:get', () => serverLink.get());
+  ipcMain.on('receiver:info', event => { event.returnValue = event.sender === win.webContents ? receiverInfo() : null; });
+  handle('server:get', () => receiverInfo());
   handle('server:connect', async ({ address, username, password } = {}) => {
     const { url } = await connectServer(address, (target, options) => net.fetch(target, options));
-    if (username) await signIn(url, String(username), String(password ?? ''), (target, options) => session.fromPartition(PARTITION).fetch(target, options));
-    await serverLink.set({ url, enabled: true }); openServerWindow(url); return url;
+    const fetchAs = (target, options) => session.defaultSession.fetch(target, options);
+    if (username) await signIn(url, String(username), String(password ?? ''), fetchAs);
+    const link = { url, enabled: true };
+    receiver?.stop(); receiver = null;
+    try { await activateReceiver(link); } catch { throw new Error('Enter the username and password for this server.'); }
+    await serverLink.set(link); linkInfo = link; reloadSoon(); return url;
+  });
+  handle('server:local', async () => { if (linkInfo) { linkInfo = { ...linkInfo, enabled: false }; await serverLink.set(linkInfo); } receiver?.stop(); receiver = null; reloadSoon(); });
+  handle('server:signout', async () => {
+    if (linkInfo) await session.defaultSession.fetch(linkInfo.url + '/api/logout', { method: 'POST', headers: { 'x-matro': '1' } }).catch(() => {});
+    await serverLink.clear(); linkInfo = null; receiver?.stop(); receiver = null; reloadSoon();
   });
   handle('library:load', async () => { await metadata.loaded; return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
   handle('library:ssh', async options => {

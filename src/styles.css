@@ -237,3 +237,5 @@ input[type=range].seek::-webkit-slider-runnable-track{height:6px;border-radius:6
 :root[data-theme=light] .cw-art,:root[data-theme=light] .xfer{background:linear-gradient(180deg,rgb(var(--bg-rgb) / 0) 30%,rgb(var(--bg-rgb) / .8) 72%,var(--bg)),var(--art-bg)}
 :root[data-theme=light] .cw-art:after{display:none}:root[data-theme=light] .cw-art img,:root[data-theme=light] .xfer>img.xfer-banner{-webkit-mask-image:linear-gradient(180deg,#000 30%,rgb(0 0 0 / .2) 72%,transparent);mask-image:linear-gradient(180deg,#000 30%,rgb(0 0 0 / .2) 72%,transparent)}
 :root[data-theme=light] .reel-poster:before{content:'';position:absolute;inset:0;z-index:3;pointer-events:none;background:rgb(var(--bg-rgb));opacity:var(--wash,0)}
+
+body.receiver [data-action="ssh"],body.receiver [data-action="pick-prelude"]{display:none!important}

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src http://127.0.0.1:* blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src http://127.0.0.1:* matro://app blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Matro</title>
   <script src="theme.js"></script>
   <link rel="stylesheet" href="styles.css">
@@ -34,15 +34,15 @@
   <dialog id="server-dialog" aria-labelledby="server-title">
     <form id="server-form">
       <div class="section-heading"><h2 id="server-title">Receiver mode</h2><button type="button" class="icon-button" data-action="close-server" aria-label="Close server settings">×</button></div>
-      <p class="muted">Turn this PC into a receiver for your Matro server: the whole app then works like the web client, with your account's library, progress and queue. Your local library stays untouched for when you switch back.</p>
+      <p class="muted" id="server-intro">Turn this PC into a receiver for your Matro server: this same app then plays the server's library with your account's progress and queue, and your local library stays untouched for when you switch back.</p>
       <div class="ssh-fields">
         <label class="ssh-wide">Server address<input name="address" required autocomplete="off" placeholder="matro.example.com or 192.168.1.5:8484"></label>
-        <label>Username<input name="username" autocomplete="username" placeholder="Leave empty if already signed in"></label>
+        <label>Username<input name="username" autocomplete="username" placeholder="Your account"></label>
         <label>Password<input name="password" type="password" autocomplete="current-password"></label>
       </div>
-      <p class="note">Only the address is saved here; the sign-in session stays in this app's own profile. The window menu (Alt) has <em>Switch to local mode</em> and <em>Disconnect and sign out</em>. Start with MATRO_LOCAL=1 to open the local library for one run.</p>
+      <p class="note">Only the address is saved here; the sign-in session stays in this app. New accounts are created on the server's web page with an invite code. Start with MATRO_LOCAL=1 to open the local library for one run.</p>
       <p id="server-status" role="status" aria-live="polite"></p>
-      <div class="show-actions"><button id="server-connect" class="pill primary" type="submit">Switch to receiver mode</button><button class="pill" type="button" data-action="close-server">Cancel</button></div>
+      <div class="show-actions"><button id="server-connect" class="pill primary" type="submit">Switch to receiver mode</button><button class="pill" type="button" data-action="receiver-local" id="server-local" hidden>Switch to local mode</button><button class="pill" type="button" data-action="receiver-signout" id="server-signout" hidden>Disconnect and sign out</button><button class="pill" type="button" data-action="close-server">Cancel</button></div>
     </form>
   </dialog>
   <script type="module" src="app.js"></script>

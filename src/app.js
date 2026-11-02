@@ -1,5 +1,6 @@
 import { createDownloadBrowser } from './downloads.js';
 const api = window.matro;
+if (api.receiver?.active) document.body.classList.add('receiver');
 const downloads = createDownloadBrowser(api, { play: id => { void attempt(() => play(id, false, true)); } });
 const $ = selector => document.querySelector(selector);
 const root = $('#app');
@@ -259,7 +260,7 @@ function dock() {
 }
 let footerOpen = false;
 function footer() {
-  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="receiver-setting" role="group" aria-label="Receiver mode"><span>Receiver</span><button class="chip" data-action="receiver" aria-pressed="false">Off · set up…</button></span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
+  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="receiver-setting" role="group" aria-label="Receiver mode"><span>Receiver</span><button class="chip" data-action="receiver" aria-pressed="${!!api.receiver?.active}">${api.receiver?.active ? `On · ${esc(api.receiver.username)}@${esc(new URL(api.receiver.url).host)}` : 'Off · set up…'}</button></span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
 }
 const sectionGrid = (title, items, count, more) => items.length ? `<section class="section"><div class="section-heading"><h2>${title}</h2><span>${count}${more ? ` · <button class="text-button" data-tab="${more}">See all</button>` : ''}</span></div><div class="grid">${items.map(poster).join('')}</div></section>` : '';
 const kinds = [['show', 'Shows', 'shows'], ['movie', 'Movies', 'titles'], ['audio', 'Music & audio', 'files']];
@@ -1074,10 +1075,14 @@ const actions = {
   receiver: async () => {
     $('#server-status').textContent = '';
     const link = await api.serverGet().catch(() => null);
-    if (link) $('#server-form').elements.namedItem('address').value = link.url;
+    if (link?.url) $('#server-form').elements.namedItem('address').value = link.url;
+    $('#server-local').hidden = $('#server-signout').hidden = !link?.active;
+    $('#server-connect').textContent = link?.active ? 'Switch account' : 'Switch to receiver mode';
     $('#server-dialog').showModal();
   },
   'close-server': () => $('#server-dialog').close(),
+  'receiver-local': () => api.serverLocal(),
+  'receiver-signout': () => api.serverSignOut(),
   'close-ssh': () => $('#ssh-dialog').close(),
   folder: async () => { toast('Choose a folder. Large collections may take a moment to scan.'); library = await api.addFolder(); renderLibrary(); },
   files: async () => { const before = new Set(library.items.map(i => i.id)); library = await api.openFiles(); const added = library.items.find(i => !before.has(i.id)); if (added) await play(added.id); else if (view === 'library') renderLibrary(); },

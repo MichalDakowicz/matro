@@ -1,5 +1,11 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
+// Receiver mode (a Matro server instead of the local library) is decided in main before the page loads.
+const receiver = ipcRenderer.sendSync('receiver:info') || { active: false };
 contextBridge.exposeInMainWorld('matro', {
+  receiver,
+  ...(receiver.active ? { hiddenTabs: receiver.role === 'admin' ? [] : ['folders', 'downloads'], canCompareEditions: false, downloadHostOnly: true } : {}),
+  serverLocal: () => ipcRenderer.invoke('server:local'),
+  serverSignOut: () => ipcRenderer.invoke('server:signout'),
   downloadSeriesSearch: options => ipcRenderer.invoke('downloads:series-search', options),
   downloadSeriesReleases: options => ipcRenderer.invoke('downloads:series-releases', options),
   downloadSeriesSource: id => ipcRenderer.invoke('downloads:series-source', id),
