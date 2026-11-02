@@ -5,6 +5,8 @@ import { createAdapter } from './adapter.js';
 import { profileButton, openProfile } from './profile.js';
 import './touch.js';
 
+// Keeps the app itself on the device (HTTPS addresses only) so it opens, and saved titles play, with no connection.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 if (!document.fullscreenEnabled) document.body.classList.add('no-fullscreen');
 const root = document.getElementById('app');
 const user = await signIn(root);

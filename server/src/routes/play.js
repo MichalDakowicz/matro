@@ -4,6 +4,7 @@ const { normalize } = require('../lang');
 const { toVtt, createEmbedded, MAX_UPLOAD } = require('../subtitles');
 const { createFrames } = require('../previews');
 const { createStreams } = require('../stream');
+const { createOffline } = require('../offline');
 const path = require('node:path');
 
 const KINDS = ['full', 'forced', 'sdh'];
@@ -11,7 +12,8 @@ const MAX_SUBS_PER_ITEM = 60;
 
 function register(app) {
   const { router, db, library } = app;
-  const embedded = createEmbedded(), transcode = createStreams(), frames = createFrames();
+  const embedded = createEmbedded(), transcode = createStreams(), frames = createFrames(), offline = createOffline(app.dataDir);
+  app.offline = offline;
   const q = {
     uploaded: db.prepare(`SELECT s.id, s.name, s.language, s.kind, s.created, s.user_id AS userId, u.username AS addedBy FROM subtitles s
       LEFT JOIN users u ON u.id = s.user_id WHERE s.item_id = ? ORDER BY s.language, s.name`),
@@ -60,6 +62,22 @@ function register(app) {
     if (audio !== null && !info.audio.some(t => t.index === audio)) throw new HttpError(400, 'Unknown audio track.');
     if (burn !== null && !info.subtitles.some(t => t.index === burn && t.bitmap)) throw new HttpError(400, 'Unknown image subtitle track.');
     await transcode(ctx.req, ctx.res, { userId: ctx.user.id, file: item.path, info, offset, audio, burn, delay: Number.isFinite(delay) ? delay : 0, preload });
+  });
+
+  // Saving a title to watch with no connection. GET reports whether the file is ready (starting a conversion when it is not
+  // web-playable); the file route then serves it with byte ranges so the app can pull it in pieces and resume.
+  const saved = async ctx => {
+    const item = find(ctx.params.id), info = await library.info(item);
+    if (info.broken) throw new HttpError(422, 'This file could not be read. It may be damaged or unsupported.');
+    const audio = ctx.query.get('audio') === null ? null : Number(ctx.query.get('audio'));
+    if (audio !== null && !info.audio.some(t => t.index === audio)) throw new HttpError(400, 'Unknown audio track.');
+    return offline.status(item, info, { direct: canDirectPlay(item.path, info), audio });
+  };
+  router.add('GET', '/api/items/:id/offline', async ctx => { const { state, size, type } = await saved(ctx); return { state, size, type }; });
+  router.add('GET', '/api/items/:id/offline/file', async ctx => {
+    const ready = await saved(ctx);
+    if (ready.state !== 'ready') throw new HttpError(409, 'This file is still being prepared.');
+    await sendFile(ctx.req, ctx.res, ready.file, ready.type, { 'Cache-Control': 'private, no-store' });
   });
 
   // A still frame, used for seek previews and thumbnails.

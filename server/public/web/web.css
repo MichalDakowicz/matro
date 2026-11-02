@@ -131,3 +131,6 @@ body.no-fullscreen [data-action="fullscreen"]{display:none!important}
   .tracks-panel{bottom:90px;max-height:calc(100% - 110px)}.queue-panel{height:100%;width:340px;left:auto;border-radius:20px 0 0 20px}
 }
 @media(hover:none){.seek-preview{display:none!important}.queue-actions{opacity:1}}
+.offline-btn[aria-pressed="true"] .offline-text{color:var(--good,#9fd6b0)}
+.episode-entry>.offline-btn{margin-left:auto}
+@media (max-width:760px){.episode-entry>.offline-btn{position:absolute;right:8px;top:5px;z-index:2;font-size:12px}}

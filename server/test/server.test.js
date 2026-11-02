@@ -207,6 +207,30 @@ test('track info, direct play ranges, transcode and embedded subtitles', async (
   assert.match(vtt.data, /Hello there/);
 });
 
+test('titles can be saved for offline viewing: web files as they are, others converted once to a seekable MP4', async () => {
+  const { groups } = await catalog('sam');
+  const movie = groups[0][0], ep = groups[1][0];
+  assert.equal((await fetch(`${base}/api/items/${movie.id}/offline`)).status, 401);
+  const direct = (await call('sam', 'GET', `/api/items/${movie.id}/offline`)).data;
+  assert.equal(direct.state, 'ready');
+  assert.equal(direct.type, 'video/mp4');
+  const range = await fetch(`${base}/api/items/${movie.id}/offline/file`, { headers: { cookie: jar.sam, range: 'bytes=0-99' } });
+  assert.equal(range.status, 206);
+  assert.equal(range.headers.get('content-range').split('/')[1], String(direct.size));
+  assert.equal((await range.arrayBuffer()).byteLength, 100);
+
+  // The MKV is not web-playable: the first ask starts a conversion, a later one finds it ready.
+  assert.equal((await call('sam', 'GET', `/api/items/${ep.id}/offline/file`)).status, 409);
+  let ready;
+  for (let i = 0; i < 100 && ready?.state !== 'ready'; i++) { ready = (await call('sam', 'GET', `/api/items/${ep.id}/offline`)).data; if (ready.state !== 'ready') await new Promise(r => setTimeout(r, 200)); }
+  assert.equal(ready.state, 'ready');
+  const tail = await fetch(`${base}/api/items/${ep.id}/offline/file`, { headers: { cookie: jar.sam, range: 'bytes=0-4095' } });
+  assert.equal(tail.status, 206);
+  const head = Buffer.from(await tail.arrayBuffer());
+  assert.ok(head.includes(Buffer.from('ftyp')) && head.includes(Buffer.from('moov')), 'moov sits at the front so it can seek offline');
+  assert.equal((await call('sam', 'GET', `/api/items/${ep.id}/offline?audio=99`)).status, 400);
+});
+
 test('any viewer can add labelled subtitles; only owner or head account can edit them', async () => {
   const { groups } = await catalog('sam');
   const movie = groups[0][0];

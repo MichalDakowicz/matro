@@ -1,5 +1,6 @@
 // The one page the desktop app does not have: who you are, what you have added, your password, and for the head account the people.
 import { get, post, patch, del } from './http.js';
+import * as offline from './offline.js';
 import { h, say, dialog, languageSelect, languageName, copyText, selectText } from './dom.js';
 
 const hue = name => { let n = 2166136261; for (const c of name) n = Math.imul(n ^ c.codePointAt(0), 16777619); return (n >>> 0) % 360; };
@@ -55,6 +56,15 @@ export function openProfile({ session, getState, save, signOut }) {
     try { await post('/api/me/password', { current: current.value, password: fresh.value }); current.value = fresh.value = ''; say('Password changed. Other devices were signed out.'); } catch (err) { error.textContent = err.message; }
   } }, h('div', { class: 'ssh-fields web-fields' }, h('label', { class: 'ssh-wide' }, 'Current password', current), h('label', { class: 'ssh-wide' }, 'New password', fresh)), error, h('div', { class: 'show-actions' }, h('button', { class: 'pill', type: 'submit' }, 'Change password')));
 
+  // Titles saved on this device, and the space they take.
+  const saved = h('div', { class: 'sources' }), space = h('p', { class: 'muted' });
+  async function loadSaved() {
+    const [list, { bytes, quota }] = await Promise.all([offline.store.list(), offline.usage()]);
+    space.textContent = list.length ? `${list.length} title${list.length === 1 ? '' : 's'} on this device · ${offline.sizeLabel(bytes)} used${quota ? ` of ${offline.sizeLabel(quota)} the browser allows` : ''}.` : 'Nothing is saved on this device. Use Save offline on a title to watch it without a connection.';
+    saved.replaceChildren(...list.map(r => h('div', { class: 'source-row web-row' }, h('span', { class: 'source-icon' }, h('span', { class: 'mono' }, r.complete ? '✓' : '…')),
+      h('div', { class: 'min' }, h('span', { class: 'source-name' }, r.title || r.id), h('span', { class: 'source-path' }, r.complete ? offline.sizeLabel(r.size) : `Partly saved · ${offline.sizeLabel(Math.min(r.have * 8388608, r.size))} of ${offline.sizeLabel(r.size)}`)), h('span'),
+      h('div', { class: 'source-actions' }, h('button', { class: 'pill small', type: 'button', 'aria-label': `Remove ${r.title || r.id} from this device`, onclick: async () => { await offline.remove(r.id); loadSaved().catch(fail); } }, 'Remove')))));
+  }
   const people = h('div', { class: 'sources' });
   async function loadPeople() {
     const { users } = await get('/api/admin/users');
@@ -98,12 +108,12 @@ export function openProfile({ session, getState, save, signOut }) {
     h('main', { class: 'page web-page' },
       h('header', { class: 'page-head' }, h('div', { class: 'web-who' }, avatar(user.username, true), h('div', {}, h('h1', { class: 'page-title' }, user.username), h('p', { class: 'page-sub' }, admin ? 'Head account · looks after the library and everyone on it' : 'Viewer · watches and adds subtitles')))),
       section('Your watching', null, stats), section('Dub and subtitles', forget, h('p', { class: 'muted' }, 'The player remembers which audio and subtitle language you pick for each show or film, so a dub chosen in one episode carries through the series.')),
-      section('Subtitles you added', null, added), section('Password', null, password),
+      section('Saved for offline', null, space, saved), section('Subtitles you added', null, added), section('Password', null, password),
       admin ? section('Downloads', null, h('p', { class: 'muted' }, 'Find films and series, add magnet links, and manage downloads on the Matro host.'), h('button', { class: 'pill primary', type: 'button', onclick: () => { close(); document.querySelector('.dock-item[data-tab="downloads"]')?.click(); } }, 'Open downloads')) : null,
       admin ? section('People', null, h('p', { class: 'page-sub', style: { margin: '-6px 0 16px' } }, 'Viewers keep their own progress and choices and can add subtitles. Only you can add or remove films and shows (Folders). To add someone, create a one-time invite code and send it to them: they sign up with it and pick their own password.'), people, h('h3', { class: 'web-sub' }, 'Invites'), invites, addPerson) : null,
       h('div', { class: 'show-actions' }, h('button', { class: 'pill', type: 'button', onclick: signOut }, 'Sign out'))));
   document.body.append(layer); document.body.classList.add('web-layer-open');
-  loadAdded().catch(fail); if (admin) { loadPeople().catch(fail); loadInvites().catch(fail); }
+  loadSaved().catch(fail); loadAdded().catch(fail); if (admin) { loadPeople().catch(fail); loadInvites().catch(fail); }
   layer.querySelector('.web-back').focus();
   return close;
 }
