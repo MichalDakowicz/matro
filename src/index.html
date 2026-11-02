@@ -39,8 +39,9 @@
         <label class="ssh-wide">Server address<input name="address" required autocomplete="off" placeholder="matro.example.com or 192.168.1.5:8484"></label>
         <label>Username<input name="username" autocomplete="username" placeholder="Your account"></label>
         <label>Password<input name="password" type="password" autocomplete="current-password"></label>
+        <label class="ssh-wide">Invite code <span class="dim">(only to create a new account)</span><input name="code" autocomplete="off" placeholder="Paste the one-time code you were sent"></label>
       </div>
-      <p class="note">Only the address is saved here; the sign-in session stays in this app. New accounts are created on the server's web page with an invite code. Start with MATRO_LOCAL=1 to open the local library for one run.</p>
+      <p class="note">Only the address is saved here; the sign-in session stays in this app. A new account needs an invite code from the head account. Start with MATRO_LOCAL=1 to open the local library for one run.</p>
       <p id="server-status" role="status" aria-live="polite"></p>
       <div class="show-actions"><button id="server-connect" class="pill primary" type="submit">Switch to receiver mode</button><button class="pill" type="button" data-action="receiver-local" id="server-local" hidden>Switch to local mode</button><button class="pill" type="button" data-action="receiver-signout" id="server-signout" hidden>Disconnect and sign out</button><button class="pill" type="button" data-action="close-server">Cancel</button></div>
     </form>

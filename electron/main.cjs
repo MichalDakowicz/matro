@@ -9,8 +9,9 @@ const { remote } = require('./ssh-media.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { scan, describe, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
-const { signIn, connect: connectServer, createServerLink } = require('./server-link.cjs');
-const { createReceiver, proxyTarget } = require('./receiver.cjs');
+const { signIn, signUp, connect: connectServer, createServerLink } = require('./server-link.cjs');
+const { createReceiver, proxyTarget, isOffline } = require('./receiver.cjs');
+const { createOfflineStore, createCache, serverDir, serveFile } = require('./receiver-offline.cjs');
 const { createStreamServer } = require('./stream.cjs');
 const { createPreviews } = require('./previews.cjs');
 const { createSegments } = require('./segments.cjs');
@@ -59,9 +60,26 @@ async function rescan() {
 // Receiver mode: while it is on, the same renderer runs against a Matro server (electron/receiver.cjs) instead of the local library.
 async function activateReceiver(link) {
   const fetchAs = (target, options) => session.defaultSession.fetch(target, options);
-  const status = await (await fetchAs(link.url + '/api/status', { headers: { 'x-matro': '1' } })).json();
-  if (!status.user) throw new Error('The saved sign-in has expired. Open Receiver mode in the library footer and sign in again.');
-  receiver = createReceiver({ base: link.url, fetch: fetchAs, user: status.user, openDialog: options => dialog.showOpenDialog(win, options), notifyMetadata: snapshot => { if (win && !win.isDestroyed()) win.webContents.send('library:metadata', snapshot); } });
+  const dir = serverDir(app.getPath('userData'), link.url), cache = createCache(dir);
+  let user;
+  try {
+    user = (await (await fetchAs(link.url + '/api/status', { headers: { 'x-matro': '1' } })).json()).user;
+    if (!user) throw new Error('The saved sign-in has expired. Open Receiver mode in the library footer and sign in again.');
+    await cache.write('user', user);
+  } catch (error) {
+    // Out of reach of the server: fall back to the last signed-in account and library so saved titles still play.
+    user = isOffline(error) ? await cache.read('user') : null;
+    if (!user) throw error;
+  }
+  let store;
+  const prepare = id => receiver.prepareOffline(id);
+  const send = state => { if (win && !win.isDestroyed()) win.webContents.send('offline:update', state); };
+  store = createOfflineStore({ dir, fetch: fetchAs, base: link.url, prepare, notify: send });
+  await store.init();
+  receiver = createReceiver({ base: link.url, fetch: fetchAs, user, offline: store, cache,
+    confirm: async question => (await dialog.showMessageBox(win, { type: 'question', buttons: ['Remove', 'Keep'], defaultId: 1, cancelId: 1, message: question })).response === 0,
+    openDialog: options => dialog.showOpenDialog(win, options), notifyMetadata: snapshot => { if (win && !win.isDestroyed()) win.webContents.send('library:metadata', snapshot); } });
+  receiver.offlineStore = store;
 }
 const receiverInfo = () => ({ active: !!receiver, url: linkInfo?.url || '', saved: !!linkInfo, role: receiver?.role() || '', username: receiver?.username() || '' });
 const reloadSoon = () => setImmediate(() => { if (win && !win.isDestroyed()) win.webContents.reload(); });
@@ -85,11 +103,13 @@ app.whenReady().then(async () => {
   serverLink = createServerLink(app.getPath('userData'));
   // Receiver mode is a persisted switch: while it is on, Matro opens the linked server's web UI like the Android receiver. MATRO_LOCAL=1 skips it for a run.
   linkInfo = await serverLink.get();
-  if (linkInfo?.enabled && !process.env.MATRO_LOCAL) { try { await activateReceiver(linkInfo); } catch (error) { receiverError = error.message.startsWith('The saved') ? error.message : "Could not reach the server, so Matro opened the local library. Receiver mode is still on for the next start."; } }
+  if (linkInfo?.enabled && !process.env.MATRO_LOCAL) { try { await activateReceiver(linkInfo); } catch (error) { receiverError = error.message.startsWith('The saved') ? error.message : "Could not reach the server and nothing is saved for offline use yet, so Matro opened the local library. Receiver mode is still on for the next start."; } }
   protocol.handle('matro', request => {
     const url = new URL(request.url);
-    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg','/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
+    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/receiver-ui.js': 'receiver-ui.js', '/downloads-view.js': 'downloads-view.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg','/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
     if (receiver && url.hostname === 'app' && url.pathname.startsWith('/artwork/')) return session.defaultSession.fetch(linkInfo.url + '/api' + url.pathname, { headers: { 'x-matro': '1' } });
+    const saved = receiver && url.hostname === 'app' && url.pathname.startsWith('/offline/') && receiver.offlineStore.file(decodeURIComponent(url.pathname.slice('/offline/'.length)));
+    if (saved) return serveFile(saved, receiver.offlineStore.type(decodeURIComponent(url.pathname.slice('/offline/'.length))), request.headers.get('range'));
     const target = receiver && proxyTarget(linkInfo.url, request.url);
     if (target) return session.defaultSession.fetch(target, { method: request.method, headers: { 'x-matro': '1', ...(request.headers.get('range') ? { range: request.headers.get('range') } : {}) }, credentials: 'include' });
     const artwork = url.hostname === 'app' && url.pathname.startsWith('/artwork/') && metadata.artworkFile(url.pathname.slice('/artwork/'.length));
@@ -141,11 +161,20 @@ app.whenReady().then(async () => {
     return downloadArtwork(items);
   });
   ipcMain.on('receiver:info', event => { event.returnValue = event.sender === win.webContents ? receiverInfo() : null; });
+  ipcMain.on('offline:state', event => { event.returnValue = event.sender === win.webContents && receiver ? receiver.offlineStore.state() : { saved: [], progress: {} }; });
+  const ALLOWED = /^\/api\/(me(\/password|\/subtitles)?|subtitles\/\d+|admin\/(users(\/\d+)?|invites(\/\d+)?|browse|folders))$/;
+  handle('receiver:call', async ({ method, route, body } = {}) => {
+    const [route0] = String(route).split('?');
+    if (!receiver || !['GET', 'POST', 'PATCH', 'DELETE'].includes(method) || !ALLOWED.test(route0)) throw new Error('That request is not available.');
+    return receiver.call(method, route, body);
+  });
+  for (const channel of ['offline:toggle', 'offline:list', 'offline:remove']) handle(channel, () => { throw new Error('Offline copies are part of receiver mode.'); });
   handle('server:get', () => receiverInfo());
-  handle('server:connect', async ({ address, username, password } = {}) => {
+  handle('server:connect', async ({ address, username, password, code } = {}) => {
     const { url } = await connectServer(address, (target, options) => net.fetch(target, options));
     const fetchAs = (target, options) => session.defaultSession.fetch(target, options);
-    if (username) await signIn(url, String(username), String(password ?? ''), fetchAs);
+    if (code) await signUp(url, String(code).trim(), String(username ?? ''), String(password ?? ''), fetchAs);
+    else if (username) await signIn(url, String(username), String(password ?? ''), fetchAs);
     const link = { url, enabled: true };
     receiver?.stop(); receiver = null;
     try { await activateReceiver(link); } catch { throw new Error('Enter the username and password for this server.'); }

@@ -16,7 +16,7 @@ async function fakeServer(routes) {
   }).listen(0, '127.0.0.1', () => resolve(s)); });
   return { server, calls, base: `http://127.0.0.1:${server.address().port}` };
 }
-const make = (base, user = { id: 1, username: 'ann', role: 'viewer' }, extra = {}) => createReceiver({ base, fetch, user, openDialog: async () => ({ canceled: true }), notifyMetadata() {}, ...extra });
+const make = (base, user = { id: 1, username: 'ann', role: 'viewer' }, extra = {}) => createReceiver({ base, fetch, user, openDialog: async () => ({ canceled: true }), notifyMetadata() {}, offline: { has: () => false, info: () => null, subtitle: () => null }, cache: { read: async () => null, write: async () => {} }, ...extra });
 
 test('only the server API is reachable through the proxy', () => {
   assert.equal(proxyTarget('http://s:1', 'matro://app/server/api/items/a/direct?x=1'), 'http://s:1/api/items/a/direct?x=1');

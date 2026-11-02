@@ -39,11 +39,19 @@ async function signIn(base, username, password, fetchImpl = fetch) {
   return body.user;
 }
 
-/** {url, enabled} from the saved text, or null when missing, damaged or not an http(s) address. */
 function parse(text) {
   try { const { url, enabled } = JSON.parse(text); return typeof url === 'string' && /^https?:\/\//.test(url) ? { url, enabled: enabled !== false } : null; } catch { return null; }
 }
 
+/** Joins with a one-time invite code; the session cookie lands wherever fetchImpl keeps its cookies. */
+async function signUp(base, code, username, password, fetchImpl = fetch) {
+  const response = await fetchImpl(base + '/api/signup', { method: 'POST', credentials: 'include', headers: { 'x-matro': '1', 'content-type': 'application/json' }, body: JSON.stringify({ code, username, password }), signal: AbortSignal.timeout(8000) });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(body?.error ?? `Server answered ${response.status}.`);
+  return body.user;
+}
+
+/** {url, enabled} from the saved text, or null when missing, damaged or not an http(s) address. */
 function createServerLink(dir) {
   const file = path.join(dir, 'server.json');
   return {
@@ -53,5 +61,5 @@ function createServerLink(dir) {
   };
 }
 
-module.exports = { signIn, candidates, connect, createServerLink };
+module.exports = { signUp, signIn, candidates, connect, createServerLink };
 
