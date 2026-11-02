@@ -1,5 +1,14 @@
 import { createDownloadBrowser } from './downloads.js';
 const api = window.matro;
+if (api.receiver?.active) {
+  document.body.classList.add('receiver');
+  // The signed-in account, next to the logo, opens the account screen (as the profile button does in the browser).
+  let hue = 2166136261; for (const c of api.receiver.username) hue = Math.imul(hue ^ c.codePointAt(0), 16777619);
+  const avatar = document.createElement('button');
+  avatar.className = 'account-button'; avatar.dataset.action = 'account'; avatar.title = api.receiver.username; avatar.setAttribute('aria-label', `Account: ${api.receiver.username}`);
+  avatar.style.setProperty('--h', String((hue >>> 0) % 360)); avatar.textContent = api.receiver.username.slice(0, 1).toUpperCase();
+  document.querySelector('.window-zone .brand')?.after(avatar);
+}
 const downloads = createDownloadBrowser(api, { play: id => { void attempt(() => play(id, false, true)); } });
 const $ = selector => document.querySelector(selector);
 const root = $('#app');
@@ -50,6 +59,14 @@ function openSSH() {
   if (saved) for (const name of ['host', 'user', 'port', 'directory', 'identity']) $('#ssh-form').elements.namedItem(name).value = saved[name] ?? '';
   $('#ssh-status').textContent = ''; $('#ssh-dialog').showModal();
 }
+$('#server-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = $('#server-connect'), status = $('#server-status');
+  button.disabled = true; status.textContent = 'Looking for the server…';
+  try { await api.serverConnect(Object.fromEntries(new FormData($('#server-form')))); $('#server-form').reset(); $('#server-dialog').close(); }
+  catch (error) { status.textContent = (error.message || String(error)).replace(/^Error invoking remote method '[^']*': (Error: )?/, ''); }
+  finally { button.disabled = false; }
+});
 $('#ssh-form').addEventListener('submit', async event => {
   event.preventDefault();
   const button = $('#ssh-connect'), status = $('#ssh-status');
@@ -120,6 +137,11 @@ function hoverSeek(event) {
 }
 const finishMargin = duration => Math.min(10, duration * .05);
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 5000); }
+// Offline copies exist only where the host app offers them (the web and phone apps); the desktop plays files in place.
+const offlineText = id => { const o = api.offline, p = o.progress(id); return p !== null ? `Saving ${p}%` : o.has(id) ? 'Saved' : 'Save offline'; };
+const offlineBtn = (id, pill) => api.offline ? `<button class="${pill ? 'pill' : 'text-button'} offline-btn" data-offline="${id}" aria-label="Save for offline viewing" aria-pressed="${api.offline.has(id)}">${pill ? icon('download') : ''}<span class="offline-text">${offlineText(id)}</span></button>` : '';
+function refreshOffline() { for (const btn of document.querySelectorAll('[data-offline]')) { btn.querySelector('.offline-text').textContent = offlineText(btn.dataset.offline); btn.setAttribute('aria-pressed', String(api.offline.has(btn.dataset.offline))); } }
+api?.offline?.onChange(refreshOffline);
 async function attempt(fn) { try { return await fn(); } catch (error) { toast(error.message || String(error)); return null; } }
 function save() { if (!stateLoaded) return Promise.resolve(); return api.save({ progress: library.progress, queue: library.queue, preferences: library.preferences, markers: library.markers || {} }); }
 const completed = id => !!library.progress[id]?.completed;
@@ -251,12 +273,12 @@ function dock() {
 }
 let footerOpen = false;
 function footer() {
-  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
+  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="receiver-setting" role="group" aria-label="Receiver mode"><span>Receiver</span>${api.receiver?.active ? '<button class="chip" data-action="account">Account…</button>' : ''}<button class="chip" data-action="receiver" aria-pressed="${!!api.receiver?.active}">${api.receiver?.active ? `On · ${esc(api.receiver.username)}@${esc(new URL(api.receiver.url).host)}` : 'Off · set up…'}</button></span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
 }
 const sectionGrid = (title, items, count, more) => items.length ? `<section class="section"><div class="section-heading"><h2>${title}</h2><span>${count}${more ? ` · <button class="text-button" data-tab="${more}">See all</button>` : ''}</span></div><div class="grid">${items.map(poster).join('')}</div></section>` : '';
 const kinds = [['show', 'Shows', 'shows'], ['movie', 'Movies', 'titles'], ['audio', 'Music & audio', 'files']];
 function landingPage() {
-  if (!library.items.length) return `<section class="welcome"><p class="show-kicker">Matro · local library</p><h1>Your collection.<br>Your kind of player.</h1><p>All your films, shows and favourite files in one quiet place. Add a folder to build your library, or drop media anywhere in this window — seasons and episodes are picked up from file names.</p><div class="show-actions"><button class="pill" data-action="ssh">${icon('network')}Connect SSH</button><button class="pill primary" data-action="folder">${icon('folder')}Add folder</button><button class="pill" data-action="files">${icon('plus')}Open files</button></div><div class="formats">${['MKV', 'MP4', 'AVI', 'MOV', 'WEBM', 'FLAC', '+ MORE'].map(f => `<span>${f}</span>`).join('')}</div></section>`;
+  if (!library.items.length) return `<section class="welcome"><p class="show-kicker">Matro · ${api.receiver?.active ? 'receiver' : 'local library'}</p><h1>Your collection.<br>Your kind of player.</h1><p>${api.receiver?.active ? `Nothing is on ${esc(new URL(api.receiver.url).host)} for ${esc(api.receiver.username)} yet. ${api.receiver.role === 'admin' ? 'Add a folder from the server, or send videos from this PC.' : 'The head account adds films and shows; they will appear here.'}` : 'All your films, shows and favourite files in one quiet place. Add a folder to build your library, or drop media anywhere in this window — seasons and episodes are picked up from file names.'}</p><div class="show-actions">${api.receiver?.active ? '' : `<button class="pill" data-action="ssh">${icon('network')}Connect SSH</button>`}${!api.receiver?.active || api.receiver.role === 'admin' ? `<button class="pill primary" data-action="folder">${icon('folder')}Add folder</button><button class="pill" data-action="files">${icon('plus')}Open files</button>` : ''}<button class="pill" data-action="${api.receiver?.active ? 'account' : 'receiver'}">${icon('network')}${api.receiver?.active ? 'Account' : 'Connect to a server'}</button></div><div class="formats">${['MKV', 'MP4', 'AVI', 'MOV', 'WEBM', 'FLAC', '+ MORE'].map(f => `<span>${f}</span>`).join('')}</div></section>`;
   const continues = continueItems();
   const featured = !folderFilter ? featuredTitles() : [];
   return `${folderFilter ? `<div class="page-head"><div><h1 class="page-title">${esc(base(folderFilter))}</h1><p class="page-sub">${esc(folderFilter)}</p></div><button class="text-button" data-action="all-folders">Show all folders</button></div>` : ''}
@@ -577,7 +599,7 @@ function detail(id, focus = true) {
       <p class="detail-sub">${[...facts, selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie', selected.format].map(esc).join(' <span aria-hidden="true">·</span> ')}</p>
       ${m?.overview ? `<p class="detail-overview">${esc(m.overview)}</p>` : ''}
       <div class="detail-actions">${selected.kind === 'movie' && api.canCompareEditions !== false ? `<button class="pill" data-upgrade="${selected.id}">Find better quality / compare editions</button>` : ''}<button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
-      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
+      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button>${selected.kind === 'show' && items.length > 1 ? '' : offlineBtn(selected.id, true)}<button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
       ${m?.rating ? `<div class="ratings"><div><p class="rating-label">TMDB</p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}</div>
     <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
       ${castPanel(m)}${productionPanel(m)}${filePanel(selected, m)}</div></div>`;
@@ -604,7 +626,7 @@ const episodeInfo = item => meta(item)?.episodes?.[item.season]?.[item.episode] 
 function episodeCard(i, resume) {
   const e = episodeInfo(i), p = library.progress[i.id], done = completed(i.id), now = resume?.id === i.id, pct = p?.duration ? Math.min(100, p.position / p.duration * 100) : 0;
   const facts = [e?.runtime ? `${e.runtime}m` : null, i.format, now ? `${fmt(p.position)} watched` : done ? 'Watched' : p?.position > 0 ? 'In progress' : null].filter(Boolean);
-  return `<div class="episode-entry ${now ? 'current' : ''}"><button class="episode-row" data-play="${i.id}"><span class="episode-still ${artFor(i)}">${e?.still ? `<img src="${esc(e.still)}" alt="" loading="lazy" draggable="false">` : ''}<span class="episode-code">${code(i)}</span>${done ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : ''}${pct && !done ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}<span class="episode-play">${icon('play')}</span></span><span class="episode-text min"><strong>${i.prelude ? '' : `${i.episode}. `}${esc(episodeName(i))}</strong><small>${facts.map(esc).join(' · ')}</small>${e?.overview ? `<span class="episode-overview">${esc(e.overview)}</span>` : ''}</span></button><button class="text-button" data-complete="${i.id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(i.title)}">${done ? 'Completed' : 'Mark complete'}</button></div>`;
+  return `<div class="episode-entry ${now ? 'current' : ''}"><button class="episode-row" data-play="${i.id}"><span class="episode-still ${artFor(i)}">${e?.still ? `<img src="${esc(e.still)}" alt="" loading="lazy" draggable="false">` : ''}<span class="episode-code">${code(i)}</span>${done ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : ''}${pct && !done ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}<span class="episode-play">${icon('play')}</span></span><span class="episode-text min"><strong>${i.prelude ? '' : `${i.episode}. `}${esc(episodeName(i))}</strong><small>${facts.map(esc).join(' · ')}</small>${e?.overview ? `<span class="episode-overview">${esc(e.overview)}</span>` : ''}</span></button><button class="text-button" data-complete="${i.id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(i.title)}">${done ? 'Completed' : 'Mark complete'}</button>${offlineBtn(i.id)}</div>`;
 }
 function episodesPanel(selected, items, resume, target) {
   const seasons = [...new Set(items.map(i => i.season))], key = titleKey(selected);
@@ -1063,8 +1085,23 @@ function goTabNow(next) {
   if (selected) { $('#detail-overlay')?.remove(); selected = null; } if (next !== tab) statusFilter = 'all'; tab = next; folderFilter = null; renderLibrary(); $('.shell')?.scrollTo(0, 0); }
 const actions = {
   ssh: openSSH,
+  receiver: async () => {
+    $('#server-status').textContent = '';
+    const link = await api.serverGet().catch(() => null);
+    if (link?.url) $('#server-form').elements.namedItem('address').value = link.url;
+    $('#server-local').hidden = $('#server-signout').hidden = !link?.active;
+    $('#server-connect').textContent = link?.active ? 'Switch account' : 'Switch to receiver mode';
+    $('#server-dialog').showModal();
+  },
+  'close-server': () => $('#server-dialog').close(),
+  'receiver-local': () => api.serverLocal(),
+  'receiver-signout': () => api.serverSignOut(),
   'close-ssh': () => $('#ssh-dialog').close(),
-  folder: async () => { toast('Choose a folder. Large collections may take a moment to scan.'); library = await api.addFolder(); renderLibrary(); },
+  folder: async () => {
+    if (api.receiver?.active) { if (await (await import('./receiver-ui.js')).chooseServerFolder()) { library = await api.load(); renderLibrary(); } return; }
+    toast('Choose a folder. Large collections may take a moment to scan.'); library = await api.addFolder(); renderLibrary();
+  },
+  account: async () => (await import('./receiver-ui.js')).openAccount({ username: api.receiver.username, role: api.receiver.role, signOut: () => api.serverSignOut(), local: () => api.serverLocal() }),
   files: async () => { const before = new Set(library.items.map(i => i.id)); library = await api.openFiles(); const added = library.items.find(i => !before.has(i.id)); if (added) await play(added.id); else if (view === 'library') renderLibrary(); },
   rescan: async () => { toast('Refreshing your folders…'); library = await api.rescan(); renderLibrary(); toast(library.warnings?.join('\n') || 'Library is up to date.'); },
   'all-folders': () => { folderFilter = null; renderLibrary(); }, 'close-detail': closeDetail,
@@ -1104,6 +1141,7 @@ const actions = {
 document.addEventListener('click', event => {
   const btn = event.target.closest('button'); if (!btn || btn.disabled) return;
   void attempt(async () => {
+    if (btn.dataset.offline) return api.offline.toggle(btn.dataset.offline);
     if (btn.dataset.complete) return markComplete(btn.dataset.complete);
     if (btn.dataset.removeContinue) return removeContinue(btn.dataset.removeContinue);
     if (btn.dataset.markerStart) { markerDraft = { type: btn.dataset.markerStart, start: offset + video.currentTime }; renderTracks(); return; }
@@ -1142,8 +1180,8 @@ document.addEventListener('keydown', event => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) && event.target.type !== 'range';
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); void attempt(actions.files); return; }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && view === 'library') { event.preventDefault(); if (tab !== 'search') goTab('search'); $('#search')?.focus(); return; }
-  if (event.key === 'Escape') { if ($('#shortcuts').open || $('#match-dialog')?.open || $('#ssh-dialog').open) return; if (footerOpen && view === 'library') { actions.about(); return; } if (fullscreenActive) { void api.window('fullscreen'); return; } if (selected) closeDetail(); else if (sidePanel) { sidePanel = null; renderTracks(); } else if (view === 'player') void attempt(backToLibrary); return; }
-  if (typing || $('#shortcuts').open || $('#ssh-dialog').open || view !== 'player') return;
+  if (event.key === 'Escape') { if ($('#shortcuts').open || $('#match-dialog')?.open || $('#ssh-dialog').open || $('#server-dialog').open) return; if (footerOpen && view === 'library') { actions.about(); return; } if (fullscreenActive) { void api.window('fullscreen'); return; } if (selected) closeDetail(); else if (sidePanel) { sidePanel = null; renderTracks(); } else if (view === 'player') void attempt(backToLibrary); return; }
+  if (typing || $('#shortcuts').open || $('#ssh-dialog').open || $('#server-dialog').open || view !== 'player') return;
   // Enter takes a visible skip (intro, recap, outro) unless a control has focus and Enter belongs to it.
   if (event.key === 'Enter' && !$('#skip-segment')?.hidden && !event.target.closest('button, a, input, select, textarea')) { event.preventDefault(); void attempt(actions['skip-segment']); return; }
   const key = event.key.toLowerCase(); const keyActions = { ' ': toggle, arrowleft: actions.backward, arrowright: actions.forward, arrowup: () => setVolume(currentVolume() + .05), arrowdown: () => setVolume(currentVolume() - .05), f: actions.fullscreen, m: actions.mute };
@@ -1174,4 +1212,6 @@ else void attempt(async () => { library = await api.load(); stateLoaded = true;
   scannerSummary = library.scanner || await api.scannerStatus();
   library.markers ||= {};
   for (const p of Object.values(library.progress)) if (p.completed === undefined) p.completed = p.duration > 0 && p.position >= p.duration - finishMargin(p.duration);
-  applyMotion(); renderLibrary(); });
+  applyMotion(); renderLibrary();
+  // Receiver mode is on but the saved sign-in is gone: ask for it straight away instead of leaving the setting buried in the footer.
+  if (api.receiver?.needsSignIn) void actions.receiver(); });

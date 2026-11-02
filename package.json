@@ -6,7 +6,7 @@
   "scripts": {
     "postinstall": "install-electron --no",
     "start": "electron .",
-    "test": "node --test --test-concurrency=1 tests/media.test.cjs tests/segments.test.cjs tests/segment-scheduler.test.cjs tests/metadata.test.cjs tests/ssh-media.test.cjs tests/torrents.test.cjs tests/download-layout.test.cjs tests/movie-upgrades.test.cjs tests/subtitles.test.cjs tests/series.test.cjs",
+    "test": "node --test --test-concurrency=1 tests/media.test.cjs tests/segments.test.cjs tests/segment-scheduler.test.cjs tests/metadata.test.cjs tests/ssh-media.test.cjs tests/torrents.test.cjs tests/download-layout.test.cjs tests/movie-upgrades.test.cjs tests/subtitles.test.cjs tests/series.test.cjs tests/server-link.test.cjs tests/receiver.test.cjs tests/receiver-offline.test.cjs",
     "test:e2e": "playwright test",
     "icons": "node scripts/build-icons.cjs",
     "pack": "electron-builder --dir",

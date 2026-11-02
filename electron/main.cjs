@@ -9,6 +9,9 @@ const { remote } = require('./ssh-media.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { scan, describe, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
+const { signIn, signUp, connect: connectServer, createServerLink } = require('./server-link.cjs');
+const { createReceiver, proxyTarget, isOffline } = require('./receiver.cjs');
+const { createOfflineStore, createCache, serverDir, serveFile } = require('./receiver-offline.cjs');
 const { createStreamServer } = require('./stream.cjs');
 const { createPreviews } = require('./previews.cjs');
 const { createSegments } = require('./segments.cjs');
@@ -16,13 +19,13 @@ const { createSegmentScheduler } = require('./segment-scheduler.cjs');
 const { readEnv, credentials, createMetadata, cleanQuery, yearOf } = require('./metadata.cjs');
 const previews = createPreviews();
 protocol.registerSchemesAsPrivileged([{ scheme: 'matro', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
-let win, streams, storage, segments, scanner, metadata, torrents, upgrades, embeddedSubtitles;
+let receiver, linkInfo, receiverError, serverLink, win, streams, storage, segments, scanner, metadata, torrents, upgrades, embeddedSubtitles;
 if (!app.isPackaged && process.env.MATRO_USER_DATA) app.setPath('userData', path.resolve(process.env.MATRO_USER_DATA));
 let state = { folders: [], items: [], progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 } };
 let writeQueue = Promise.resolve();
 function persist() { const contents = JSON.stringify(state); writeQueue = writeQueue.catch(() => {}).then(async () => { await fs.writeFile(storage + '.tmp', contents); await fs.rename(storage + '.tmp', storage); }); return writeQueue; }
 const find = id => { const item = state.items.find(i => i.id === id); if (!item) throw new Error('Media is no longer in the library.'); return item; };
-function handle(channel, fn) { ipcMain.handle(channel, (event, ...args) => { if (event.sender !== win.webContents || !event.senderFrame?.url.startsWith('matro://app/')) throw new Error('Untrusted caller'); return fn(...args); }); }
+function handle(channel, fn) { ipcMain.handle(channel, (event, ...args) => { if (event.sender !== win.webContents || !event.senderFrame?.url.startsWith('matro://app/')) throw new Error('Untrusted caller'); return (receiver?.handlers[channel] ?? fn)(...args); }); }
 async function downloadArtwork(items) {
   const titles = items.map(item => {
     const title = item.title || cleanQuery(item.name), year = item.year || yearOf(item.name), kind = item.kind === 'show' ? 'show' : 'movie';
@@ -54,6 +57,32 @@ async function rescan() {
   state.libraryVersion = 2;
   await persist(); scanner?.invalidate(); void metadata?.sync(state.items); return { ...state, warnings: results.filter(r => r.error).map(r => `${r.root}: ${r.error}`) };
 }
+// Receiver mode: while it is on, the same renderer runs against a Matro server (electron/receiver.cjs) instead of the local library.
+async function activateReceiver(link) {
+  const fetchAs = (target, options) => session.defaultSession.fetch(target, options);
+  const dir = serverDir(app.getPath('userData'), link.url), cache = createCache(dir);
+  let user;
+  try {
+    user = (await (await fetchAs(link.url + '/api/status', { headers: { 'x-matro': '1' } })).json()).user;
+    if (!user) throw new Error('The saved sign-in has expired. Open Receiver mode in the library footer and sign in again.');
+    await cache.write('user', user);
+  } catch (error) {
+    // Out of reach of the server: fall back to the last signed-in account and library so saved titles still play.
+    user = isOffline(error) ? await cache.read('user') : null;
+    if (!user) throw error;
+  }
+  let store;
+  const prepare = id => receiver.prepareOffline(id);
+  const send = state => { if (win && !win.isDestroyed()) win.webContents.send('offline:update', state); };
+  store = createOfflineStore({ dir, fetch: fetchAs, base: link.url, prepare, notify: send });
+  await store.init();
+  receiver = createReceiver({ base: link.url, fetch: fetchAs, user, offline: store, cache,
+    confirm: async question => (await dialog.showMessageBox(win, { type: 'question', buttons: ['Remove', 'Keep'], defaultId: 1, cancelId: 1, message: question })).response === 0,
+    openDialog: options => dialog.showOpenDialog(win, options), notifyMetadata: snapshot => { if (win && !win.isDestroyed()) win.webContents.send('library:metadata', snapshot); } });
+  receiver.offlineStore = store;
+}
+const receiverInfo = () => ({ active: !!receiver, url: linkInfo?.url || '', saved: !!linkInfo, role: receiver?.role() || '', username: receiver?.username() || '', needsSignIn: !receiver && !!linkInfo?.enabled && !!receiverError });
+const reloadSoon = () => setImmediate(() => { if (win && !win.isDestroyed()) win.webContents.reload(); });
 app.whenReady().then(async () => {
   storage = path.join(app.getPath('userData'), 'library.json');
   embeddedSubtitles = createEmbeddedSubtitles({ dir: path.join(app.getPath('userData'), 'subtitles'), stat: mediaFS.stat, probe, remote,
@@ -71,9 +100,18 @@ app.whenReady().then(async () => {
   }
   if (state.libraryVersion !== 2) await rescan();
   streams = await createStreamServer();
+  serverLink = createServerLink(app.getPath('userData'));
+  // Receiver mode is a persisted switch: while it is on, Matro opens the linked server's web UI like the Android receiver. MATRO_LOCAL=1 skips it for a run.
+  linkInfo = await serverLink.get();
+  if (linkInfo?.enabled && !process.env.MATRO_LOCAL) { try { await activateReceiver(linkInfo); } catch (error) { receiverError = error.message.startsWith('The saved') ? error.message : "Could not reach the server and nothing is saved for offline use yet, so Matro opened the local library. Receiver mode is still on for the next start."; } }
   protocol.handle('matro', request => {
     const url = new URL(request.url);
-    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg','/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
+    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/receiver-ui.js': 'receiver-ui.js', '/downloads-view.js': 'downloads-view.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg','/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
+    if (receiver && url.hostname === 'app' && url.pathname.startsWith('/artwork/')) return session.defaultSession.fetch(linkInfo.url + '/api' + url.pathname, { headers: { 'x-matro': '1' } });
+    const saved = receiver && url.hostname === 'app' && url.pathname.startsWith('/offline/') && receiver.offlineStore.file(decodeURIComponent(url.pathname.slice('/offline/'.length)));
+    if (saved) return serveFile(saved, receiver.offlineStore.type(decodeURIComponent(url.pathname.slice('/offline/'.length))), request.headers.get('range'));
+    const target = receiver && proxyTarget(linkInfo.url, request.url);
+    if (target) return session.defaultSession.fetch(target, { method: request.method, headers: { 'x-matro': '1', ...(request.headers.get('range') ? { range: request.headers.get('range') } : {}) }, credentials: 'include' });
     const artwork = url.hostname === 'app' && url.pathname.startsWith('/artwork/') && metadata.artworkFile(url.pathname.slice('/artwork/'.length));
     if (artwork) return net.fetch(pathToFileURL(artwork).href);
     const file = url.hostname === 'app' && files[url.pathname];
@@ -81,7 +119,7 @@ app.whenReady().then(async () => {
   });
   win = new BrowserWindow({ width: 1440, height: 940, minWidth: 900, minHeight: 640, backgroundColor: '#0a0a0b', title: 'Matro', icon: path.join(__dirname, '../assets/icon.png'), frame: false, show: false, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false } });
   // Open maximized, shown only once the first frame is ready so the window never flashes at its default size.
-  win.once('ready-to-show', () => { win.maximize(); win.show(); });
+  win.once('ready-to-show', () => { win.maximize(); win.show(); if (receiverError) void dialog.showMessageBox(win, { type: 'warning', message: 'Receiver mode', detail: receiverError }); });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
   // Page zoom: Ctrl + / Ctrl = zoom in (the default menu only binds Ctrl+Shift+=), Ctrl - out, Ctrl 0 reset.
@@ -121,6 +159,31 @@ app.whenReady().then(async () => {
       return { ...item, ...(job ? { title: job.title, year: job.year, kind: job.kind } : {}) };
     });
     return downloadArtwork(items);
+  });
+  ipcMain.on('receiver:info', event => { event.returnValue = event.sender === win.webContents ? receiverInfo() : null; });
+  ipcMain.on('offline:state', event => { event.returnValue = event.sender === win.webContents && receiver ? receiver.offlineStore.state() : { saved: [], progress: {} }; });
+  const ALLOWED = /^\/api\/(me(\/password|\/subtitles)?|subtitles\/\d+|admin\/(users(\/\d+)?|invites(\/\d+)?|browse|folders))$/;
+  handle('receiver:call', async ({ method, route, body } = {}) => {
+    const [route0] = String(route).split('?');
+    if (!receiver || !['GET', 'POST', 'PATCH', 'DELETE'].includes(method) || !ALLOWED.test(route0)) throw new Error('That request is not available.');
+    return receiver.call(method, route, body);
+  });
+  for (const channel of ['offline:toggle', 'offline:list', 'offline:remove']) handle(channel, () => { throw new Error('Offline copies are part of receiver mode.'); });
+  handle('server:get', () => receiverInfo());
+  handle('server:connect', async ({ address, username, password, code } = {}) => {
+    const { url } = await connectServer(address, (target, options) => net.fetch(target, options));
+    const fetchAs = (target, options) => session.defaultSession.fetch(target, options);
+    if (code) await signUp(url, String(code).trim(), String(username ?? ''), String(password ?? ''), fetchAs);
+    else if (username) await signIn(url, String(username), String(password ?? ''), fetchAs);
+    const link = { url, enabled: true };
+    receiver?.stop(); receiver = null;
+    try { await activateReceiver(link); } catch { throw new Error('Enter the username and password for this server.'); }
+    await serverLink.set(link); linkInfo = link; reloadSoon(); return url;
+  });
+  handle('server:local', async () => { if (linkInfo) { linkInfo = { ...linkInfo, enabled: false }; await serverLink.set(linkInfo); } receiver?.stop(); receiver = null; reloadSoon(); });
+  handle('server:signout', async () => {
+    if (linkInfo) await session.defaultSession.fetch(linkInfo.url + '/api/logout', { method: 'POST', headers: { 'x-matro': '1' } }).catch(() => {});
+    await serverLink.clear(); linkInfo = null; receiver?.stop(); receiver = null; reloadSoon();
   });
   handle('library:load', async () => { await metadata.loaded; return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
   handle('library:ssh', async options => {

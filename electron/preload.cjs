@@ -1,5 +1,17 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
+// Receiver mode (a Matro server instead of the local library) is decided in main before the page loads.
+const receiver = ipcRenderer.sendSync('receiver:info') || { active: false };
+// Saved titles are mirrored here so the page can ask has/progress while it draws.
+const offlineState = receiver.active ? ipcRenderer.sendSync('offline:state') : { saved: [], progress: {} };
+const offlineListeners = new Set();
+if (receiver.active) ipcRenderer.on('offline:update', (_event, next) => { offlineState.saved = next.saved; offlineState.progress = next.progress; for (const callback of offlineListeners) callback(); });
 contextBridge.exposeInMainWorld('matro', {
+  receiver,
+  ...(receiver.active ? { hiddenTabs: receiver.role === 'admin' ? [] : ['folders', 'downloads'], canCompareEditions: false, downloadHostOnly: true } : {}),
+  ...(receiver.active ? { offline: { has: id => offlineState.saved.includes(id), progress: id => offlineState.progress[id] ?? null, toggle: id => ipcRenderer.invoke('offline:toggle', id), onChange: callback => { offlineListeners.add(callback); return () => offlineListeners.delete(callback); }, list: () => ipcRenderer.invoke('offline:list'), remove: id => ipcRenderer.invoke('offline:remove', id) } } : {}),
+  receiverCall: options => ipcRenderer.invoke('receiver:call', options),
+  serverLocal: () => ipcRenderer.invoke('server:local'),
+  serverSignOut: () => ipcRenderer.invoke('server:signout'),
   downloadSeriesSearch: options => ipcRenderer.invoke('downloads:series-search', options),
   downloadSeriesReleases: options => ipcRenderer.invoke('downloads:series-releases', options),
   downloadSeriesSource: id => ipcRenderer.invoke('downloads:series-source', id),
@@ -14,6 +26,8 @@ contextBridge.exposeInMainWorld('matro', {
   downloadSearch: options => ipcRenderer.invoke('downloads:search', options),
   downloadAdd: options => ipcRenderer.invoke('downloads:add', options),
   downloadList: target => ipcRenderer.invoke('downloads:list', target),
+  serverConnect: options => ipcRenderer.invoke('server:connect', options),
+  serverGet: () => ipcRenderer.invoke('server:get'),
   load: () => ipcRenderer.invoke('library:load'),
   addFolder: () => ipcRenderer.invoke('library:folder'),
   connectSSH: options => ipcRenderer.invoke('library:ssh', options),
