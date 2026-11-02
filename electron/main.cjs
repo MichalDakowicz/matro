@@ -81,7 +81,7 @@ async function activateReceiver(link) {
     openDialog: options => dialog.showOpenDialog(win, options), notifyMetadata: snapshot => { if (win && !win.isDestroyed()) win.webContents.send('library:metadata', snapshot); } });
   receiver.offlineStore = store;
 }
-const receiverInfo = () => ({ active: !!receiver, url: linkInfo?.url || '', saved: !!linkInfo, role: receiver?.role() || '', username: receiver?.username() || '' });
+const receiverInfo = () => ({ active: !!receiver, url: linkInfo?.url || '', saved: !!linkInfo, role: receiver?.role() || '', username: receiver?.username() || '', needsSignIn: !receiver && !!linkInfo?.enabled && !!receiverError });
 const reloadSoon = () => setImmediate(() => { if (win && !win.isDestroyed()) win.webContents.reload(); });
 app.whenReady().then(async () => {
   storage = path.join(app.getPath('userData'), 'library.json');
