@@ -51,3 +51,13 @@ test('only the linked origin stays in the window', () => {
   assert.equal(sameOrigin('http://a:8484', 'https://evil.example/'), false);
   assert.equal(sameOrigin('http://a:8484', 'not a url'), false);
 });
+
+test('offline support: only http origins get the secure-origin switch, and the failure page escapes the address', () => {
+  const { insecureOrigin, failurePage, savedUrlSync } = require('../electron/server-link.cjs');
+  assert.equal(insecureOrigin('http://192.168.1.5:8484/x'), 'http://192.168.1.5:8484');
+  assert.equal(insecureOrigin('https://matro.example.com'), null);
+  assert.equal(insecureOrigin('nonsense'), null);
+  const page = decodeURIComponent(failurePage('http://a/"><script>x</script>').split(',')[1]);
+  assert.ok(!page.includes('<script>') && page.includes('Try again'));
+  assert.equal(savedUrlSync(path.join(os.tmpdir(), 'matro-no-such-dir')), null);
+});

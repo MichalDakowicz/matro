@@ -9,7 +9,7 @@ const { remote } = require('./ssh-media.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { scan, describe, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
-const { connect: connectServer, createServerLink, sameOrigin } = require('./server-link.cjs');
+const { connect: connectServer, createServerLink, sameOrigin, savedUrlSync, insecureOrigin, failurePage } = require('./server-link.cjs');
 const { createStreamServer } = require('./stream.cjs');
 const { createPreviews } = require('./previews.cjs');
 const { createSegments } = require('./segments.cjs');
@@ -19,6 +19,8 @@ const previews = createPreviews();
 protocol.registerSchemesAsPrivileged([{ scheme: 'matro', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 let serverWin, serverLink, win, streams, storage, segments, scanner, metadata, torrents, upgrades, embeddedSubtitles;
 if (!app.isPackaged && process.env.MATRO_USER_DATA) app.setPath('userData', path.resolve(process.env.MATRO_USER_DATA));
+// Offline saving in the server's web app needs a service worker, which Chromium allows only on secure origins.
+if (!process.env.MATRO_LOCAL) { const insecure = insecureOrigin(savedUrlSync(app.getPath('userData')) || ''); if (insecure) app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', insecure); }
 let state = { folders: [], items: [], progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 } };
 let writeQueue = Promise.resolve();
 function persist() { const contents = JSON.stringify(state); writeQueue = writeQueue.catch(() => {}).then(async () => { await fs.writeFile(storage + '.tmp', contents); await fs.rename(storage + '.tmp', storage); }); return writeQueue; }
@@ -71,6 +73,7 @@ function openServerWindow(url) {
   contents.on('will-navigate', (event, target) => { if (!sameOrigin(url, target)) { event.preventDefault(); if (/^https?:/.test(target)) void shell.openExternal(target); } });
   serverWin.once('ready-to-show', () => { serverWin.maximize(); serverWin.show(); });
   serverWin.on('closed', () => { if (!win.isDestroyed() && !win.isVisible()) win.destroy(); });
+  contents.on('did-fail-load', (_event, code, _text, failed, mainFrame) => { if (mainFrame && code !== -3 && !failed.startsWith('data:')) void contents.loadURL(failurePage(url)); });
   serverWin.loadURL(url).catch(() => { /* an unreachable server shows Chromium's error page; the menu still leads back to the local library */ });
   win.hide();
 }

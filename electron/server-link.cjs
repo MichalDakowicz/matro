@@ -1,6 +1,7 @@
 // Opt-in link to a self-hosted Matro server (server/). The desktop app then shows the server's web UI the way
 // the Android receiver does (mobile/src/lib/server.ts); the saved address is the only thing stored here.
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const path = require('node:path');
 
 const PRIVATE_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|[^.]+$|.*\.(local|lan|home)$)/i;
@@ -39,7 +40,17 @@ function createServerLink(dir) {
   };
 }
 
+/** Synchronous read for start-up switches that must be set before the app is ready. */
+function savedUrlSync(dir) {
+  try { const { url } = JSON.parse(fsSync.readFileSync(path.join(dir, 'server.json'), 'utf8')); return /^https?:\/\//.test(url) ? url : null; } catch { return null; }
+}
+
+/** Chromium only runs service workers (the web app's offline shell) on secure origins; a LAN http address is the person's own server. */
+const insecureOrigin = url => { try { const { protocol, origin } = new URL(url); return protocol === 'http:' ? origin : null; } catch { return null; } };
+
+const failurePage = url => 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><meta charset=utf-8><title>Matro</title><body style="background:#0a0a0b;color:#ece9e4;font:16px system-ui;display:grid;place-items:center;height:100vh;margin:0"><div style="max-width:32em;padding:24px"><h1 style="font-weight:300">Server not reachable</h1><p style="color:#a9a59d">Matro could not open ${url.replace(/[<>&"]/g, '')}. Check the connection, or press Alt and choose Use local library. Titles saved offline are available once the server page has loaded.</p><p><a style="color:#0a0a0b;background:#f3f1ec;padding:10px 18px;border-radius:99px;text-decoration:none" href="${url.replace(/[<>&"]/g, '')}">Try again</a></p></div>`);
+
 /** Only the linked server's own pages stay in the window; anything else opens in the browser. */
 const sameOrigin = (base, target) => { try { return new URL(target).origin === new URL(base).origin; } catch { return false; } };
 
-module.exports = { candidates, connect, createServerLink, sameOrigin };
+module.exports = { candidates, connect, createServerLink, sameOrigin, savedUrlSync, insecureOrigin, failurePage };
