@@ -3,6 +3,11 @@ import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
 const api = window.matro;
+if (api?.chooseSource) {
+  const button = document.createElement('button'); button.className = 'pill desktop-source-button'; button.textContent = 'Server'; button.setAttribute('aria-label', 'Playback source');
+  button.addEventListener('click', () => { void api.chooseSource(); });
+  document.querySelector('.window-zone .brand')?.before(button);
+}
 const recovery = createRecovery(() => localStorage, api?.recoveryScope || 'desktop', message => toast(message));
 const downloads = createDownloadBrowser(api, { play: id => { void attempt(() => play(id, false, true)); } });
 const $ = selector => document.querySelector(selector);
@@ -846,7 +851,11 @@ async function seek(position) {
   const relative = target - offset;
   // Fragmented streams can buffer frames before Chromium exposes a seekable range.
   const ranges = video.src.startsWith('blob:') ? video.buffered : video.seekable;
-  for (let i = 0; i < ranges.length; i++) if (relative >= ranges.start(i) && relative <= ranges.end(i)) { video.currentTime = relative; updateTime(); checkpoint(true); return; }
+  for (let i = 0; i < ranges.length; i++) if (relative >= ranges.start(i) && relative <= ranges.end(i)) {
+    // A buffered seek supersedes any startup resume target, even if the first
+    // timeupdate has not fired yet. Save this seek rather than the old target.
+    pendingStream = null; video.currentTime = relative; updateTime(); checkpoint(true); return;
+  }
   const token = ++generation, load = loadStream(target, shouldPlay, token); checkpoint(true); await load;
 }
 // Left: elapsed / total. Right: time left, from the same whole seconds so elapsed + left always adds up to the total shown.

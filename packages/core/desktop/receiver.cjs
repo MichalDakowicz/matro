@@ -1,6 +1,6 @@
 // Receiver windows use the server's authenticated browser API. No local media
 // services or privileged preload bridge are started in this mode.
-function launchReceiver(address, { show = true } = {}) {
+function launchReceiver(address, { show = true, onUnavailable } = {}) {
   const { app, BrowserWindow, dialog, shell } = require('electron');
   let base;
   try {
@@ -20,7 +20,10 @@ function launchReceiver(address, { show = true } = {}) {
     win.webContents.on('will-navigate', (event, url) => { if (new URL(url).origin !== base.origin) event.preventDefault(); });
     win.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     try { await win.loadURL(base.href); }
-    catch { dialog.showErrorBox('Matro server unavailable', 'Could not reach the Matro server. Check its address and connection.'); app.quit(); }
+    catch {
+      if (onUnavailable) onUnavailable();
+      else { dialog.showErrorBox('Matro server unavailable', 'Could not reach the Matro server. Check its address and connection.'); app.quit(); }
+    }
   });
   app.on('window-all-closed', () => app.quit());
 }

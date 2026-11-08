@@ -1,6 +1,6 @@
 {
   "name": "@matro/desktop",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "main": "main.cjs",
   "scripts": {
