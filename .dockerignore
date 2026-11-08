@@ -1,0 +1,17 @@
+node_modules
+**/node_modules
+.git
+.env
+**/.env
+**/*.env
+.test-media
+test-results
+dist
+**/dist
+apps/server/data
+apps/server/.dev-data
+apps/server/.test-data
+apps/server/.deploy-target
+apps/server/.deploy-stamp
+apps/mobile/android
+apps/mobile/ios

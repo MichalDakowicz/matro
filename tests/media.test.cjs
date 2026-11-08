@@ -3,9 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { fixtures, bitmapFixture } = require('./fixtures.cjs');
-const { describe, scan, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, probe, ffmpeg, run } = require('../electron/media.cjs');
-const { createStreamServer } = require('../electron/stream.cjs');
-const { createPreviews } = require('../electron/previews.cjs');
+const { describe, scan, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, probe, ffmpeg, run } = require('../packages/core/desktop/media.cjs');
+const { createStreamServer } = require('../packages/core/desktop/stream.cjs');
+const { createPreviews } = require('../packages/core/desktop/previews.cjs');
 const os = require('node:os');
 
 test('loaded subtitle files are copied next to the video without overwriting and listed as sidecar tracks', async () => {

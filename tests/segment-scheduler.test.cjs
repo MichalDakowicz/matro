@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { createSegmentScheduler, prioritizeEpisodes, mergeMarkers } = require('../electron/segment-scheduler.cjs');
+const { createSegmentScheduler, prioritizeEpisodes, mergeMarkers } = require('../packages/core/desktop/segment-scheduler.cjs');
 
 async function sampleState() {
   const root = path.resolve('.test-media'); await fs.mkdir(root, { recursive: true });

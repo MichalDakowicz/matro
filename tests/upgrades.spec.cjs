@@ -1,6 +1,6 @@
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('node:fs/promises'), path = require('node:path'), http = require('node:http');
-const { run, ffmpeg, describe } = require('../electron/media.cjs');
+const { run, ffmpeg, describe } = require('../packages/core/desktop/media.cjs');
 
 test('higher resolution download preserves original, filters files, compares editions and remembers favorite', async () => {
   const root = path.resolve('.test-media', `upgrades-${Date.now()}`), movies = path.join(root, 'Movies'), folder = path.join(movies, 'Film'), profile = path.join(root, 'profile');

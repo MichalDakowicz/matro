@@ -1,5 +1,5 @@
 const test = require('node:test'), assert = require('node:assert/strict');
-const { createMovieUpgrades, resolutionClass } = require('../electron/movie-upgrades.cjs');
+const { createMovieUpgrades, resolutionClass } = require('../packages/core/desktop/movie-upgrades.cjs');
 
 test('cropped widescreen files use their real resolution class', () => {
   assert.equal(resolutionClass({ width: 1920, height: 800 }), 1080);

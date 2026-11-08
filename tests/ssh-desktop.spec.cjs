@@ -115,8 +115,8 @@ test('SSH subtitles upload beside the video, avoid collisions and persist with c
 
 test('embedded SSH subtitles load from a real movie, survive seeks and reuse the cache after restart', async () => {
   test.skip(process.env.MATRO_TEST_SSH !== '1', 'Set MATRO_TEST_SSH=1 for the read-only embedded subtitle server check.');
-  const { rootFor } = require('../electron/ssh-media.cjs');
-  const { describe } = require('../electron/media.cjs');
+  const { rootFor } = require('../packages/core/desktop/ssh-media.cjs');
+  const { describe } = require('../packages/core/desktop/media.cjs');
   const profile = path.resolve(__dirname, '../.test-media', 'embedded-ssh-' + Date.now());
   const config = { host: '192.168.100.6', user: 'michu', port: 22, directory: '/mnt/media/Movies/Ghost in the Shell', identity: '' };
   const root = rootFor(config), movie = path.join(root, 'Ghost.in.the.Shell.1995.mkv'), item = describe(movie, root);

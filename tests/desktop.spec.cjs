@@ -2,7 +2,7 @@ const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { fixtures, bitmapFixture } = require('./fixtures.cjs');
-const { describe } = require('../electron/media.cjs');
+const { describe } = require('../packages/core/desktop/media.cjs');
 
 function launchOptions(profile) {
   const env = { ...process.env, MATRO_USER_DATA: profile, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
@@ -65,6 +65,8 @@ test('desktop library, MKV playback, tracks, seeking, queue and persistence', as
     await app.evaluate(({ dialog }, files) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: files }); }, [f.mkv, f.audio]);
     await page.getByRole('button', { name: 'Open files', exact: true }).click();
     await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.2);
+    await expect(page.locator('video')).toHaveAttribute('data-buffer-complete', 'true');
+    expect(await page.locator('video').evaluate(v => v.src.startsWith('blob:'))).toBe(true);
     await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
     await expect(page.getByRole('button', { name: 'Open Northbound', exact: true })).toBeVisible();
     await page.screenshot({ path: 'test-results/library-filled.png' });
@@ -170,7 +172,7 @@ test('bitmap subtitle selection, delay, and Off reload video while keeping pause
 
 test('show tracking, early progress, completion, season groups, skip markers and track choices persist', async () => {
   const f = await fixtures();
-  const { run, ffmpeg } = require('../electron/media.cjs');
+  const { run, ffmpeg } = require('../packages/core/desktop/media.cjs');
   const second = path.join(f.dir, 'Northbound.S01E04.Second.mkv');
   const third = path.join(f.dir, 'Northbound.S02E01.Third.mkv');
   await run(ffmpeg, ['-y', '-v', 'error', '-i', f.mkv, '-map', '0:v', '-map', '0:s', '-map', '0:a:0', '-map', '0:a:1', '-c', 'copy', second]);
@@ -205,6 +207,9 @@ test('show tracking, early progress, completion, season groups, skip markers and
     // Skip segments has its own panel; opening it replaces Audio and subtitles.
     await page.getByRole('button', { name: 'Skip segment settings', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Audio', exact: true })).toHaveCount(0);
+    // Anchor the marker explicitly; startup/track changes can advance playback
+    // beyond four seconds before the earlier Pause click lands.
+    await seekTo(3);
     await page.getByRole('button', { name: 'Mark intro start', exact: true }).click();
     await seekTo(7);
     await page.getByRole('button', { name: 'Save end here', exact: true }).click();
@@ -284,7 +289,7 @@ test('series repairs mixed saved queue, preserves removals and stops before othe
 });
 
 test('automatic markers retry empty results, appear in UI and skip real intro/outro', async () => {
-  const { run, ffmpeg } = require('../electron/media.cjs');
+  const { run, ffmpeg } = require('../packages/core/desktop/media.cjs');
   const folder = path.resolve('.test-media', `auto-ui-${Date.now()}`); await fs.mkdir(folder, { recursive: true });
   const first = path.join(folder, 'Detected.S01E01.mp4'), second = path.join(folder, 'Detected.S01E02.mp4');
   for (const [file, brightness] of [[first, 0], [second, .025]]) {
@@ -314,7 +319,7 @@ test('automatic markers retry empty results, appear in UI and skip real intro/ou
 });
 
 test('idle scanning prioritizes Continue watching, saves markers and resumes after restart', async () => {
-  const { run, ffmpeg } = require('../electron/media.cjs');
+  const { run, ffmpeg } = require('../packages/core/desktop/media.cjs');
   const folder = path.resolve('.test-media', `idle-scan-${Date.now()}`); await fs.mkdir(folder, { recursive: true });
   const first = path.join(folder, 'Watching.S01E01.mp4'), second = path.join(folder, 'Watching.S01E02.mp4');
   await run(ffmpeg, ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=160x90:r=5:d=90', '-c:v', 'libx264', '-preset', 'ultrafast', first]);
