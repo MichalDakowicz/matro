@@ -3,6 +3,11 @@ import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
 const api = window.matro;
+if (api?.chooseSource) {
+  const button = document.createElement('button'); button.className = 'pill'; button.textContent = 'Server'; button.setAttribute('aria-label', 'Playback source');
+  button.addEventListener('click', () => { void api.chooseSource(); });
+  document.querySelector('.window-zone .brand')?.before(button);
+}
 const recovery = createRecovery(() => localStorage, api?.recoveryScope || 'desktop', message => toast(message));
 const downloads = createDownloadBrowser(api, { play: id => { void attempt(() => play(id, false, true)); } });
 const $ = selector => document.querySelector(selector);

@@ -1,11 +1,11 @@
 {
   "name": "matro",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Matro desktop, web and native mobile media player monorepo.",
   "main": "apps/desktop/main.cjs",
   "scripts": {
     "start": "electron .",
-    "test": "node --test --test-concurrency=1 tests/media.test.cjs tests/segments.test.cjs tests/segment-scheduler.test.cjs tests/metadata.test.cjs tests/ssh-media.test.cjs tests/torrents.test.cjs tests/download-layout.test.cjs tests/movie-upgrades.test.cjs tests/subtitles.test.cjs tests/series.test.cjs tests/playback.test.cjs",
+    "test": "node --test --test-concurrency=1 tests/media.test.cjs tests/segments.test.cjs tests/segment-scheduler.test.cjs tests/metadata.test.cjs tests/ssh-media.test.cjs tests/torrents.test.cjs tests/download-layout.test.cjs tests/movie-upgrades.test.cjs tests/subtitles.test.cjs tests/series.test.cjs tests/playback.test.cjs tests/desktop-source.test.cjs",
     "test:e2e": "playwright test",
     "icons": "node scripts/build-icons.cjs",
     "pack": "electron-builder --dir",
@@ -14,7 +14,7 @@
     "build:web": "npm run build --workspace @matro/web",
     "start:server": "npm run start --workspace @matro/server",
     "start:mobile": "npm run start --workspace @matro/mobile",
-    "test:core": "node --test --test-concurrency=1 tests/media.test.cjs tests/segments.test.cjs tests/segment-scheduler.test.cjs tests/metadata.test.cjs tests/ssh-media.test.cjs tests/torrents.test.cjs tests/download-layout.test.cjs tests/movie-upgrades.test.cjs tests/subtitles.test.cjs tests/series.test.cjs tests/playback.test.cjs",
+    "test:core": "node --test --test-concurrency=1 tests/media.test.cjs tests/segments.test.cjs tests/segment-scheduler.test.cjs tests/metadata.test.cjs tests/ssh-media.test.cjs tests/torrents.test.cjs tests/download-layout.test.cjs tests/movie-upgrades.test.cjs tests/subtitles.test.cjs tests/series.test.cjs tests/playback.test.cjs tests/desktop-source.test.cjs",
     "test:server": "npm run test --workspace @matro/server",
     "typecheck:mobile": "npm run typecheck --workspace @matro/mobile",
     "test:mobile": "npm test --workspace @matro/mobile",
