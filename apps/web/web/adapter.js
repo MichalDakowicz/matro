@@ -133,6 +133,7 @@ export function createAdapter(session) {
   }
 
   const matro = {
+    chooseSource: window.matroDesktop?.chooseSource,
     recoveryScope: `account:${session.user.id}:${session.user.username}`,
     load, inspect, prepare: inspect, subtitles, loadSubtitle, stream,
     save: state => put('/api/state', { progress: state.progress, queue: state.queue, preferences: state.preferences, markers: state.markers || {} }, { keepalive: JSON.stringify(state).length < 60000 }),
@@ -143,8 +144,11 @@ export function createAdapter(session) {
     addFolder: async () => { headOnly(); const path = await chooseFolder(); if (path) { const r = await post('/api/admin/folders', { path }); say(r.ok ? `Added. Found ${r.items} video${r.items === 1 ? '' : 's'}.` : r.error); } return load(); },
     openFiles: pickFiles, importDrop: files => upload(Array.from(files)),
     removeFolder: async root => { headOnly(); const { folders } = await get('/api/admin/folders'); const folder = folders.find(f => f.path === root); if (folder) await del(`/api/admin/folders/${folder.id}`); return load(); },
-    window: async action => { if (action === 'fullscreen') { if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen().catch(() => {}); } },
-    onFullscreen: callback => { const listener = () => callback(!!document.fullscreenElement); document.addEventListener('fullscreenchange', listener); return () => document.removeEventListener('fullscreenchange', listener); },
+    window: async action => { if (window.matroDesktop) return window.matroDesktop.window(action); if (action === 'fullscreen') { if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen().catch(() => {}); } },
+    onFullscreen: callback => {
+      if (window.matroDesktop) { const remove = window.matroDesktop.onFullscreen(callback); void window.matroDesktop.fullscreen().then(callback); return remove; }
+      const listener = () => callback(!!document.fullscreenElement); document.addEventListener('fullscreenchange', listener); return () => document.removeEventListener('fullscreenchange', listener);
+    },
     onSegments: noop, onDownloads: noop, onClosing: noop,
     onMetadata: callback => { watchers.add(callback); return () => watchers.delete(callback); },
     searchMetadata: async ({ kind, query, year }) => { headOnly('Only the head account can change TMDB matches.'); const q = new URLSearchParams({ kind, query }); if (year) q.set('year', year); return artwork((await get(`/api/admin/metadata/search?${q}`)).results); },

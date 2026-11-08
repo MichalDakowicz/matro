@@ -3,9 +3,11 @@ import { post } from './http.js';
 import { signIn } from './auth.js';
 import { createAdapter } from './adapter.js';
 import { profileButton, openProfile } from './profile.js';
+import { installDesktopChrome } from './desktop.js';
 import './touch.js';
 
-if (!document.fullscreenEnabled) document.body.classList.add('no-fullscreen');
+installDesktopChrome();
+if (!document.fullscreenEnabled && !window.matroDesktop) document.body.classList.add('no-fullscreen');
 const root = document.getElementById('app');
 const user = await signIn(root);
 const session = { user };

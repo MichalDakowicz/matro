@@ -41,9 +41,10 @@ test('the visible switch connects, remembers receiver mode, preserves remote iso
     await close(app); app = await launch(root); page = await app.firstWindow();
     await expect(page.getByRole('heading', { name: 'Server library' })).toBeVisible();
     expect(await page.evaluate(() => [typeof window.matro, typeof window.matroSource, typeof require])).toEqual(['undefined', 'undefined', 'undefined']);
+    expect(await app.evaluate(({ BrowserWindow, Menu }) => [BrowserWindow.getAllWindows()[0].isMenuBarVisible(), Menu.getApplicationMenu()])).toEqual([false, null]);
     await interceptRestart(app);
     const reopened = app.waitForEvent('window');
-    await app.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('source-settings').click());
+    await page.evaluate(() => window.matroDesktop.chooseSource());
     settings = await reopened;
     await expect(settings.getByLabel('Matro server address')).toHaveValue(address);
     await settings.getByRole('button', { name: 'Use this PC', exact: true }).click();
@@ -64,5 +65,9 @@ test('an unreachable remembered server leaves the source settings available', as
     const settings = app.windows().find(page => page.url().endsWith('/source.html'));
     await expect(settings.getByRole('status')).toContainText('Could not reach the saved server');
     await expect(settings.getByRole('button', { name: 'Use this PC', exact: true })).toBeVisible();
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(win => win.webContents.getURL().endsWith('/source.html')).close());
+    const fallback = app.windows().find(page => page.url().endsWith('/receiver-error.html'));
+    const reopened = app.waitForEvent('window'); await fallback.getByRole('button', { name: 'Server settings', exact: true }).click();
+    await expect((await reopened).getByRole('button', { name: 'Use this PC', exact: true })).toBeVisible();
   } finally { await close(app); }
 });
