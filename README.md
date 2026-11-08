@@ -17,7 +17,7 @@ npm run start:mobile              # Expo native app
 npm run android --workspace @matro/mobile
 ```
 
-The desktop **Server** button beside the Matro name opens Playback source. Enter a Matro server address and choose **Use server**; the app restarts into the server's sign-in/library screen and remembers that source. In receiver mode, use **Playback source → Server settings…** to change the address or **Playback source → This PC** to return to your local library. The local library and server sign-in remain stored independently. If the remembered server is unavailable, source settings open so you can reconnect or use this PC. Command-line `--server ADDRESS` and `--local` overrides remain available.
+The desktop **Server** button beside the Matro name opens Playback source in both local and receiver modes, including before server sign-in. Enter a Matro server address and choose **Use server**; the app restarts into the server's sign-in/library screen and remembers that source. Use **Server → Use this PC** to return to the local library. The local library and server sign-in remain stored independently. The receiver uses Matro's floating window controls without extra native title/menu bars; fullscreen uses Electron's window state, with F to toggle and Escape to exit. If the remembered server is unavailable, source settings open so you can reconnect or use this PC. Command-line `--server ADDRESS` and `--local` overrides remain available.
 
 - `packages/core/`: application services, desktop runtime, server, shared playback preparation and portable native API client.
 - `packages/browser-ui/`: browser components, styles and assets shared by Electron and Vite through imports.

@@ -14,7 +14,7 @@ test('a renderer crash restores the local movie position even when server saves 
     const userId = await app.createUser('head', 'local-recovery-test', 'admin'); await library.addFolder(media);
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${server.address().port}`;
-    const env = { ...process.env, MATRO_WEB_URL: base, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: base, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
     browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
     let page = await browser.firstWindow();
     await page.getByRole('textbox', { name: 'Username', exact: true }).fill('head');
@@ -30,10 +30,15 @@ test('a renderer crash restores the local movie position even when server saves 
       if (blockSaves && req.method === 'PUT' && req.url === '/api/state') { req.resume(); res.writeHead(503, { 'content-type': 'application/json' }).end('{"error":"test: save unavailable"}'); }
       else handleRequest(req, res);
     });
+    const itemId = db.prepare('SELECT id FROM items LIMIT 1').get().id;
     await page.locator('#seek').evaluate(el => { el.value = '6'; el.dispatchEvent(new Event('change', { bubbles: true })); });
-    await expect.poll(() => page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('matro:recovery:v1:')).map(key => JSON.parse(localStorage.getItem(key))).some(entry => entry.position >= 5.9))).toBe(true);
+    const localCheckpoint = () => page.evaluate(id => Object.keys(localStorage).filter(key => key.startsWith('matro:recovery:v1:') && key.endsWith(':' + id)).map(key => JSON.parse(localStorage.getItem(key))).find(entry => entry.position >= 5.9 && entry.position <= 6.1), itemId);
+    await expect.poll(localCheckpoint).toBeTruthy();
     const serverProgress = () => JSON.parse(db.prepare('SELECT data FROM user_state WHERE user_id = ?').get(userId)?.data || '{}').progress || {};
-    expect(Object.values(serverProgress()).some(entry => entry.position >= 5.9)).toBe(false);
+    // The old server position can be ahead of six seconds on a slower machine.
+    // Freshness, rather than furthest position, proves the local-only save.
+    const recoveredAt = (await localCheckpoint()).updated;
+    expect(serverProgress()[itemId]?.updated || 0).toBeLessThan(recoveredAt);
     const crashed = page.waitForEvent('crash');
     await browser.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer());
     await crashed;
@@ -46,8 +51,8 @@ test('a renderer crash restores the local movie position even when server saves 
     }, base);
     page = await reopened;
     await page.getByRole('button', { name: 'Resume watching', exact: true }).click();
-    await expect.poll(() => page.locator('#position').innerText()).toMatch(/^0:0[6-9]$/);
-    await expect.poll(() => Object.values(serverProgress()).some(entry => entry.position >= 5.9)).toBe(true);
+    await expect(page.locator('#position')).toHaveText('0:06');
+    await expect.poll(() => serverProgress()[itemId]?.updated || 0).toBeGreaterThanOrEqual(recoveredAt);
   } finally {
     await browser?.close(); app.downloads.close(); app.closePlayback();
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
@@ -65,7 +70,7 @@ test('Vite production UI signs in, plays through the HTTP adapter and saves prog
     await app.createUser('head', 'native-and-web-test', 'admin');
     await library.addFolder(media);
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const env = { ...process.env, MATRO_WEB_URL: `http://127.0.0.1:${server.address().port}`, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: `http://127.0.0.1:${server.address().port}`, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
     browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
     const page = await browser.firstWindow(), errors = [];
     page.on('pageerror', e => errors.push(e.message));
@@ -101,7 +106,7 @@ test('direct-play resume survives leaving before metadata arrives and resumes at
   try {
     await app.createUser('head', 'resume-position-test', 'admin'); await library.addFolder(media);
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const env = { ...process.env, MATRO_WEB_URL: `http://127.0.0.1:${server.address().port}`, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: `http://127.0.0.1:${server.address().port}`, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
     browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
     const page = await browser.firstWindow();
     // Exercise progressive fallback separately from the disk-backed MSE path.

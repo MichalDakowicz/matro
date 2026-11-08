@@ -40,15 +40,7 @@ function installSourceSwitch(server) {
     await change(url, true);
   });
   ipcMain.handle('desktop:source-local', async event => { trusted(event); await change(loadSource(dir).url, false); });
-  app.whenReady().then(() => {
-    Menu.setApplicationMenu(Menu.buildFromTemplate([
-      { label: 'Playback source', submenu: [
-        { label: 'This PC', type: 'radio', checked: !server, click: () => { void change(loadSource(dir).url, false); } },
-        { id: 'source-settings', label: server ? 'Server settings…' : 'Connect to server…', click: () => show() }
-      ] },
-      { role: 'editMenu' }
-    ]));
-  });
+  app.whenReady().then(() => Menu.setApplicationMenu(null));
   return { show };
 }
 module.exports = { installSourceSwitch };

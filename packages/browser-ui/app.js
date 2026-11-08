@@ -3,7 +3,7 @@ import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
 const api = window.matro;
-if (api?.chooseSource) {
+if (api?.chooseSource && !document.querySelector('.desktop-source-button')) {
   const button = document.createElement('button'); button.className = 'pill desktop-source-button'; button.textContent = 'Server'; button.setAttribute('aria-label', 'Playback source');
   button.addEventListener('click', () => { void api.chooseSource(); });
   document.querySelector('.window-zone .brand')?.before(button);
