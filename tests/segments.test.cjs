@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { hashFrame, distance, detectSegments, createSegments } = require('../electron/segments.cjs');
+const { hashFrame, distance, detectSegments, createSegments } = require('../packages/core/desktop/segments.cjs');
 const { fixtures } = require('./fixtures.cjs');
 const path = require('node:path');
 function noise(seed, count) {
@@ -43,7 +43,7 @@ test('real media fingerprint extraction caches samples and closes cleanly', asyn
 
 test('real encoded episodes publish fuzzy intro/outro matches before season scan completes', async () => {
   const fs = require('node:fs/promises');
-  const { run, ffmpeg } = require('../electron/media.cjs');
+  const { run, ffmpeg } = require('../packages/core/desktop/media.cjs');
   const folder = path.resolve('.test-media', 'segment-encoded'); await fs.mkdir(folder, { recursive: true });
   const make = async (file, lead, middle, tail, brightness) => {
     await run(ffmpeg, ['-y', '-v', 'error', '-f', 'lavfi', '-i', `color=c=black:s=160x90:r=10:d=${lead}`, '-f', 'lavfi', '-i', 'testsrc2=s=160x90:r=10:d=18', '-f', 'lavfi', '-i', `color=c=blue:s=160x90:r=10:d=${middle}`, '-f', 'lavfi', '-i', 'testsrc=s=160x90:r=10:d=18', '-f', 'lavfi', '-i', `color=c=black:s=160x90:r=10:d=${tail}`, '-filter_complex', `[1:v]eq=brightness=${brightness}[intro];[0:v][intro][2:v][3:v][4:v]concat=n=5:v=1:a=0,format=yuv420p[out]`, '-map', '[out]', '-c:v', 'libx264', '-preset', 'ultrafast', file]);
@@ -62,7 +62,7 @@ test('real encoded episodes publish fuzzy intro/outro matches before season scan
 
 test('interrupted decoding reuses finished chunks instead of starting over', async () => {
   const fs = require('node:fs/promises');
-  const { run, ffmpeg } = require('../electron/media.cjs');
+  const { run, ffmpeg } = require('../packages/core/desktop/media.cjs');
   const dir = await fs.mkdtemp(path.resolve('.test-media', 'chunks-')), file = path.join(dir, 'episode.mp4');
   await run(ffmpeg, ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=160x90:r=5:d=90', '-c:v', 'libx264', '-preset', 'ultrafast', file]);
   const cache = path.join(dir, 'cache'), engine = createSegments(cache), controller = new AbortController();

@@ -1,0 +1,13 @@
+services:
+  matro:
+    build:
+      dockerfile: apps/server/Dockerfile.nvidia
+      args:
+        NVIDIA_DRIVER_BRANCH: ${MATRO_NVIDIA_DRIVER_BRANCH:-595-server}
+        NVIDIA_PACKAGE_VERSION: ${MATRO_NVIDIA_PACKAGE_VERSION:?Set the NVIDIA package version matching the loaded host driver}
+    devices:
+      - /dev/nvidia0:/dev/nvidia0
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+    environment:
+      MATRO_VIDEO_ENCODER: h264_nvenc

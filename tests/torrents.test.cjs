@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
-const { createTorrents, endpoint } = require('../electron/torrents.cjs');
+const { createTorrents, endpoint } = require('../packages/core/desktop/torrents.cjs');
 const hash = '1234567890abcdef1234567890abcdef12345678';
 const secure = { isEncryptionAvailable: () => true, encryptString: value => Buffer.from([...value].reverse().join('')), decryptString: value => [...value.toString()].reverse().join('') };
 

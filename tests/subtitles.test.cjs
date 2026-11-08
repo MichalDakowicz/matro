@@ -1,7 +1,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
-const { createEmbeddedSubtitles } = require('../electron/embedded-subtitles.cjs');
-const { run, probe, ffmpeg } = require('../electron/media.cjs');
+const { createEmbeddedSubtitles } = require('../packages/core/desktop/embedded-subtitles.cjs');
+const { run, probe, ffmpeg } = require('../packages/core/desktop/media.cjs');
 const vtt = 'WEBVTT\n\n00:00.100 --> 00:02.000\nZażółć gęślą jaźń\n';
 const info = { subtitles: [{ index: 2, text: true }, { index: 3, text: false, bitmap: true }] };
 async function cacheFixture(t) {

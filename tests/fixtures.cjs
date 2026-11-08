@@ -1,6 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { ffmpeg, run } = require('../electron/media.cjs');
+const { ffmpeg, run } = require('../packages/core/desktop/media.cjs');
 const dir = path.resolve(__dirname, '../.test-media');
 async function fixtures() {
   await fs.mkdir(dir, { recursive: true });

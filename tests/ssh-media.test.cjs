@@ -6,7 +6,7 @@ const { createInterface } = require('node:readline');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const os = require('node:os');
-const { SSHMedia, normalize, rootFor } = require('../electron/ssh-media.cjs');
+const { SSHMedia, normalize, rootFor } = require('../packages/core/desktop/ssh-media.cjs');
 
 const config = { host: '192.168.100.6', user: 'michu', port: 22, directory: '/mnt/media' };
 function fakeSSH({ fail = false } = {}) {

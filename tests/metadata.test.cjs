@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { readEnv, credentials, createMetadata, cleanQuery, yearOf } = require('../electron/metadata.cjs');
+const { readEnv, credentials, createMetadata, cleanQuery, yearOf } = require('../packages/core/desktop/metadata.cjs');
 
 test('file and folder names become clean TMDB queries', () => {
   assert.equal(cleanQuery('The.Brutalist.2024.2160p.WEB-DL.x265'), 'The Brutalist');

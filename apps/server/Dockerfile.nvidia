@@ -1,0 +1,41 @@
+# NVIDIA userspace libraries must match the host's loaded kernel driver. This image
+# needs only explicit NVIDIA device mappings; it does not modify the host runtime.
+FROM ubuntu:26.04 AS nvidia-libs
+ARG NVIDIA_DRIVER_BRANCH=595-server
+ARG NVIDIA_PACKAGE_VERSION
+RUN test -n "$NVIDIA_PACKAGE_VERSION" \
+    && apt-get update \
+    && mkdir -p /packages /driver \
+    && cd /packages \
+    && apt-get download \
+       "libnvidia-compute-${NVIDIA_DRIVER_BRANCH}=${NVIDIA_PACKAGE_VERSION}" \
+       "libnvidia-decode-${NVIDIA_DRIVER_BRANCH}=${NVIDIA_PACKAGE_VERSION}" \
+       "libnvidia-encode-${NVIDIA_DRIVER_BRANCH}=${NVIDIA_PACKAGE_VERSION}" \
+    && for package in *.deb; do dpkg-deb -x "$package" /driver; done
+
+FROM node:24-bookworm-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY apps ./apps
+COPY packages ./packages
+RUN npm ci --ignore-scripts --workspace @matro/web --include-workspace-root
+RUN npm run build:web
+
+FROM node:24-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg libx11-6 libxext6 libssl3 ocl-icd-libopencl1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=nvidia-libs /driver/usr/lib/x86_64-linux-gnu/ /opt/nvidia/
+RUN ldconfig /opt/nvidia
+WORKDIR /app
+COPY --from=build /app/package*.json ./
+COPY --from=build /app/apps ./apps
+COPY --from=build /app/packages ./packages
+RUN npm ci --omit=dev --ignore-scripts --workspace @matro/server
+ENV NODE_ENV=production PORT=8484 MATRO_DATA=/data MATRO_MEDIA=/media \
+    MATRO_FFMPEG=/usr/bin/ffmpeg MATRO_FFPROBE=/usr/bin/ffprobe \
+    MATRO_VIDEO_ENCODER=h264_nvenc LD_LIBRARY_PATH=/opt/nvidia
+VOLUME ["/data", "/media"]
+EXPOSE 8484
+USER node
+CMD ["node", "packages/core/server/index.js"]

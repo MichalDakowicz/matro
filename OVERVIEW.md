@@ -4,7 +4,7 @@
 
 Matro is an open-source media library and player for people who own their media. The long-term system stores movies and shows on a self-hosted server and lets desktop, web, and mobile apps connect to it easily. The desktop app also stands on its own as a modern, comfortable alternative to VLC: open a file and watch it without setting up infrastructure or signing in.
 
-**Current priority: the standalone desktop player.** The server is not set up yet, so no desktop feature depends on it. Server, web, and mobile work follows after local playback is dependable.
+**Current structure:** desktop (Electron), web (Vite), native mobile (Expo), and server now share one npm-workspaces repository. Application services live in `packages/core`, browser UI in `packages/browser-ui`, and platform UIs/entry points in `apps`. The mobile player uses expo-video and native screens. See [README.md](README.md) for current playback preparation, hardware encoder selection, limits and commands. Desktop can still run locally without a server.
 
 ## Design foundation
 
@@ -71,27 +71,27 @@ The footer (the ? button) has a Theme row: System follows the OS, or pick Light 
 ## Architecture
 
 ```text
-src/                       Renderer: library, player, queue, controls
-  index.html               Local shell and content security policy
-  styles.css               Design system and adaptive layouts
-  app.js                   UI state and player interactions
-electron/
-  main.cjs                 Electron lifecycle, dialogs, IPC, persistence
-  preload.cjs              Narrow context-isolated renderer API
-  media.cjs                File scanning, filename parsing, FFprobe helpers
-  stream.cjs               Token-scoped loopback FFmpeg stream service
-  previews.cjs             Cancellable source-frame extraction and memory cache
-tests/                     Real media and Electron integration tests
-design/                    Original design references
+packages/core/              Application services and host runtimes
+  desktop/                 Local library, IPC runtime, scans, metadata, downloads, SSH
+  server/                  HTTP/API, authentication, SQLite library and account state
+  playback/                Shared encoder selection, preparation cache and range delivery
+  client/                  Portable typed native API, playback URLs and text subtitle parsing
+packages/browser-ui/        Shared browser UI, styles and assets
+apps/desktop/               Electron entry, isolated preload and desktop HTML
+apps/web/                   Vite entry, HTTP adapter, auth and profile UI
+apps/mobile/                Expo React Native UI and native video surface
+apps/server/                Server commands, Docker configuration and integration tests
+tests/                      Core, real media, cache and Electron/web UI tests
+design/                     Original design references
 ```
 
 The renderer has no Node.js integration and runs sandboxed with context isolation. Only packaged UI files are served through `matro://app`. New windows, navigation, and permission requests are denied. Main-process IPC checks its sender and frame. Playback and embedded subtitle requests reference catalog IDs instead of arbitrary renderer-provided input paths. The stream service binds only to `127.0.0.1` and uses random session tokens. FFmpeg subprocesses use argument arrays, not shell command interpolation. Media decoding is limited to local-file protocols; arbitrary renderer-provided server URLs are not accepted as playback inputs; configured SSH sources use the authenticated media gateway.
 
-Library state lives in `library.json` in Electron's user-data directory and is written through a temporary file and rename. Media files are left in place. No telemetry, accounts, or external font requests are included. Network features are optional: configured SSH media access, TMDB metadata, and explicit movie browsing with qBittorrent download management. Optional movie browsing and qBittorrent download management use `electron/torrents.cjs`, with separate OS-encrypted settings in `downloads.json`; see [download documentation](docs/downloads.md). Another optional network service is TMDB metadata (`electron/metadata.cjs`): it runs only when TMDB credentials are configured in a local `.env` or the environment, lives entirely in the main process, sends cleaned title names, and serves downloaded artwork to the renderer through `matro://app/artwork/` so the renderer's content security policy stays `'self'`-only.
+Library state lives in `library.json` in Electron's user-data directory and is written through a temporary file and rename. Media files are left in place. No telemetry, accounts, or external font requests are included. Network features are optional: configured SSH media access, TMDB metadata, and explicit movie browsing with qBittorrent download management. Optional movie browsing and qBittorrent download management use `packages/core/desktop/torrents.cjs`, with separate OS-encrypted settings in `downloads.json`; see [download documentation](docs/downloads.md). Another optional network service is TMDB metadata (`packages/core/desktop/metadata.cjs`): it runs only when TMDB credentials are configured in a local `.env` or the environment, lives entirely in the main process, sends cleaned title names, and serves downloaded artwork to the renderer through `matro://app/artwork/` so the renderer's content security policy stays `'self'`-only.
 
 ## Tradeoffs and known gaps
 
-The FFmpeg bridge makes broad decoding practical without a native addon or an independently installed player. It is a compatibility-first first implementation, not a final VLC-equivalent playback engine. Software transcoding costs CPU and introduces startup/seek latency; it does not preserve HDR, original bitstream audio, multichannel output, or every codec feature. Fast seeks depend on the source's index and keyframes. Protected media is outside scope.
+The FFmpeg bridge makes broad decoding practical without a native addon or an independently installed player. It is a compatibility-first first implementation, not a final VLC-equivalent playback engine. Direct play and remuxing avoid unnecessary video encoding; hardware encoding/decoding is attempted when usable, with a bounded software fallback. The disk cache renders ahead independently of the player. Transcoding still introduces startup/seek latency; it does not preserve HDR, original bitstream audio, multichannel output, or every codec feature. Fast seeks depend on the source's index and keyframes. Protected media is outside scope.
 
 Before positioning Matro as a high-end 4K desktop player, evaluate an embedded libmpv/libVLC engine or another maintained native render integration. Priorities are direct decode, hardware acceleration, color management/HDR, surround/passthrough, richer subtitle rendering, and reliable audio/subtitle preference matching. The UI/IPC boundary is deliberately separate from the current streaming backend to make that replacement possible.
 
@@ -101,13 +101,11 @@ Other gaps: file watching, background scan progress/cancel, real artwork/metadat
 
 1. **Desktop foundation (current):** real local playback, design-based library/player, queue, resume, language-first tracks, text/bitmap subtitles, hover previews, fullscreen playback, and packaging configuration.
 2. **Desktop quality:** validate against a real-world codec corpus; improve native decode/performance, subtitle fidelity, fullscreen behavior, artwork, file associations, accessibility, and release packaging.
-3. **Server contract:** define authenticated catalog, direct-play/transcode, range/HLS streaming, subtitles, capabilities, and watch-progress APIs. Choose whether to build a Matro server or adapt a mature self-hosted media protocol before implementing connection UX.
-4. **Desktop server linking:** URL plus credentials/token, connection test, useful connection errors, server discovery if justified, local/server source switching, and resilient reconnects. Mounted folders already work without this API.
-5. **Web and mobile:** reuse product language and interaction models; implement platform playback adapters and sync against the server contract. Electron-specific APIs stay out of shared catalog models.
+3. **Server contract (implemented):** authenticated catalog, direct-play ranges, shared preparation, subtitles, per-account watch state and native bearer sessions.
+4. **Desktop receiver:** `npm run start:receiver -- https://matro.example.com` (or `MATRO_SERVER_URL`) opens the authenticated server UI in an isolated Electron window. Media preparation then runs on the server. The default desktop mode keeps local/mounted folders and SSH playback; a graphical mode switch remains future work.
+5. **Web and mobile (implemented):** Vite imports the shared browser UI; Expo uses native screens and expo-video. Mobile library administration, series release browsing and subtitle uploads still use the web UI.
 
-A first self-hosted server and web app now live in [`server/`](server/README.md): Node with built-in SQLite, one head account that manages the library, viewer accounts with their own progress and sub/dub choices, and shared labelled subtitles. The desktop app does not talk to it yet (step 4), so there is still no connection screen. An Android receiver app in [`mobile/`](mobile/README.md) links to a server by address, signs in and shows that web UI full screen.
-
-No hosting provider beyond that, sync protocol for the desktop app, or mobile framework is committed yet. Do not add a fake server connection screen before there is a real, testable server contract.
+The self-hosted service lives in [apps/server](apps/server/README.md), browser UI in [apps/web](apps/web), and native app in [apps/mobile](apps/mobile/README.md). Desktop local state remains separate from server account state; receiver mode uses server account state.
 
 ## Running, testing, and releases
 

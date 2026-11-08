@@ -1,10 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
-const { defaultStorage, storageOptions, planDownload } = require('../electron/download-layout.cjs');
-const { createDownloadJobs } = require('../electron/download-jobs.cjs');
-const { createPathChecker } = require('../electron/download-files.cjs');
-const { connectionError, isTransient } = require('../electron/torrent-connection.cjs');
+const { defaultStorage, storageOptions, planDownload } = require('../packages/core/desktop/download-layout.cjs');
+const { createDownloadJobs } = require('../packages/core/desktop/download-jobs.cjs');
+const { createPathChecker } = require('../packages/core/desktop/download-files.cjs');
+const { connectionError, isTransient } = require('../packages/core/desktop/torrent-connection.cjs');
 const file = (index, name, size = 100) => ({ index, name, size, priority: 1 });
 
 test('Cloudflare outages retain the preparation step, back off across restarts and recover automatically', async t => {
@@ -14,7 +14,7 @@ test('Cloudflare outages retain the preparation step, back off across restarts a
   const options = { dir, now: () => clock, configFor: async () => config, call: async (_target, route) => {
     requests++;
     if (unavailable) throw connectionError(530);
-    if (route.startsWith('torrents/info')) return [{ tags: job.tag, save_path: '/mnt/media/Movies', state: 'stoppedDL' }];
+    if (route.startsWith('torrents/info')) return [{ tags: job.tag, save_path: '/mnt/media/Movies', state: starts ? 'downloading' : 'stoppedDL' }];
     if (route.startsWith('torrents/files')) return [file(0, 'Film.mkv')];
     if (route === 'torrents/start') { starts++; return ''; }
     throw new Error('Unexpected mutation: ' + route);
@@ -30,6 +30,8 @@ test('Cloudflare outages retain the preparation step, back off across restarts a
     clock += delay;
   }
   jobs = createDownloadJobs(options); unavailable = false;
+  await jobs.process();
+  assert.equal((await jobs.status('server'))[0].phase, 'verifying');
   await jobs.process();
   assert.equal((await jobs.status('server'))[0].phase, 'ready');
   assert.equal((await jobs.status('server'))[0].error, '');
@@ -78,10 +80,35 @@ test('show plans retain episodes across seasons and only pair subtitles with the
   assert.deepEqual(result.skip, [25]);
   assert.equal(planDownload(input, { title: 'Show', kind: 'show' }, { ...defaultStorage('server'), showFolders: 'title' }).files[0].newPath, 'Show/S01E01 Show [resolution unknown].mkv');
 });
+test('unnumbered show videos use torrent file order and keep matching subtitles', () => {
+  const input = [file(8, 'Release/last.mkv'), file(2, 'Release/first.mkv'), file(3, 'Release/first.en.srt'), file(0, 'Release/sample.mkv'), file(6, 'Release/middle.mkv'), file(7, 'Release/readme.txt')];
+  const plan = planDownload(input, { title: 'Show', kind: 'show' }, defaultStorage('server'));
+  assert.deepEqual(plan.files.map(item => [item.index, item.newPath]), [
+    [8, 'Show/S01/S01E03 Show [resolution unknown].mkv'],
+    [2, 'Show/S01/S01E01 Show [resolution unknown].mkv'],
+    [3, 'Show/S01/S01E01 Show [resolution unknown].en.srt'],
+    [6, 'Show/S01/S01E02 Show [resolution unknown].mkv'],
+  ]);
+  assert.deepEqual(plan.skip, [0, 7]);
+  assert.equal(planDownload([file(0, 'episode.mkv')], { title: 'Show', kind: 'show' }, defaultStorage('server')).files[0].newPath, 'Show/S01/S01E01 Show [resolution unknown].mkv');
+});
+
+test('show fallback preserves known numbers and fills unused numbers separately per season', () => {
+  const plan = planDownload([file(0, 'Season 2/first.mkv'), file(1, 'Season 2/Show.S02E01.mkv'), file(2, 'Season 2/last.mkv'), file(3, 'S03/first.mkv')], { title: 'Show', kind: 'show' }, defaultStorage('server'));
+  assert.deepEqual(plan.files.map(item => item.newPath), [
+    'Show/S02/S02E02 Show [resolution unknown].mkv',
+    'Show/S02/S02E01 Show [resolution unknown].mkv',
+    'Show/S02/S02E03 Show [resolution unknown].mkv',
+    'Show/S03/S03E01 Show [resolution unknown].mkv',
+  ]);
+  const selected = planDownload([file(0, 'first.mkv'), file(1, 'second.mkv')], { title: 'Show', kind: 'show', season: 4, episode: 2 }, defaultStorage('server'));
+  assert.deepEqual(selected.files.map(item => item.newPath), ['Show/S04/S04E02 Show [resolution unknown].mkv']);
+  assert.deepEqual(selected.skip, [0]);
+});
+
 test('unsafe paths and unsupported media leave downloads stopped', () => {
   assert.throws(() => planDownload([file(0, '../Movie.mkv')], { title: 'Movie' }, defaultStorage('server')), /unsafe/);
   assert.throws(() => planDownload([file(0, 'movie.exe')], { title: 'Movie' }, defaultStorage('server')), /No playable/);
-  assert.throws(() => planDownload([file(0, 'episode.mkv')], { title: 'Show', kind: 'show' }, defaultStorage('server')), /numbers are missing/);
 });
 test('preparation persists, filters by file index, verifies renames and starts only after relocation', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-jobs-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
@@ -94,6 +121,7 @@ test('preparation persists, filters by file index, verifies renames and starts o
     if (route === 'torrents/filePrio') for (const id of data.id.split('|').map(Number)) names.find(file => file.index === id).priority = +data.priority;
     if (route === 'torrents/renameFile') names.find(file => file.name === data.oldPath).name = data.newPath;
     if (route === 'torrents/setLocation') torrent.save_path = data.location;
+    if (route === 'torrents/start') torrent.state = 'downloading';
     return '';
   } };
   let jobs = createDownloadJobs(options);
@@ -107,9 +135,32 @@ test('preparation persists, filters by file index, verifies renames and starts o
   assert.equal(commands.some(call => call.route === 'torrents/start'), false);
   await jobs.process();
   assert.equal(commands.at(-1).route, 'torrents/start');
+  assert.equal((await jobs.status('server'))[0].phase, 'verifying');
+  await jobs.process();
   assert.equal((await jobs.status('server'))[0].phase, 'ready');
   assert.equal((await jobs.status('server'))[0].skipped, 1);
 });
+test('unnumbered series preparation renames each episode and starts the download', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-show-fallback-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const config = { url: 'http://localhost/', username: 'u', storage: defaultStorage('server') };
+  const names = [file(0, 'Release/first.mkv'), file(1, 'Release/second.mkv')];
+  let job, starts = 0;
+  const torrent = { state: 'stoppedDL' };
+  const jobs = createDownloadJobs({ dir, configFor: async () => config, call: async (_target, route, data) => {
+    if (route.startsWith('torrents/info')) return [{ ...torrent, tags: job.tag }];
+    if (route.startsWith('torrents/files')) return names;
+    if (route === 'torrents/renameFile') names.find(item => item.name === data.oldPath).name = data.newPath;
+    if (route === 'torrents/setLocation') torrent.save_path = data.location;
+    if (route === 'torrents/start') { starts++; torrent.state = 'downloading'; }
+    return '';
+  } });
+  job = await jobs.create('server', config, { hash: '3'.repeat(40), title: 'Show', kind: 'show' }, false);
+  for (let pass = 0; pass < 4; pass++) await jobs.process();
+  assert.equal((await jobs.status('server'))[0].phase, 'ready');
+  assert.equal(starts, 1);
+  assert.deepEqual(names.map(item => item.name), ['Show/S01/S01E01 Show [resolution unknown].mkv', 'Show/S01/S01E02 Show [resolution unknown].mkv']);
+});
+
 test('jobs refuse to mutate torrents without their unique ownership tag', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-jobs-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const calls = [], config = { url: 'http://localhost/', username: 'u', storage: defaultStorage('server') };
@@ -162,4 +213,38 @@ test('removing during preparation waits for in-flight work and prevents a later 
   assert.equal(removed, true);
   assert.deepEqual(await jobs.status('server'), []);
   assert.equal(calls.includes('torrents/start'), false);
+});
+
+test('metadata-only caches time out with peer guidance and retry restarts a stopped metadata job', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-metadata-timeout-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const config = { url: 'http://localhost/', username: 'u', storage: defaultStorage('server') };
+  let clock = 1000, starts = 0, job;
+  const jobs = createDownloadJobs({ dir, now: () => clock, configFor: async () => config, call: async (_target, route) => {
+    if (route.startsWith('torrents/info')) return [{ tags: job.tag, state: 'stoppedMetaDL' }];
+    if (route.startsWith('torrents/files')) return [];
+    if (route === 'torrents/start') starts++;
+  } });
+  job = await jobs.create('server', config, { hash: '1'.repeat(40), title: 'Film', kind: 'movie' }, false);
+  await jobs.process(); assert.equal(starts, 1);
+  clock += 181000; await jobs.process();
+  assert.equal((await jobs.status('server'))[0].phase, 'error');
+  assert.match((await jobs.status('server'))[0].error, /DHT and trackers/);
+  await jobs.retry(job.id); await jobs.process(); assert.equal(starts, 2);
+  assert.equal((await jobs.status('server'))[0].phase, 'metadata');
+});
+
+test('a completed stopped torrent is accepted, while a refused start times out and can be retried', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-start-check-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const config = { url: 'http://localhost/', username: 'u', storage: defaultStorage('server') };
+  let clock = 1000, job, progress = 0, completed = 0;
+  const jobs = createDownloadJobs({ dir, now: () => clock, configFor: async () => config, onComplete: async () => completed++, call: async (_target, route) => {
+    if (route.startsWith('torrents/info')) return [{ tags: job.tag, state: 'stoppedDL', progress }];
+    if (route.startsWith('torrents/files')) return [file(0, 'Film.mkv')];
+  } });
+  job = await jobs.create('server', config, { hash: '2'.repeat(40), title: 'Film', kind: 'movie' }, false);
+  job.plan = { root: '/mnt/media/Movies', files: [file(0, 'Film.mkv')], skip: [] }; job.phase = 'starting';
+  await jobs.process(); assert.equal((await jobs.status('server'))[0].phase, 'verifying');
+  clock += 31000; await jobs.process(); assert.equal((await jobs.status('server'))[0].phase, 'error');
+  await jobs.retry(job.id); await jobs.process(); progress = 1; await jobs.process();
+  assert.equal((await jobs.status('server'))[0].phase, 'complete'); assert.equal(completed, 1);
 });

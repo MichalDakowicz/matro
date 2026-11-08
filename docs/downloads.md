@@ -18,7 +18,7 @@ For Server downloads, connect the same host and media root under Folders → Con
 
 ## Media selection
 
-New magnets use qBittorrent's MetadataReceived stop condition. The client fetches metadata and stops before the payload. Matro selects the largest non-sample feature for movies, or numbered episodes for shows, and optional SRT/ASS/SSA/VTT subtitles. Images, TXT/NFO files, executables, samples, trailers and extras are assigned priority zero. Movie subtitles are renamed alongside the feature; show subtitles are matched by episode number or matching video basename. Files with unsafe paths, no playable video, or unknown episode numbering for season layouts remain stopped for review.
+New magnets use qBittorrent's MetadataReceived stop condition. The client fetches metadata and stops before the payload. Matro selects the largest non-sample feature for movies, or episodes for shows, and optional SRT/ASS/SSA/VTT subtitles. Images, TXT/NFO files, executables, samples, trailers and extras are assigned priority zero. Movie subtitles are renamed alongside the feature; show subtitles are matched by episode number or matching video basename. Unnumbered episodes receive the next unused episode number in torrent file-index order, separately for each season. Recognized episode numbers are preserved; season folders or the selected release determine the season, defaulting to season 1. Files with unsafe paths or no playable video remain stopped for review.
 
 Matro verifies renamed paths and priorities before starting the payload. If Matro closes during preparation, qBittorrent stays stopped after metadata and preparation resumes when Matro opens again. Failed preparation has a Retry preparation button. Managed job ownership tags prevent modifying unrelated or pre-existing torrents. Original torrents already present in qBittorrent are reported as duplicates and are not relocated or filtered.
 
@@ -189,3 +189,9 @@ Regression checks cover HTTP 530, transient login responses, capped retry timing
 restart persistence, saved old-error migration, and permanent-error handling.
 node scripts/verify-download-cards.cjs also simulates a temporary tunnel outage and
 verifies automatic UI polling recovery without a manual refresh.
+
+## Download preparation recovery
+
+The shared download worker now verifies that qBittorrent actually leaves its stopped state after relocation and `start`, rather than reporting a successful API acknowledgement as a running download. A client that remains stopped for 30 seconds becomes an actionable error; retry reissues start. Missing-file and write errors also become visible failures. Transient connection failures retain the current preparation phase and back off across app restarts.
+
+Metadata retrieval times out after three minutes with guidance to check peers, DHT and trackers. A small `.torrent` or metadata cache is expected during this stage and is not the movie payload. A stopped metadata-only torrent is restarted. The worker never removes existing movie files as part of recovery. Download preparation and client state tests use a mock qBittorrent; a live transfer still depends on reachable peers, working client configuration and host permissions.

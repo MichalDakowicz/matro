@@ -1,27 +1,42 @@
 # Matro
 
-A local-first Electron media player. The interface follows the Matro UI Design canvas: no header row, a floating dock (Movies, Shows, Search, Folders — Music appears when you have audio), and the Matro wordmark with its mark in the top-right corner. With no dock item selected you are on the landing page: Continue Watching first, then an endless poster reel you browse by scrolling sideways, dragging or with ← / →, then your shelves. Titles open a full title page; playback uses flat controls over the video with a thin full-width seeker and 5-second skips.
+A local-first media player for Electron desktop, Vite web and Expo native mobile. The interface follows the Matro UI Design canvas: no header row, a floating dock (Movies, Shows, Search, Folders — Music appears when you have audio), and the Matro wordmark with its mark in the top-right corner. With no dock item selected you are on the landing page: Continue Watching first, then an endless poster reel you browse by scrolling sideways, dragging or with ← / →, then your shelves. Titles open a full title page; playback uses flat controls over the video with a thin full-width seeker and 5-second skips.
 
-## Run
+## Workspace and running
 
-Requires Node.js 22.12 or newer and npm. Windows is the initial development target.
+Matro is an npm-workspaces monorepo with one root lockfile. Install from this folder with Node.js 22.13 or newer:
 
 ```sh
 npm install
-npx install-electron --no
-npm start
+npm start                         # Standalone Electron desktop
+npm run start:receiver -- https://matro.example.com  # Server receiver
+npm run build:web                 # Vite production web build
+npm run start:server              # Serves the web build and authenticated API on :8484
+npm run dev:web                   # Vite development server; proxies /api to :8484
+npm run start:mobile              # Expo native app
+npm run android --workspace @matro/mobile
 ```
 
-Electron, FFmpeg, and FFprobe are downloaded during installation; no separate codec installation is required. No server or account is needed for playback. Add a folder, open files, or drop media files into the window. Mounted NAS/network folders work as ordinary folders.
+- `packages/core/`: application services, desktop runtime, server, shared playback preparation and portable native API client.
+- `packages/browser-ui/`: browser components, styles and assets shared by Electron and Vite through imports.
+- `apps/desktop/`: Electron entry, isolated preload bridge and desktop HTML.
+- `apps/web/`: Vite entry and browser HTTP/authentication/profile adapters.
+- `apps/mobile/`: Expo React Native UI using expo-video, with no WebView dependency.
+- `apps/server/`: server commands, container configuration and integration tests.
+
+There is no generated vendor copy or UI synchronization script. Rebuild Vite after changing shared browser UI before starting the production server. For server setup, run `npm run setup --workspace @matro/server`. See [server instructions](apps/server/README.md) and [native app instructions](apps/mobile/README.md).
 
 ```sh
-npm test          # Scanner, metadata, and real FFmpeg stream checks
-npm run test:e2e # Real Electron UI and playback checks
-npm run pack     # Unpacked desktop application in dist/
-npm run dist     # Windows NSIS installer
+npm test                          # Core, real media, cache and download tests
+npm run test:server               # API/authentication and media integration
+npm test --workspace @matro/mobile
+npm run typecheck:mobile
+npm run test:e2e                  # Electron UI regression tests
+npm run pack                     # Unpacked desktop app in dist/win-unpacked
+npm run dist                     # Windows installer
 ```
 
-The UI tests generate their own small MKV/audio/subtitle fixtures and an isolated profile under `.test-media/`; they do not modify your library. `test-results/` contains screenshots after UI tests. No separate Playwright browser download is needed: tests launch Electron. Download-browser tests use mock HTTP services and never download real torrents. UI tests set `MATRO_METADATA=off`, so they never contact TMDB.
+Tests generate isolated media and profiles under `.test-media/` and temporary directories. Download tests use mock clients and never download real releases. Set `MATRO_METADATA=off` to prevent metadata requests during local testing.
 
 ### Posters and metadata (TMDB, optional)
 
@@ -47,72 +62,14 @@ TMDB_ACCESS_TOKEN=your-read-access-token   # or TMDB_API_KEY=...; VITE_-prefixed
 
 ## Current limits
 
-Playback currently transcodes to H.264/AAC fragmented MP4 inside the app, using software encoding and stereo audio. High-resolution files can be CPU intensive. Seeking outside buffered media, changing audio, or changing bitmap subtitles/delay restarts the stream briefly. Original HDR/color fidelity, audio passthrough, surround output, and advanced ASS styling are not preserved. Bitmap support currently covers embedded tracks; external bitmap sidecars are not supported. Damaged or encrypted/DRM files are not supported. Without TMDB credentials (or for unmatched files) covers are generated from the title: typography and colour, not fetched posters.
+Playback writes a local recovery checkpoint before network saves: desktop/web on playback updates and native mobile about once a second, plus pauses and seeks. After a crash or sudden exit, reopening merges the newest local position into Continue Watching and resumes from it, then syncs it back to the server. Checkpoints are separated by server and account; a newer server position wins over an older local copy. Recovery uses the last written checkpoint rather than relying on a closing event.
 
-Automatic segment detection starts when the app opens, even with no video playing. It prepares episodes one by one: the current show first, then Continue watching shows (resume episode and upcoming episodes first), then the rest of the library. The library footer shows background progress. Results, completed scan records, and fingerprints persist between launches. Adding or changing season files schedules fresh comparisons; unavailable episodes retry later instead of blocking other shows.
+Desktop/web playback keeps fetching through to the end while you watch or pause, storing the stream in temporary IndexedDB blocks. Decoder memory can stop filling without stopping the download. The timeline shows the buffered portion. Browsers without MediaSource or available disk storage fall back to progressive playback. Native playback downloads a temporary file alongside the ordinary stream and switches to that local file at the same position when complete, so subsequent playback no longer needs the network. Temporary client buffers are removed when leaving playback or changing the stream; this may transfer the native movie twice. Starting or seeking still uses the short initial preparation buffer instead of waiting for the entire movie.
 
-A quick pass checks the first five and last four minutes of episodes longer than fifteen minutes, comparing up to two nearby episodes. Shorter episodes are scanned in full. Once all episodes have had a quick pass, full scans check for later openings and recap footage from story scenes. One-second perceptual samples tolerate small visual changes and timing differences. Comparisons run in a worker thread; completed minute-sized decoding chunks are reused across interruptions, playback changes, and app restarts.
+Native playback and browser fallback can play compatible local MP4/WebM directly with byte-range seeking. The desktop/browser full-buffer path uses fragmented MP4 so it can keep downloading independently of the decoder. Compatible H.264 is remuxed without re-encoding when starting at the beginning. Other codecs, exact seeks into transcoded streams, and bitmap subtitle composition use an encoder selected by a real device probe: NVIDIA NVENC, Intel QSV, AMD AMF or Apple VideoToolbox when available, with a two-thread software fallback. GPU encoding requires an FFmpeg build that includes the encoder and a working device/driver; When a working hardware encoder is selected, compatible streams also request automatic hardware decoding; bitmap composition stays on CPU. If that path fails, preparation falls back to software.
 
-The scanner keeps working while video plays. It uses a single decoder thread, low OS process priority, and a capped input rate during playback. It slows further if the video buffers, then speeds up when playback stabilizes; when nothing is playing it uses two decoder threads without the read-rate cap. Changes to resource limits resume from cached chunks. This reduces competition with playback, but first scans still take time and high-resolution software playback remains CPU intensive.
+Shared playback preparation writes fragmented MP4 ahead to disk independently of the player. Prepared streams wait for eight seconds of media (or the end of a shorter clip) before sending the first fragment, giving playback a cushion against brief disk and network contention during downloads. It keeps preparing the current movie through pauses and disconnected clients; completed outputs survive app restarts and support byte ranges. A seek replaces obsolete work, shared viewers reuse preparation, and concurrent jobs are capped. Outputs are keyed by source size/mtime, position and track settings. Completed cache files are evicted when over the target (default 32 GiB); active outputs may temporarily exceed the total target, and a single output larger than the target fails with an explicit error. Set `MATRO_PLAYBACK_CACHE_GB` to change the target. This prepares the rest of the selected movie during playback; it does not pre-render the whole library.
 
-Boundaries are approximate; heavily changed sequences, audio-only repeats, or very short recaps may need manual marking. Detection offers a skip button and never skips without your click. Outro fragments separated by up to ten seconds are joined; longer breaks stay separate. Removed automatic markers stay dismissed during background scans; Compare season again explicitly refreshes them. Manual markers take precedence over automatic matches. Skip segment settings shows per-episode scan progress; matches become usable after each comparison without waiting for the entire season.
+A 45-second preparation watchdog terminates hung FFmpeg processes. Browser and native playback attempt two recoveries from the current position after errors or prolonged buffering, then show a retry action. `MATRO_VIDEO_ENCODER=software` disables hardware encoding; individual encoder names such as `h264_nvenc` select a preferred device with software fallback. The server supports `MATRO_FFMPEG`, `MATRO_FFPROBE` and `MATRO_MAX_TRANSCODES` (default 4); desktop preparation allows two concurrent jobs.
 
-Starting a series replaces an old mixed queue with that show's episodes in season/episode order. Next, Previous, and autoplay stay inside that series and stop at its end. Removing an episode from the active queue keeps it removed while stepping through the remaining episodes; starting the series again from the library restores its full episode list.
-
-On Windows, a native Electron `0x80000003` startup crash can come from runtime folder ACLs. If stderr explicitly reports `install_dir_access.cc` and missing `ALL APPLICATION PACKAGES` access, grant read/execute to the reported runtime folder with `icacls "node_modules\electron\dist" /grant "*S-1-15-2-1:(OI)(CI)(RX)"`. Codex's restricted process sandbox may still prevent desktop launches; run desktop tests in an ordinary terminal or with approved execution outside that sandbox. Keep Electron's renderer sandbox enabled.
-
-### Movie browser and downloads
-
-Open **Downloads** in the dock to choose **Movies** or **Series**, search releases, inspect quality/size/seeds,
-and send a selected release to qBittorrent on **This PC** or a **Server**. Configure
-each destination under **Download settings** with its Web UI address, credentials,
-and separate movie/show roots and layouts; then choose **Download to**. qBittorrent 5.1+ with Web UI
-enabled must already run on the destination. Passwords use OS encryption. Searches
-contact YTS only when submitted; Series uses explicit TVmaze show search and EZTV release lookup with separate season/episode/resolution filters. Downloads require an explicit click.
-New downloads select video/subtitle files, skip extras, use title/year/resolution filenames, and remember the seeding choice. Movie details offer higher-resolution upgrades, edition comparison and saved favorites; originals are kept. The page shows transfer progress; completed shows can be added through Folders
-and Rescan. CineCLI is a reference, not a required dependency.
-
-See [download setup and troubleshooting](docs/downloads.md) for configuration,
-storage, limitations, and tests.
-
-### SSH media folders
-
-Choose **Connect SSH** on the welcome page or under **Folders**. Enter the server,
-username, SSH port (normally 22), and an absolute media folder such as `/mnt/media`.
-An optional private-key path selects a specific key; otherwise Matro uses your
-OpenSSH keys or agent. First verify key login in a terminal:
-
-```sh
-ssh michu@192.168.100.6
-```
-
-Accept the host key in that terminal after checking it. Matro requires a known host
-and noninteractive key authentication; it does not store or prompt for passwords.
-Windows OpenSSH must be installed on the PC and Python 3 on the Linux server. Embedded text subtitles also require FFmpeg on the server.
-Encrypted keys work when loaded into the SSH agent.
-
-Matro scans and reads the configured directory over SSH. Videos stream in chunks
-with byte-range seeking; movies are not downloaded in full. FFmpeg playback,
-thumbnails, embedded and adjacent text subtitles, and background segment detection
-continue to run locally. Loading a local SRT, VTT, ASS, or SSA subtitle saves a copy
-beside the video on the server (up to 16 MiB). Existing files are never overwritten;
-a numbered filename is chosen when needed. Uploads are staged in the destination
-directory and published only when complete. If the server is offline or its folder
-is read-only, the subtitle still works for the current session and Matro shows a
-save warning. No movie files are changed. A temporary Python helper runs inside the
-SSH session, with no remote listening port or installed service. It exits when
-Matro disconnects. Progress, subtitle choices, delay, appearance, and other player
-preferences remain saved on this PC; these are not synchronized through the server.
-
-Connection settings are saved with your library and reconnect on demand after
-restart. If the server goes offline, cached entries stay in the library; use
-**Rescan** or retry playback after reconnecting. Remove an SSH folder under
-**Folders** to close its connection without deleting server files. Importing an old
-local library under the new SSH source creates new path-based item IDs; previous
-local watch progress is not automatically migrated.
-
-Embedded text subtitles are extracted on the server and cached on this PC, avoiding a full movie transfer for caption extraction. See [subtitle setup and troubleshooting](docs/subtitles.md).
-
-Remote catalog browsing outside the configured folder, web/mobile clients, and sync remain planned.
-
-See [OVERVIEW.md](OVERVIEW.md) for the product direction, architecture, decisions, and roadmap. Original source: MIT; bundled media binaries have separate licenses described in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Transcoded audio is stereo AAC. HDR/color fidelity, audio passthrough, surround output and advanced ASS styling are not preserved during transcoding. Damaged, encrypted and DRM files are unsupported.

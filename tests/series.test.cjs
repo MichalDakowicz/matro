@@ -1,8 +1,8 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os'), http = require('node:http');
-const { createSeriesCatalog } = require('../electron/series-catalog.cjs');
-const { createTorrents } = require('../electron/torrents.cjs');
-const { planDownload, defaultStorage } = require('../electron/download-layout.cjs');
+const { createSeriesCatalog } = require('../packages/core/desktop/series-catalog.cjs');
+const { createTorrents } = require('../packages/core/desktop/torrents.cjs');
+const { planDownload, defaultStorage } = require('../packages/core/desktop/download-layout.cjs');
 const hash = 'abcdef12' + '1'.repeat(32);
 const show = { id: 7, name: 'Sample Show', premiered: '2021-01-01', externals: { imdb: 'tt1234567' }, summary: '<b>A show &amp; its story</b>', language: 'English', genres: ['Drama'], status: 'Ended' };
 const release = (season, episode, quality, code = hash) => ({ hash: code, imdb_id: '1234567', season: String(season), episode: String(episode), filename: `Sample.Show.S0${season}E0${episode}.${quality}.x265.mkv`, title: 'Episode release', seeds: 10, peers: 3, size_bytes: 1073741824, magnet_url: `magnet:?xt=urn:btih:${code}&tr=udp://tracker.example/announce&tr=javascript:bad&xs=https://untrusted.invalid/` });
