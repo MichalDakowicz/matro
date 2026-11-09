@@ -33,9 +33,8 @@ body.role-viewer [data-action="folder"],body.role-viewer [data-action="files"]{d
 dialog.web-dialog{width:min(520px,calc(100vw - 32px));max-height:calc(100vh - 48px);overflow:auto}
 dialog.web-dialog .muted{margin:10px 0}
 @media(max-width:720px){.web-back{left:12px}.web-fields{grid-template-columns:1fr}.web-who{gap:16px}}
-/* The player owns the whole window; segment (intro/outro) detection is desktop-only for now. */
+/* The player owns the whole window. */
 body.in-player .web-profile,body.fullscreen .web-profile{display:none}
-#segments-button,#segment-tools,.marker-controls,.marker-scan,.scan-note{display:none!important}
 .web-code{margin:18px 0 8px;padding:18px;border-radius:12px;background:rgb(var(--ink) / 0.05);border:1px solid var(--line);font-size:28px;letter-spacing:.12em;text-align:center;user-select:all}
 .web-sub{margin:26px 0 12px;font-size:12px;color:var(--dim);font-weight:600}
 .web-link{user-select:all;cursor:text}.web-code{cursor:text}
@@ -101,7 +100,8 @@ body.no-fullscreen [data-action="fullscreen"]{display:none!important}
   /* Player: transport on one row, utilities on another, nothing hover-only. */
   body.in-player .window-zone{display:none}
   .player-top{padding:calc(12px + env(safe-area-inset-top)) 14px 20px;min-height:0;gap:8px}.player-chips{display:none}.player-heading h1{font-size:15px}.player-heading p{font-size:12px}
-  .player-actions{display:none}
+  .player-actions [data-action="complete-current"]{display:none}
+  .stage:not(.idle) .segment-tools{right:14px;bottom:calc(188px + env(safe-area-inset-bottom))}
   .player-controls{padding:56px 14px calc(12px + env(safe-area-inset-bottom))}
   .timeline{flex-wrap:wrap;gap:0 10px}.seek-area{order:-1;flex-basis:100%;height:34px}
   .timeline .time-pair{margin-right:auto}.timeline #remaining{display:none}.time{font-size:12px}

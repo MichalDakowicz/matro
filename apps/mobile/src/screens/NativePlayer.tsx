@@ -22,6 +22,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
   const dragging = useRef(false);
   const queueIndex = queue.findIndex(i => i.id === item.id), hasPrevious = queueIndex > 0, hasNext = queueIndex >= 0 && queueIndex < queue.length - 1;
   const duration = p.info?.duration || 0, shownPosition = scrub ?? p.position;
+  const segment = p.markers.find(m => p.position >= m.start && p.position < m.end);
   const title = item.kind === 'show' ? episodeName(data, item) : nameFor(data, item);
   const leave = async () => { await p.persist().catch(() => {}); p.player.pause(); onBack(); };
   const toggleFullscreen = () => {
@@ -97,6 +98,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
         <View style={[s.controlRows, landscape && { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>{transport}{utilities}</View>
       </View>
     </Animated.View>
+    {segment && <View style={{ position: 'absolute', right: Math.max(18, insets.right), bottom: controls ? (landscape ? 140 : 290 + insets.bottom) : insets.bottom + 24 }}><Pill label={`Skip ${segment.type}`} onPress={() => { setControls(true); p.seek(segment.end); }} /></View>}
     <Modal visible={!!sheet} transparent animationType="slide" supportedOrientations={['portrait', 'landscape']} presentationStyle="overFullScreen" onRequestClose={() => setSheet(null)}>
       <Pressable style={s.scrim} onPress={() => setSheet(null)} accessibilityLabel="Close player panel" />
       <View style={[s.sheet, { paddingBottom: Math.max(16, insets.bottom + 12), maxHeight: landscape ? height - 20 : height * .78 }, landscape && { width: 360, left: undefined, top: 0, bottom: 0, maxHeight: height, borderTopRightRadius: 0 }]}>

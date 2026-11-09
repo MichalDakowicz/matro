@@ -57,6 +57,7 @@ function register(app) {
   router.add('POST', '/api/playback/stop', async ctx => {
     const body = await readJson(ctx.req);
     transcode.stop(ctx.user.id, body.keepPreload === true);
+    app.scanner.setPlayback(false);
   });
 
   router.add('GET', '/api/items/:id/transcode', async ctx => {

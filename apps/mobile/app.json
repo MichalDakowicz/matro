@@ -2,7 +2,7 @@
   "expo": {
     "name": "Matro",
     "slug": "matro-receiver",
-    "version": "0.7.0",
+    "version": "0.7.3",
     "orientation": "default",
     "scheme": "matro",
     "userInterfaceStyle": "dark",
@@ -10,7 +10,7 @@
     "icon": "./assets/icon.png",
     "android": {
       "package": "com.michaldakowicz.matroreceiver",
-      "versionCode": 4,
+      "versionCode": 5,
       "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",

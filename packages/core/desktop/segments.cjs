@@ -2,7 +2,7 @@ const { mediaFS: fs } = require('./ssh-media.cjs');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const os = require('node:os');
-const { run, ffmpeg, probe, idFor } = require('./media.cjs');
+const idFor = value => require('node:crypto').createHash('sha256').update(value).digest('hex').slice(0, 24);
 
 // Perceptual samples: comparisons ignore brightness and minor edits.
 function hashFrame(frame) {
@@ -77,7 +77,8 @@ function detectSegments(target, references) {
   }
   return merged;
 }
-function createSegments(cacheDirectory) {
+function createSegments(cacheDirectory, dependencies) {
+  const { fs, run, ffmpeg, probe } = dependencies || { fs: require('./ssh-media.cjs').mediaFS, ...require('./media.cjs') };
   const pending = new Map();
   const controller = new AbortController();
   async function fingerprint(item, mode, signal, options = {}) {

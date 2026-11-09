@@ -1,12 +1,12 @@
 const path = require('node:path');
 const { HttpError, readJson, sendFile } = require('../http');
 
-const DEFAULT_STATE = () => ({ progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 }, markers: {} });
+const DEFAULT_STATE = () => ({ progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 }, markers: {}, markerDismissals: {} });
 const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
 
 // The catalog and each person's own state, in the shape the desktop renderer loads from its library file.
 function register(app) {
-  const { router, db, library, tmdb } = app;
+  const { router, db, library, tmdb, scanner } = app;
   const q = {
     items: db.prepare('SELECT i.id, i.path, i.title, i.group_id, i.group_title, i.kind, i.season, i.episode, i.added, f.path AS folder FROM items i JOIN folders f ON f.id = i.folder_id ORDER BY i.path'),
     folders: db.prepare('SELECT path FROM folders ORDER BY path'),
@@ -21,8 +21,38 @@ function register(app) {
     // Viewers see folder names and paths relative to them, never where the files live on the server.
     const items = q.items.all().map(r => ({ id: r.id, path: admin ? r.path : path.relative(r.folder, r.path), root: label(r.folder), title: r.title, group: r.group_title,
       groupId: r.group_id, titlePath: r.group_id, kind: r.kind, season: r.season, episode: r.episode, format: path.extname(r.path).slice(1).toUpperCase(), added: r.added }));
-    return { user: { id: ctx.user.id, username: ctx.user.username, role: ctx.user.role }, folders: [...new Set(q.folders.all().map(f => label(f.path)))], items, ...stateOf(ctx.user.id),
-      scanner: { message: library.state.scanning ? 'Scanning the library' : 'Library is up to date', running: false, total: 0, ready: 0, playback: false }, metadata: tmdb.snapshot(), metadataEnabled: tmdb.enabled };
+    const state = stateOf(ctx.user.id); scanner.refresh();
+    return { user: { id: ctx.user.id, username: ctx.user.username, role: ctx.user.role }, folders: [...new Set(q.folders.all().map(f => label(f.path)))], items, ...state, markers: scanner.markers(state.markers, state.markerDismissals),
+      scanner: scanner.snapshot(), metadata: tmdb.snapshot(), metadataEnabled: tmdb.enabled };
+  });
+
+  router.add('GET', '/api/segments', ctx => {
+    const state = stateOf(ctx.user.id); scanner.refresh();
+    return { scanner: scanner.snapshot(), markers: scanner.markers(state.markers, state.markerDismissals) };
+  });
+  router.add('POST', '/api/items/:id/segments', async ctx => {
+    if (!library.item(ctx.params.id)) throw new HttpError(404, 'No such title.');
+    const body = await readJson(ctx.req);
+    if (body.force === true) {
+      const state = stateOf(ctx.user.id); delete state.markerDismissals[ctx.params.id];
+      q.set.run(ctx.user.id, JSON.stringify(state), Date.now());
+    }
+    await scanner.request(ctx.params.id, body.force === true);
+    const state = stateOf(ctx.user.id);
+    return { markers: scanner.markers(state.markers, state.markerDismissals)[ctx.params.id] || [] };
+  });
+  router.add('POST', '/api/items/:id/segments/remove', async ctx => {
+    if (!library.item(ctx.params.id)) throw new HttpError(404, 'No such title.');
+    const { marker } = await readJson(ctx.req), id = ctx.params.id, state = stateOf(ctx.user.id);
+    if (!marker || !['intro', 'outro', 'recap'].includes(marker.type) || !Number.isFinite(marker.start) || !Number.isFinite(marker.end) || marker.end <= marker.start) throw new HttpError(400, 'Bad marker.');
+    state.markers[id] = (state.markers[id] || []).filter(m => !(m.type === marker.type && m.start === marker.start && m.end === marker.end));
+    (state.markerDismissals[id] ||= []).push(marker);
+    q.set.run(ctx.user.id, JSON.stringify(state), Date.now());
+    return { markers: scanner.markers(state.markers, state.markerDismissals)[id] || [] };
+  });
+  router.add('POST', '/api/playback/state', async ctx => {
+    const body = await readJson(ctx.req);
+    scanner.setPlayback(body.playing === true, body.buffering === true);
   });
 
   router.add('GET', '/api/metadata', () => ({ metadata: tmdb.snapshot() }));
@@ -41,7 +71,7 @@ function register(app) {
     if (body.queue !== undefined) { if (!Array.isArray(body.queue) || body.queue.length > 1000 || body.queue.some(id => typeof id !== 'string')) throw new HttpError(400, 'Bad queue.'); state.queue = body.queue; }
     if (body.preferences !== undefined) { if (!isObject(body.preferences)) throw new HttpError(400, 'Bad preferences.'); state.preferences = body.preferences; }
     if (body.markers !== undefined) { if (!isObject(body.markers)) throw new HttpError(400, 'Bad markers.'); state.markers = body.markers; }
-    q.set.run(ctx.user.id, JSON.stringify({ progress: state.progress, queue: state.queue, preferences: state.preferences, markers: state.markers }), Date.now());
+    q.set.run(ctx.user.id, JSON.stringify({ progress: state.progress, queue: state.queue, preferences: state.preferences, markers: state.markers, markerDismissals: state.markerDismissals }), Date.now());
   });
 }
 module.exports = { register };
