@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, BackHandler, FlatList, Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { library, mediaHeaders, request, ServerError, type Item, type Library, type Progress } from '../lib/server';
+import { library, mediaHeaders, request, ServerError, type Item, type Library, type Progress, type ScannerStatus } from '../lib/server';
 import { continueItems, groupLibrary, metadataFor, nameFor, statusOf, titleKey } from '../../../../packages/core/client/library';
 import { colors, fonts } from '../theme';
 import { Icon, Pill, styles as t } from '../components/Matro';
@@ -92,7 +92,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const browseItems = browse ? allBrowse.filter(items => filter === 'all' || statusOf(data!, items) === filter) : [];
   return <View style={s.fill}>
     {!data ? <View style={[s.center, { padding: 24 }]}>{refreshing ? <ActivityIndicator color={colors.text} /> : <><Text style={t.heading}>Your library</Text><Text style={[t.muted, { marginVertical: 16 }]}>{error || 'Could not load your library.'}</Text><Pill label="Try again" onPress={() => void load()} /></>}</View> : tab === 'downloads' ? <View style={{ flex: 1, paddingTop: insets.top + 76 }}><DownloadsScreen {...art} /></View> : tab === 'folders' ? <View style={{ flex: 1, paddingTop: insets.top + 76 }}><FoldersScreen base={base} data={data} onRefresh={load} onBrowse={path => { setFolder(path); setTab('home'); }} /></View> : browse ? <FlatList key={`${tab}:${columns}`} data={browseItems} numColumns={columns} keyExtractor={items => titleKey(items[0])} contentContainerStyle={contentStyle} columnWrapperStyle={{ gap: 12 }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} tintColor={colors.text} />}
-      ListHeaderComponent={<View style={{ marginBottom: 22 }}><Text style={t.heading}>{kinds.find(kind => kind.kind === tab)?.title}</Text><Text style={[t.muted, { marginTop: 8 }]}>{allBrowse.length} {tab === 'show' ? 'shows' : 'titles'}</Text><View style={[t.row, { flexWrap: 'wrap', marginTop: 18, gap: 7 }]}>{[['all', 'All'], ['new', 'Unwatched'], ['progress', 'In progress'], ['done', 'Watched']].map(([value, label]) => <Pill key={value} label={label} compact style={filter === value ? { backgroundColor: '#ffffff18' } : undefined} onPress={() => setFilter(value)} />)}</View></View>}
+      ListHeaderComponent={<View style={{ marginBottom: 22 }}><Text style={t.heading}>{kinds.find(kind => kind.kind === tab)?.title}</Text><Text style={[t.muted, { marginTop: 8 }]}>{allBrowse.length} {tab === 'show' ? 'shows' : 'titles'}</Text><View style={[t.row, { flexWrap: 'wrap', marginTop: 18, gap: 7 }]}>{[['all', 'All'], ['new', 'Unwatched'], ['progress', 'In progress'], ['done', 'Watched']].map(([value, label]) => <Pill key={value} label={label} compact style={filter === value ? { backgroundColor: '#ffffff18' } : undefined} onPress={() => setFilter(value)} />)}</View>{tab === 'show' && <ShowScanStatus key={base} base={base} initial={data.scanner} />}</View>}
       ListEmptyComponent={<Text style={t.muted}>No titles match this filter.</Text>} renderItem={({ item: items }) => <PosterCard {...art} data={data} items={items} width={cardWidth} onPress={() => setSelected(titleKey(items[0]))} />} /> : <SectionList sections={sections} keyExtractor={(row, index) => row[0][0].id + ':' + index} stickySectionHeadersEnabled={false} contentContainerStyle={contentStyle} showsVerticalScrollIndicator={false} initialNumToRender={5} windowSize={5} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} tintColor={colors.text} />} ListHeaderComponent={header}
       renderSectionHeader={({ section }) => <View style={[t.sectionHeading, { marginTop: 8 }]}><Text style={t.sectionTitle}>{section.title}</Text><Pressable onPress={() => changeTab(section.kind)}><Text style={t.dim}>{section.total} {section.noun}{search ? '' : ' · See all'}</Text></Pressable></View>}
       renderItem={({ item: row }) => <View style={{ flexDirection: 'row', gap: 12 }}>{row.map(items => <PosterCard key={titleKey(items[0])} {...art} data={data} items={items} width={cardWidth} onPress={() => setSelected(titleKey(items[0]))} />)}</View>}
@@ -101,6 +101,31 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     <Corner username={data?.user.username} onHome={() => changeTab('home')} onProfile={() => setAccount(true)} onHelp={() => Alert.alert('Matro', `${data?.items.length || 0} files in your library.\n\nMetadata and artwork from TMDB.\n\nMovies are prepared on your Matro server and played natively on this device.`, [{ text: 'Refresh', onPress: () => void load() }, { text: 'Close' }])} />
     <Dock tab={tab} onChange={changeTab} audio={!!data?.items.some(i => i.kind === 'audio')} admin={data?.user.role === 'admin'} />
     <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} onRefresh={() => void load()} onServer={onChangeServer} onSignOut={onSignedOut} />
+  </View>;
+}
+function ShowScanStatus({ base, initial }: { base: string; initial?: ScannerStatus }) {
+  const [scan, setScan] = useState(initial);
+  useEffect(() => {
+    let active = true, timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try { const { scanner } = await request(base, '/api/segments'); if (active) setScan(scanner); }
+      catch { /* Keep the last known status when offline. */ }
+      if (active) timer = setTimeout(poll, 5000);
+    };
+    void poll();
+    return () => { active = false; clearTimeout(timer); };
+  }, [base]);
+  if (!scan || (scan.complete ?? (scan.message === 'Background scan complete'))) return null;
+  const { ready, total, message } = scan;
+  return <View style={{ marginTop: 16, gap: 8, padding: 12, borderRadius: 12, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.hairline }}>
+    <Text style={t.text}>Intro &amp; outro scanning</Text>
+    {total > 0 && <>
+      <Text style={t.muted}>{ready} of {total} episodes checked</Text>
+      <View accessibilityRole="progressbar" accessibilityLabel="Episodes checked for intros and outros" accessibilityValue={{ min: 0, now: ready, max: total }} style={{ height: 5, borderRadius: 5, backgroundColor: colors.hairline }}>
+        <View style={{ height: 5, borderRadius: 5, backgroundColor: colors.text, width: `${100 * ready / total}%` }} />
+      </View>
+    </>}
+    <Text style={t.muted}>{message}</Text>
   </View>;
 }
 const s = StyleSheet.create({ fill: { flex: 1, backgroundColor: colors.ground }, center: { flex: 1, justifyContent: 'center' }, search: { height: 54, borderRadius: 999, borderWidth: 1, borderColor: '#ffffff24', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, gap: 12, backgroundColor: '#ffffff05' }, searchInput: { flex: 1, color: colors.text, fontSize: 17, fontFamily: fonts.regular, paddingVertical: 0 }, toast: { position: 'absolute', left: 18, right: 18, padding: 16, borderRadius: 14, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.hairline, zIndex: 40 } });

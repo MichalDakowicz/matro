@@ -51,12 +51,21 @@ let tab = 'home', query = '', view = 'library', selected = null, folderFilter = 
 let current = null, info = null, video = null, offset = 0, audio = null, subtitle = null, subtitleText = null, subtitleUrl = null, delay = 0;
 let queueOpen = false, sidePanel = null, generation = 0, lastSave = 0, idleTimer, toastTimer, subtitleGeneration = 0;
 let loading = false, playbackError = '', trackCues = [];
-let playIntent = true, streamId = null, pendingStream = null;
+let playIntent = true, streamId = null, pendingStream = null, playerEvents;
 let segmentStatus = '', markerDraft = null;
 let scannerSummary = null;
 function renderScannerStatus() {
-  const status = $('#scanner-status'); if (!status) return;
-  status.textContent = scannerSummary ? `${scannerSummary.message}${scannerSummary.total ? ` · ${scannerSummary.ready}/${scannerSummary.total} episodes ready` : ''}` : 'Preparing background scan…';
+  const message = scannerSummary?.message || 'Preparing background scan…';
+  const { ready = 0, total = 0 } = scannerSummary || {};
+  const footerStatus = $('#scanner-status');
+  if (footerStatus) footerStatus.textContent = total ? `${message} · ${ready}/${total} episodes ready` : message;
+  const scan = $('#shows-scan'); if (!scan) return;
+  scan.hidden = scannerSummary?.complete ?? (message === 'Background scan complete');
+  if (scan.hidden) return;
+  const activity = scan.querySelector('.scan-activity'), count = scan.querySelector('.scan-count'), bar = scan.querySelector('progress');
+  if (activity.textContent !== message) activity.textContent = message;
+  count.textContent = total ? `${ready} of ${total} episodes checked` : '';
+  bar.hidden = !total; bar.max = total || 1; bar.value = ready;
 }
 const isScanning = id => scanningSegments.has(id) || (scannerSummary?.running && scannerSummary.id === id);
 let fullscreenActive = false, fullscreenQueueOpen = false;
@@ -188,6 +197,7 @@ function remember() {
   library.progress[current.id] = { ...old, position, duration: info.duration, completed: !!old.completed || pastOutro || (info.duration > 0 && position >= info.duration - finishMargin(info.duration)), hidden: false, updated: Date.now() };
   if (old.position === position && old.duration === info.duration && old.completed === library.progress[current.id].completed && !old.hidden) library.progress[current.id].updated = old.updated;
   recovery.write(current.id, library.progress[current.id]);
+  return true;
 }
 // Saves the place at most once a second, but never drops the last change: a seek while paused fires one timeupdate and then
 // nothing, so a save skipped by the throttle is retried when the second is up.
@@ -195,7 +205,7 @@ let saveTimer = null, settlePending = null;
 // A separate clock persists playback even when media events or control rendering stall.
 setInterval(() => { if (view === 'player' && video && !video.paused) checkpoint(); }, 1000);
 function checkpoint(now = false) {
-  remember();
+  if (!remember()) return;
   const wait = 1000 - (Date.now() - lastSave);
   if (!now && wait > 0) { saveTimer ||= setTimeout(() => { saveTimer = null; checkpoint(true); }, wait); return; }
   clearTimeout(saveTimer); saveTimer = null; void attempt(save); lastSave = Date.now();
@@ -266,6 +276,7 @@ function browsePage(kind) {
   const [, title, noun] = kinds.find(([k]) => k === kind), all = groups(kind), items = all.filter(g => statusFilter === 'all' || groupStatus(g) === statusFilter);
   const chips = [['all', 'All'], ['new', kind === 'audio' ? 'Not played' : 'Unwatched'], ['progress', 'In progress'], ['done', kind === 'audio' ? 'Played' : 'Watched']];
   return `<div class="page-head"><div><h1 class="page-title">${title}</h1><p class="page-sub">${all.length} ${kind === 'show' ? 'shows' : noun}${statusFilter !== 'all' ? ` · ${items.length} shown` : ''}</p></div><div class="chip-row" role="group" aria-label="Filter by status">${chips.map(([id, label]) => `<button class="chip" data-status-filter="${id}" aria-pressed="${statusFilter === id}">${label}</button>`).join('')}</div></div>
+    ${kind === 'show' ? '<section class="shows-scan" id="shows-scan" aria-labelledby="shows-scan-title"><div class="scan-heading"><h2 id="shows-scan-title">Intro &amp; outro scanning</h2><span class="scan-count"></span></div><progress aria-label="Episodes checked for intros and outros" hidden></progress><p class="scan-activity"></p></section>' : ''}
     ${items.length ? `<div class="grid">${items.map(poster).join('')}</div>` : `<div class="empty-results"><h2>Nothing here yet.</h2><p>${all.length ? 'No titles match this filter.' : 'Add a folder or open files to fill this shelf.'}</p></div>`}`;
 }
 function searchPage() {
@@ -690,11 +701,11 @@ async function play(id, keepQueue = false, compareEdition = false) {
   const item = library.items.find(i => i.id === id); if (!item) return;
   // Starting playback from the library always opens with the queue closed; next, previous and autoplay keep it as it was.
   if (view !== 'player') queueOpen = false;
-  hidePreview(); remember(); await save(); streamId = null; const token = ++generation; subtitleGeneration++; loading = true; frameRun++; selected = null;
+  hidePreview(); remember(); await save(); const token = ++generation; subtitleGeneration++; loading = true; frameRun++; selected = null;
   // A preloaded stream is used only if its track choice still matches what this title would pick now.
   const fresh = prepared?.id === id && (({ audio: a, subtitle: s, delay: d }) => a === prepared.audio && s === prepared.subtitle && d === prepared.delay)(chooseTracks(item, prepared.info));
   const ready = fresh ? prepared : null; if (ready) prepared = null; discardPrepared();
-  video?.pause(); if (video) { releaseBuffer(video); video.removeAttribute('src'); video.load(); }
+  resetPlayer();
   await api.stop(ready?.url); current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
   if (item.kind === 'show' && (!keepQueue || library.queue.some(queued => { const entry = library.items.find(i => i.id === queued); return !entry || entry.kind !== 'show' || !sameTitle(entry, item); }))) {
     library.queue = orderedEpisodes(item).map(i => i.id);
@@ -769,7 +780,7 @@ function renderPlayer(adopt = null) {
   root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
   if (adopt) { $('#video').replaceWith(adopt); adopt.id = 'video'; adopt.dataset.preloaded = String(adopt.readyState); }
   video = $('#video'); applyVolume(library.preferences.volume); updateVolume(); applySubStyle();
-  const player = video;
+  const player = video, events = playerEvents = new AbortController();
   let recoveryTimer, recoveryAttempts = 0;
   const recover = () => {
     clearTimeout(recoveryTimer);
@@ -782,11 +793,11 @@ function renderPlayer(adopt = null) {
     void loadStream(at, true, token).catch(error => { if (token === generation) { loading = false; playbackError = error.message; showMessage(); } });
   };
   const watchBuffering = () => { clearTimeout(recoveryTimer); const token = generation; recoveryTimer = setTimeout(() => { if (token === generation) recover(); }, 25000); };
-  const listen = (name, callback) => player.addEventListener(name, event => { if (video === player && view === 'player') callback(event); });
-  listen('timeupdate', () => { updateTime(); void prepareNext(offset + video.currentTime); checkpoint(); });
+  const listen = (name, callback) => player.addEventListener(name, event => { if (video === player && view === 'player') callback(event); }, { signal: events.signal });
+  listen('timeupdate', () => { checkpoint(); updateTime(); void prepareNext(offset + video.currentTime); });
   listen('progress', updateTime);
   listen('playing', () => { clearTimeout(recoveryTimer); if (playIntent && !video.paused) void api.playbackState(true); loading = false; playbackError = ''; showMessage(); updateToggle(); scheduleIdle(); });
-  listen('pause', () => { if (!playIntent) void api.playbackState(false); loading = false; showMessage(); updateToggle(); $('.stage')?.classList.remove('idle'); remember(); void attempt(save); });
+  listen('pause', () => { if (!playIntent) void api.playbackState(false); loading = false; showMessage(); updateToggle(); $('.stage')?.classList.remove('idle'); if (remember()) void attempt(save); });
   listen('waiting', () => { loading = playIntent && !video.paused; if (loading) { void api.playbackState({ playing: true, buffering: true }); watchBuffering(); } showMessage(); });
   listen('stalled', watchBuffering);
   listen('ended', () => {
@@ -1065,8 +1076,16 @@ async function pickSubtitle(value) {
 }
 async function restartStream() { const token = ++generation; await loadStream(offset + video.currentTime, playIntent, token); }
 async function changeSubtitleDelay(change) { delay = Math.max(-60, Math.min(60, Math.round((delay + change) * 10) / 10)); adjustCues(); renderTracks(); rememberTracks(); if (bitmapTrack()) await restartStream(); }
+function resetPlayer() {
+  // load() resets currentTime and queues media events. Invalidate the stream
+  // first so those events cannot overwrite the checkpoint we just saved.
+  streamId = null; pendingStream = null; settlePending = null;
+  playerEvents?.abort();
+  clearTimeout(saveTimer); saveTimer = null;
+  if (video) { video.pause(); releaseBuffer(video); video.removeAttribute('src'); video.load(); }
+}
 async function backToLibrary() {
-  hidePreview(); discardPrepared(); if (fullscreenActive) await api.window('fullscreen'); remember(); await save(); ++generation; ++subtitleGeneration; video?.pause(); if (video) { releaseBuffer(video); video.removeAttribute('src'); video.load(); } await api.stop();
+  hidePreview(); discardPrepared(); if (fullscreenActive) await api.window('fullscreen'); remember(); await save(); ++generation; ++subtitleGeneration; resetPlayer(); await api.stop();
   if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); current = null; video = null; renderLibrary();
 }
 // Page transitions run through the View Transitions API and are skipped when motion is reduced.

@@ -153,6 +153,69 @@ test('a renderer crash restores the local movie position even when server saves 
   }
 });
 
+for (const kind of ['movie', 'episode']) test(`leaving playback keeps the latest saved ${kind} position`, async () => {
+  const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'passive-exit-'));
+  const media = path.join(root, 'media'); await fs.mkdir(media);
+  await fs.copyFile(f.mkv, path.join(media, kind === 'movie' ? 'Northbound.mkv' : 'Northbound.S01E01.mkv'));
+  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} } });
+  let browser, releaseStop;
+  try {
+    const userId = await app.createUser('head', 'passive-exit-test', 'admin');
+    await library.addFolder(media);
+    const id = db.prepare('SELECT id FROM items LIMIT 1').get().id;
+    const saved = () => JSON.parse(db.prepare('SELECT data FROM user_state WHERE user_id = ?').get(userId)?.data || '{}').progress?.[id]?.position || 0;
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: `http://127.0.0.1:${server.address().port}`, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
+    browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
+    const page = await browser.firstWindow();
+    await page.getByRole('textbox', { name: 'Username', exact: true }).fill('head');
+    await page.getByLabel('Password', { exact: true }).fill('passive-exit-test');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    if (kind === 'episode') {
+      let scanner = { message: 'Scanning · Northbound · 35%', ready: 1, total: 3, complete: false };
+      await page.route('**/api/segments', route => route.fulfill({ json: { scanner, markers: {} } }));
+      await page.getByRole('button', { name: /^Shows/ }).click();
+      const scan = page.getByRole('region', { name: 'Intro & outro scanning' });
+      await expect(scan.getByText('1 of 3 episodes checked')).toBeVisible();
+      await expect(scan.getByText('Scanning · Northbound · 35%')).toBeVisible();
+      scanner = { message: 'Checking full episode', ready: 3, total: 3, complete: false };
+      await expect(scan.getByText('3 of 3 episodes checked')).toBeVisible({ timeout: 10000 });
+      scanner = { message: 'Background scan complete', ready: 3, total: 3, complete: true };
+      await expect(scan).toBeHidden({ timeout: 10000 });
+    }
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: 'Play now', exact: true }).click();
+    const clickedPosition = kind === 'movie' ? 4 : 0;
+    if (clickedPosition) {
+      await expect.poll(() => page.locator('video').evaluate(video => video.currentTime)).toBeGreaterThan(.2);
+      await page.locator('#seek').evaluate((seek, target) => {
+        seek.value = target;
+        seek.dispatchEvent(new Event('change', { bubbles: true }));
+      }, clickedPosition);
+    }
+    await expect.poll(saved, { timeout: 10000 }).toBeGreaterThan(clickedPosition + 2);
+    const before = saved();
+    const stop = new Promise(resolve => { releaseStop = resolve; });
+    await page.route('**/api/playback/stop', async route => { await stop; await route.continue(); });
+    await page.locator('video').evaluate(v => v.addEventListener('emptied', () => { v.dataset.reset = 'true'; }, { once: true }));
+    await page.keyboard.press('Escape');
+    // Keep the player mounted after load() reset the decoder and delivered its
+    // pause/timeupdate events, as happens on a slow connection to the server.
+    await expect(page.locator('video')).toHaveAttribute('data-reset', 'true');
+    const displayedTime = await page.locator('#position').textContent();
+    expect(Number(displayedTime.split(':').at(-1))).toBeGreaterThanOrEqual(Math.floor(before));
+    releaseStop();
+    await expect(page.locator('video')).toHaveCount(0);
+    expect(saved()).toBeGreaterThanOrEqual(before);
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Resume', exact: true })).toBeVisible();
+  } finally {
+    releaseStop?.(); await browser?.close(); app.downloads.close(); app.closePlayback();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  }
+});
+
 test('Vite production UI signs in, plays through the HTTP adapter and saves progress', async () => {
   const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'web-ui-'));
   const media = path.join(root, 'media'); await fs.mkdir(media);

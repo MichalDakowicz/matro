@@ -93,7 +93,8 @@ export type TrackChoice = { language: string; title: string; codec?: string; cha
 export type TrackPreference = { audio?: TrackChoice | null; subtitle?: TrackChoice | null; off?: boolean; delay?: number; size?: number };
 export type Preferences = { autoplay?: boolean; volume?: number; tracks?: Record<string, TrackPreference>; [key: string]: unknown };
 export type Segment = { type: 'intro' | 'outro' | 'recap'; start: number; end: number; source: 'manual' | 'automatic' };
-export type Library = { markers?: Record<string, Segment[]>; user: MatroUser; items: Item[]; folders?: string[]; progress: Record<string, Progress>; queue: string[]; preferences: Preferences; metadata: Record<string, Metadata> };
+export type ScannerStatus = { ready: number; total: number; message: string; complete?: boolean };
+export type Library = { markers?: Record<string, Segment[]>; scanner?: ScannerStatus; user: MatroUser; items: Item[]; folders?: string[]; progress: Record<string, Progress>; queue: string[]; preferences: Preferences; metadata: Record<string, Metadata> };
 export type Track = { index: number; language: string; title: string; bitmap?: boolean; text?: boolean; codec?: string; channels?: number; default?: boolean };
 export type Info = { duration: number; directPlay: boolean; video?: { codec: string; height: number; width: number } | null; chapters?: { start: number; title: string }[]; audio: Track[]; embedded: Track[]; uploaded: { id: number; language: string; name: string }[] };
 export const library = async (base: string): Promise<Library> => { await ensureNativeSession(base); return request(base, '/api/library'); };
