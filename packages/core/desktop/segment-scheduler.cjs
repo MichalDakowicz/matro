@@ -1,5 +1,5 @@
 const { mediaFS: fs } = require('./ssh-media.cjs');
-const { idFor } = require('./media.cjs');
+const idFor = value => require('node:crypto').createHash('sha256').update(value).digest('hex').slice(0, 24);
 const titleKey = item => item.groupId || item.group;
 const order = (a, b) => a.season - b.season || a.episode - b.episode || a.path.localeCompare(b.path);
 const sameSeason = (a, b) => a.kind === 'show' && b.kind === 'show' && titleKey(a) === titleKey(b) && a.season === b.season;

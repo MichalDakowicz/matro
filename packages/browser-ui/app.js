@@ -174,7 +174,8 @@ async function removeContinue(id) {
 // Progress is offset + currentTime of the stream that belongs to `current`. While a new stream is being requested (a seek,
 // an audio change, a resume) the target position counts instead, so exiting mid-load or mid-buffer still saves where you were.
 function remember() {
-  if (!current || !video) return;
+  if (!current || !video || !info?.duration) return;
+  settlePending?.();
   const pending = pendingStream?.id === current.id ? pendingStream.position : null;
   if (pending === null && streamId !== current.id) return;
   const old = library.progress[current.id] || {};
@@ -184,11 +185,14 @@ function remember() {
   // Only outros in the second half count, so a mis-detected early marker can't complete an episode.
   const pastOutro = info.duration > 0 && (library.markers?.[current.id] || []).some(s => s.type === 'outro' && s.start > info.duration / 2 && position >= s.start);
   library.progress[current.id] = { ...old, position, duration: info.duration, completed: !!old.completed || pastOutro || (info.duration > 0 && position >= info.duration - finishMargin(info.duration)), hidden: false, updated: Date.now() };
+  if (old.position === position && old.duration === info.duration && old.completed === library.progress[current.id].completed && !old.hidden) library.progress[current.id].updated = old.updated;
   recovery.write(current.id, library.progress[current.id]);
 }
 // Saves the place at most once a second, but never drops the last change: a seek while paused fires one timeupdate and then
 // nothing, so a save skipped by the throttle is retried when the second is up.
-let saveTimer = null;
+let saveTimer = null, settlePending = null;
+// A separate clock persists playback even when media events or control rendering stall.
+setInterval(() => { if (view === 'player' && video && !video.paused) checkpoint(); }, 1000);
 function checkpoint(now = false) {
   remember();
   const wait = 1000 - (Date.now() - lastSave);
@@ -712,7 +716,10 @@ async function play(id, keepQueue = false, compareEdition = false) {
     }
     if (library.progress[id]) library.progress[id].hidden = false;
     updateMetadata();
-    if (ready) await adoptStream(ready, token); else await loadStream(startAt(id, info.duration), true, token);
+    const start = startAt(id, info.duration);
+    // Starting an already watched title begins a new viewing session with a resumable position.
+    if (completed(id) && !start) library.progress[id] = { ...library.progress[id], position: 0, completed: false, updated: Date.now() };
+    if (ready) await adoptStream(ready, token); else await loadStream(start, true, token);
     await save(); void detectMarkers(id);
   } catch (error) { if (token === generation) { loading = false; playbackError = error.message; showMessage(); } }
 }
@@ -832,11 +839,15 @@ async function loadStream(position, shouldPlay = true, token = generation) {
   // Preserve the target until this source has reached it. load() emits zero-time
   // updates and pause events which must not replace a resume point with zero.
   const settle = () => {
-    if (token !== generation || video !== player) { player.removeEventListener('timeupdate', settle); return; }
+    if (token !== generation || video !== player) {
+      if (settlePending === settle) settlePending = null;
+      player.removeEventListener('timeupdate', settle); return;
+    }
     if (player.readyState >= 2 && !player.seeking && player.currentTime >= start - .25) {
-      pendingStream = null; player.removeEventListener('timeupdate', settle);
+      pendingStream = null; if (settlePending === settle) settlePending = null; player.removeEventListener('timeupdate', settle);
     }
   };
+  settlePending = settle;
   player.addEventListener('loadedmetadata', () => { if (token === generation && video === player && start) player.currentTime = start; }, { once: true });
   player.addEventListener('timeupdate', settle);
   video.src = bufferPlayback(video, result.url, info.duration - offset, !!info.video); video.load(); applySubtitle(); updateTime();
@@ -854,7 +865,7 @@ async function seek(position) {
   for (let i = 0; i < ranges.length; i++) if (relative >= ranges.start(i) && relative <= ranges.end(i)) {
     // A buffered seek supersedes any startup resume target, even if the first
     // timeupdate has not fired yet. Save this seek rather than the old target.
-    pendingStream = null; video.currentTime = relative; updateTime(); checkpoint(true); return;
+    pendingStream = null; settlePending = null; video.currentTime = relative; updateTime(); checkpoint(true); return;
   }
   const token = ++generation, load = loadStream(target, shouldPlay, token); checkpoint(true); await load;
 }
@@ -901,7 +912,7 @@ const scanningSegments = new Set();
 function acceptMarkers(id, detected) {
   library.markers ||= {};
   const manual = (library.markers[id] || []).filter(s => s.source !== 'automatic');
-  library.markers[id] = [...manual, ...detected.filter(s => !manual.some(m => m.start < s.end && m.end > s.start))];
+  library.markers[id] = [...manual, ...detected.filter(s => s.source === 'automatic' && !manual.some(m => m.start < s.end && m.end > s.start))];
 }
 async function detectMarkers(id, force = false) {
   library.markers ||= {};
@@ -954,7 +965,7 @@ function segmentsPanel() {
     <p class="scan-note">A skip button appears while playback is inside one of these ranges.${current.kind === 'show' ? ' Matro compares episodes of this season to find intros, recaps and outros.' : ''}</p>
     <div class="marker-list">${rows || '<p class="scan-note">No skip ranges for this file yet.</p>'}</div>
     <div class="marker-actions">${markerDraft ? `<span>${esc(markerDraft.type)} starts at ${fmt(markerDraft.start)} — seek to its end</span><button class="pill" data-action="marker-end">Save end here</button><button class="text-button" data-action="marker-cancel">Cancel</button>` : ['intro', 'outro', 'recap'].map(type => `<button class="text-button" data-marker-start="${type}">Mark ${type} start</button>`).join('')}</div>
-    ${current.kind === 'show' ? `<div class="marker-scan"><button class="text-button" data-action="detect-segments" ${isScanning(current.id) ? 'disabled' : ''}>Compare season again</button><p class="scan-note" role="status">${esc(segmentStatus)}</p></div>` : ''}</section>`;
+    ${current.kind === 'show' ? `<div class="marker-scan">${markers.some(s => s.source === 'manual') ? '<button class="text-button" data-action="markers-season">Apply manual marks to this season</button><p class="scan-note">Opening marks keep their times. Outro marks stay the same distance from each episode’s end.</p>' : ''}<button class="text-button" data-action="detect-segments" ${isScanning(current.id) ? 'disabled' : ''}>Compare season again</button><p class="scan-note" role="status">${esc(segmentStatus)}</p></div>` : ''}</section>`;
 }
 function renderTracks() {
   const panel = $('#tracks'); if (!panel) return;
@@ -1130,7 +1141,23 @@ const actions = {
     const end = offset + video.currentTime;
     if (!markerDraft || end <= markerDraft.start) { toast('End must come after start.'); return; }
     library.markers ||= {}; library.markers[current.id] ||= [];
+    library.markers[current.id] = library.markers[current.id].filter(s => !(s.start < end && s.end > markerDraft.start));
     library.markers[current.id].push({ ...markerDraft, end, source: 'manual' }); markerDraft = null; await save(); renderSegments(); renderTracks();
+  },
+  'markers-season': async () => {
+    const item = current, duration = info.duration, manual = (library.markers[item.id] || []).filter(s => s.source === 'manual');
+    const episodes = orderedEpisodes(item).filter(i => i.id !== item.id && i.season === item.season);
+    const copies = [];
+    for (const episode of episodes) {
+      const details = await api.prepare(episode.id);
+      const marks = manual.map(s => {
+        const shift = s.type === 'outro' ? details.duration - duration : 0;
+        return { ...s, start: Math.max(0, s.start + shift), end: Math.min(details.duration, s.end + shift) };
+      }).filter(s => s.end > s.start && s.start < details.duration);
+      copies.push([episode.id, marks]);
+    }
+    for (const [id, marks] of copies) library.markers[id] = [...(library.markers[id] || []).filter(s => !marks.some(m => m.type === s.type || (m.start < s.end && m.end > s.start))), ...marks];
+    await save(); toast(`Manual marks saved for ${copies.length + 1} episodes in this season.`);
   },
   'marker-cancel': () => { markerDraft = null; renderTracks(); },
   'skip-segment': () => { const position = offset + video.currentTime; const marker = (library.markers?.[current.id] || []).find(s => position >= s.start && position < s.end); if (marker) return seek(marker.end); },

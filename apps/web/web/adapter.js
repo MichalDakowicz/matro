@@ -137,9 +137,11 @@ export function createAdapter(session) {
     recoveryScope: `account:${session.user.id}:${session.user.username}`,
     load, inspect, prepare: inspect, subtitles, loadSubtitle, stream,
     save: state => put('/api/state', { progress: state.progress, queue: state.queue, preferences: state.preferences, markers: state.markers || {} }, { keepalive: JSON.stringify(state).length < 60000 }),
-    stop: keepUrl => post('/api/playback/stop', { keepPreload: !!keepUrl && new URL(keepUrl, location.origin).searchParams.get('preload') === '1' }), playbackState: async () => {},
+    stop: keepUrl => post('/api/playback/stop', { keepPreload: !!keepUrl && new URL(keepUrl, location.origin).searchParams.get('preload') === '1' }), playbackState: value => post('/api/playback/state', typeof value === 'object' ? value : { playing: !!value }).catch(() => {}),
     preview: async ({ id, time, hover }) => `/api/items/${id}/frame?t=${Math.max(0, Number(time) || 0)}&w=${hover ? 320 : 480}`,
-    segments: async () => [], removeMarker: async () => ({}), scannerStatus: async () => latest?.scanner || { message: 'Library is up to date', running: false, total: 0, ready: 0 },
+    segments: async ({ id, force }) => (await post(`/api/items/${id}/segments`, { force })).markers,
+    removeMarker: async ({ id, marker }) => (await post(`/api/items/${id}/segments/remove`, { marker })).markers,
+    scannerStatus: async () => (await get('/api/segments')).scanner,
     rescan: async () => { if (session.user.role === 'admin') await post('/api/admin/rescan'); return load(); },
     addFolder: async () => { headOnly(); const path = await chooseFolder(); if (path) { const r = await post('/api/admin/folders', { path }); say(r.ok ? `Added. Found ${r.items} video${r.items === 1 ? '' : 's'}.` : r.error); } return load(); },
     openFiles: pickFiles, importDrop: files => upload(Array.from(files)),
@@ -149,7 +151,23 @@ export function createAdapter(session) {
       if (window.matroDesktop) { const remove = window.matroDesktop.onFullscreen(callback); void window.matroDesktop.fullscreen().then(callback); return remove; }
       const listener = () => callback(!!document.fullscreenElement); document.addEventListener('fullscreenchange', listener); return () => document.removeEventListener('fullscreenchange', listener);
     },
-    onSegments: noop, onDownloads: noop, onClosing: noop,
+    onSegments: callback => {
+      let closed = false, timer, previous = {};
+      const poll = async () => {
+        try {
+          const update = await get('/api/segments');
+          if (closed) return;
+          callback({ scanner: update.scanner });
+          for (const [id, markers] of Object.entries(update.markers)) {
+            const key = JSON.stringify(markers);
+            if (key !== previous[id]) { previous[id] = key; callback({ id, markers, stage: 'done', scanner: update.scanner }); }
+          }
+        } catch { /* Retry after transient connection failures. */ }
+        if (!closed) timer = setTimeout(poll, 5000);
+      };
+      timer = setTimeout(poll, 1000);
+      return () => { closed = true; clearTimeout(timer); };
+    }, onDownloads: noop, onClosing: noop,
     onMetadata: callback => { watchers.add(callback); return () => watchers.delete(callback); },
     searchMetadata: async ({ kind, query, year }) => { headOnly('Only the head account can change TMDB matches.'); const q = new URLSearchParams({ kind, query }); if (year) q.set('year', year); return artwork((await get(`/api/admin/metadata/search?${q}`)).results); },
     assignMetadata: async ({ key, tmdbId }) => { headOnly('Only the head account can change TMDB matches.'); const { metadata } = await post('/api/admin/metadata/assign', { key, tmdbId }); latest.metadata = artwork(metadata); return latest.metadata; },

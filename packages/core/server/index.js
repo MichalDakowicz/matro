@@ -12,10 +12,11 @@ function createApp({ dataDir = config.dataDir, tmdb: tmdbOptions, downloads: dow
   const db = open(require('node:path').join(dataDir, 'matro.db'));
   const auth = createAuth(db), library = createLibrary(db), router = createRouter();
   const app = { dataDir, db, auth, library, router, tmdb: createTmdb(db, tmdbOptions), invites: createInvites(db) };
+  app.scanner = require('./segments').createScanner({ dataDir, db });
   app.downloads = createDownloads({ dataDir, library, tmdb: app.tmdb, ...downloadOptions });
   for (const name of ['account', 'library', 'play', 'admin', 'downloads']) require(`./routes/${name}`).register(app);
   const server = createServer({ router, publicDir: config.publicDir, authenticate: token => auth.user(token), config });
-  server.on('close', () => { app.downloads.close(); app.closePlayback?.(); });
+  server.on('close', () => { app.scanner.close(); app.downloads.close(); app.closePlayback?.(); });
   return { app, server, db, library };
 }
 
@@ -29,6 +30,7 @@ async function main() {
   library.probeSoon();
   app.tmdb.sync();
   app.downloads.start();
+  app.scanner.refresh();
   setInterval(() => library.rescanAll().then(() => app.tmdb.sync()).catch(() => {}), 30 * 60 * 1000).unref();
   server.listen(config.port, config.host, () => console.log(`Matro server on http://${config.host}:${config.port}  data: ${config.dataDir}`));
 }

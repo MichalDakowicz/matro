@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 import { useVideoPlayer } from 'expo-video';
-import { inspect, mediaHeaders, playbackPath, request, saveProgress, type Info, type Item, type Library, type Preferences, type Track } from '../lib/server';
+import { inspect, mediaHeaders, playbackPath, request, saveProgress, type Info, type Item, type Library, type Preferences, type Progress, type Track } from '../lib/server';
 import { matchTrack, trackKey } from '../../../../packages/core/client/library';
 import { parseVtt, type Cue } from '../../../../packages/core/client/subtitles';
 import { downloadPlayback } from './diskBuffer';
@@ -24,11 +24,23 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
     p.bufferOptions = { preferredForwardBufferDuration: 60, minBufferForPlayback: 2, maxBufferBytes: 64 * 1024 * 1024, waitsToMinimizeStalling: true };
     p.volume = Math.min(1, Number(data.preferences.volume) || .72);
   });
-  const lastLocal = useRef(0);
+  const lastLocal = useRef(0), rewatching = useRef(!!data.progress[item.id]?.completed);
+  const [markers, setMarkers] = useState(data.markers?.[item.id] || []);
+  useEffect(() => {
+    let active = true;
+    const poll = async () => { try { const update = await request(base, '/api/segments'); if (active) setMarkers(update.markers[item.id] || []); } catch { /* Keep the last known markers offline. */ } };
+    void poll();
+    if (item.kind === 'show') void request(base, `/api/items/${item.id}/segments`, { method: 'POST', body: {} }, 600000).catch(() => {});
+    const timer = setInterval(poll, 5000);
+    return () => { active = false; clearInterval(timer); };
+  }, [base, item.id, item.kind]);
+  const savedEntry = useRef<Progress | null>(null);
   const persist = useCallback(async (sync = true) => {
     const duration = infoRef.current?.duration || 0;
     if (!duration || (!at.current && !dataRef.current.progress[item.id]?.position)) return;
-    const entry = { ...dataRef.current.progress[item.id], position: Math.min(duration, at.current), duration, hidden: false, completed: !!dataRef.current.progress[item.id]?.completed || at.current >= duration - Math.min(10, duration * .05), updated: Date.now() };
+    const entry = { ...dataRef.current.progress[item.id], position: Math.min(duration, at.current), duration, hidden: false, completed: (!rewatching.current && !!dataRef.current.progress[item.id]?.completed) || at.current >= duration - Math.min(10, duration * .05), updated: Date.now() };
+    if (savedEntry.current?.position === entry.position && savedEntry.current.duration === entry.duration && savedEntry.current.completed === entry.completed) entry.updated = savedEntry.current.updated;
+    savedEntry.current = entry;
     try { await progressRecovery.write(recoveryScope(base, dataRef.current.user), item.id, entry); }
     catch { if (mounted.current) setError('Could not save playback recovery on this device. Check available storage.'); }
     if (sync) await saveProgress(base, item.id, entry);
@@ -119,16 +131,16 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
     };
   }, [base, item.id, load, loadText, persist]);
   useEffect(() => {
-    const time = player.addListener('timeUpdate', event => {
+    const sample = (currentTime: number) => {
       if (replacing.current) return;
       // Native decoders emit time zero while applying the initial seek. Keep
       // the requested resume position until that seek has actually landed.
       if (pendingStart.current !== null) {
-        if (Math.abs(event.currentTime - pendingStart.current) > 1) return;
+        if (currentTime < pendingStart.current - .25) return;
         pendingStart.current = null;
       }
-      const next = Math.min(infoRef.current?.duration || Infinity, offset.current + event.currentTime);
-      if (sourceReady.current && event.currentTime > .1) advanced.current = true;
+      const next = Math.min(infoRef.current?.duration || Infinity, offset.current + currentTime);
+      if (sourceReady.current && currentTime > .1) advanced.current = true;
       if (Math.abs(next - at.current) > .05) moved.current = Date.now();
       at.current = next; setPosition(next); setBuffered(disk.current ? infoRef.current?.duration || 0 : offset.current + Math.max(0, player.bufferedPosition));
       const subtitleTime = next - choices.current.delay;
@@ -138,13 +150,15 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
         if (sync) lastSaved.current = Date.now();
         void persist(sync).catch(() => {});
       }
-    });
+    };
+    const time = player.addListener('timeUpdate', event => sample(event.currentTime));
+    const checkpoint = setInterval(() => { if (sourceReady.current && player.playing) sample(player.currentTime); }, 1000);
     const status = player.addListener('statusChange', event => {
       setBusy(event.status === 'loading');
       if (event.status === 'readyToPlay') { setError(''); moved.current = Date.now(); }
       if (event.status === 'error' && !replacing.current) recover();
     });
-    const playing = player.addListener('playingChange', event => setPlaying(event.isPlaying));
+    const playing = player.addListener('playingChange', event => { setPlaying(event.isPlaying); void request(base, '/api/playback/state', { method: 'POST', body: { playing: event.isPlaying } }).catch(() => {}); });
     const end = player.addListener('playToEnd', () => {
       // A player constructed with a null source can emit end before inspect /
       // replaceAsync finishes. It must never navigate away or mark a movie watched.
@@ -156,8 +170,8 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
     });
     const appState = AppState.addEventListener('change', state => { if (state !== 'active') { player.pause(); void persist().catch(() => {}); } });
     const timer = setInterval(() => { if (intent.current && (player.playing || player.status === 'loading') && Date.now() - moved.current > 25000) { moved.current = Date.now(); recover(); } }, 2000);
-    return () => { time.remove(); status.remove(); playing.remove(); end.remove(); appState.remove(); clearInterval(timer); };
-  }, [player, persist, recover]);
+    return () => { void request(base, '/api/playback/state', { method: 'POST', body: { playing: false } }).catch(() => {}); clearInterval(checkpoint); time.remove(); status.remove(); playing.remove(); end.remove(); appState.remove(); clearInterval(timer); };
+  }, [base, player, persist, recover]);
   const seek = useCallback((value: number) => {
     const duration = infoRef.current?.duration || 0; if (!duration) return;
     const target = Math.max(0, Math.min(duration - .1, value)); at.current = target; setPosition(target); moved.current = Date.now();
@@ -180,5 +194,5 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
   };
   const setSubtitleSize = (value: number) => { choices.current.size = value; setSubtitleSizeValue(value); remember(); };
   const changeSpeed = () => { const values = [.75, 1, 1.25, 1.5, 2], next = values[(values.indexOf(rateRef.current) + 1) % values.length]; rateRef.current = next; player.playbackRate = next; setRate(next); };
-  return { player, info, busy, error, playing, position, buffered, caption, audio, subtitle, delay, subtitleSize, rate, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setSubtitleSize, changeSpeed, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
+  return { player, info, markers, busy, error, playing, position, buffered, caption, audio, subtitle, delay, subtitleSize, rate, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setSubtitleSize, changeSpeed, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
 }

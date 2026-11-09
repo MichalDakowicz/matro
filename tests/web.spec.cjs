@@ -5,6 +5,84 @@ const { fixtures } = require('./fixtures.cjs');
 const { createApp } = require('../packages/core/server');
 const { ffmpeg, run } = require('../packages/core/desktop/media.cjs');
 
+async function resumeAfterCrash(page) {
+  const username = page.getByRole('textbox', { name: 'Username', exact: true });
+  const resume = page.getByRole('button', { name: 'Resume watching', exact: true });
+  await expect(username.or(resume).first()).toBeVisible();
+  // A replacement window can ask the same account to sign in again.
+  if (await username.isVisible()) {
+    await username.fill('head');
+    await page.getByLabel('Password', { exact: true }).fill('local-recovery-test');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  }
+  await resume.click();
+}
+
+for (const scenario of ['new movie', 'resumed movie', 'rewatching', 'missing media events']) test(`passive playback saves and recovers after a crash: ${scenario}`, async () => {
+  const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'crash-ui-'));
+  const media = path.join(root, 'media'); await fs.mkdir(media); await fs.copyFile(f.mkv, path.join(media, 'Northbound.mkv'));
+  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} } });
+  let browser;
+  try {
+    const userId = await app.createUser('head', 'local-recovery-test', 'admin'); await library.addFolder(media);
+    if (scenario === 'resumed movie' || scenario === 'rewatching') {
+      const id = db.prepare('SELECT id FROM items LIMIT 1').get().id;
+      db.prepare('INSERT INTO user_state (user_id, data, updated) VALUES (?, ?, ?)').run(userId, JSON.stringify({ progress: { [id]: { position: scenario === 'rewatching' ? 12 : 2.123, duration: 12, completed: scenario === 'rewatching', updated: Date.now() } } }), Date.now());
+    }
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: base, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
+    browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
+    let page = await browser.firstWindow();
+    if (scenario === 'missing media events') await page.evaluate(() => {
+      const listen = EventTarget.prototype.addEventListener;
+      EventTarget.prototype.addEventListener = function(type, ...args) { if (this instanceof HTMLVideoElement && type === 'timeupdate') return; return listen.call(this, type, ...args); };
+    });
+    await page.getByRole('textbox', { name: 'Username', exact: true }).fill('head');
+    await page.getByLabel('Password', { exact: true }).fill('local-recovery-test');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: /^(Play now|Resume)$/ }).click();
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.2);
+    const itemId = db.prepare('SELECT id FROM items LIMIT 1').get().id;
+    const saved = () => JSON.parse(db.prepare('SELECT data FROM user_state WHERE user_id = ?').get(userId)?.data || '{}').progress?.[itemId];
+    const local = () => page.evaluate(id => Object.keys(localStorage).filter(key => key.startsWith('matro:recovery:v1:') && key.endsWith(':' + id)).map(key => JSON.parse(localStorage.getItem(key)))[0], itemId);
+    await expect.poll(async () => (await local())?.position || 0).toBeGreaterThan(3);
+    await expect.poll(() => saved()?.position || 0).toBeGreaterThan(3);
+    // Neither pausing nor seeking has occurred. Now lose the server and let playback advance.
+    let blocked = true;
+    const handle = server.listeners('request')[0]; server.removeListener('request', handle);
+    server.on('request', (req, res) => {
+      if (blocked && req.method === 'PUT' && req.url === '/api/state') { req.resume(); res.writeHead(503).end('{}'); }
+      else handle(req, res);
+    });
+    const before = (await local()).position;
+    await expect.poll(async () => (await local())?.position || 0).toBeGreaterThan(before + 2);
+    const checkpoint = await local();
+    expect(checkpoint.updated).toBeGreaterThan(saved().updated);
+    expect(checkpoint.completed).toBe(false);
+    const crash = page.waitForEvent('crash');
+    await browser.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer()); await crash;
+    blocked = false;
+    const opened = browser.waitForEvent('window');
+    await browser.evaluate(async ({ BrowserWindow }, base) => {
+      const old = BrowserWindow.getAllWindows()[0], next = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+      old.destroy(); await next.loadURL(base);
+    }, base);
+    page = await opened;
+    await resumeAfterCrash(page);
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.1);
+    await expect.poll(async () => Number((await page.locator('#position').textContent()).split(':').at(-1))).toBeGreaterThanOrEqual(Math.floor(checkpoint.position));
+    await expect.poll(() => saved()?.position || 0).toBeGreaterThanOrEqual(checkpoint.position - .3);
+    expect(saved().position).toBeLessThan(checkpoint.position + 3);
+
+  } finally {
+    await browser?.close(); app.downloads.close(); app.closePlayback();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  }
+});
+
 test('a renderer crash restores the local movie position even when server saves fail', async () => {
   const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'crash-ui-'));
   const media = path.join(root, 'media'); await fs.mkdir(media); await fs.copyFile(f.mkv, path.join(media, 'Northbound.mkv'));
@@ -50,13 +128,13 @@ test('a renderer crash restores the local movie position even when server saves 
       old.destroy(); await next.loadURL(base);
     }, base);
     page = await reopened;
-    await page.getByRole('button', { name: 'Resume watching', exact: true }).click();
+    await resumeAfterCrash(page);
     await expect(page.locator('#position')).toHaveText('0:06');
     await expect.poll(() => serverProgress()[itemId]?.updated || 0).toBeGreaterThanOrEqual(recoveredAt);
   } finally {
     await browser?.close(); app.downloads.close(); app.closePlayback();
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
   }
 });
 
@@ -136,6 +214,54 @@ test('direct-play resume survives leaving before metadata arrives and resumes at
     await expect.poll(() => page.locator('#video').evaluate(v => v.currentTime)).toBeGreaterThanOrEqual(5.9);
   } finally {
     await browser?.close(); app.downloads.close(); app.closePlayback();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test('receiver saves manual episode sections, maps the season and removes markers persistently', async () => {
+  const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'markers-ui-')), media = path.join(root, 'media');
+  await fs.mkdir(media);
+  for (const name of ['North.S01E01', 'North.S01E02', 'North.S02E01', 'South.S01E01']) await fs.copyFile(f.mkv, path.join(media, name + '.mkv'));
+  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} } });
+  let browser;
+  try {
+    const userId = await app.createUser('head', 'manual-markers-test', 'admin'); await library.addFolder(media);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: `http://127.0.0.1:${server.address().port}` }; delete env.ELECTRON_RUN_AS_NODE;
+    browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
+    const page = await browser.firstWindow(), errors = []; page.on('pageerror', error => errors.push(error.message));
+    await page.getByRole('textbox', { name: 'Username', exact: true }).fill('head');
+    await page.getByLabel('Password', { exact: true }).fill('manual-markers-test');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.getByRole('button', { name: 'Open North', exact: true }).click();
+    await page.getByRole('button', { name: /^(Play now|Resume)$/ }).click();
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.2);
+    await page.getByRole('button', { name: 'Pause', exact: true }).click();
+    await expect(page.locator('video')).toHaveAttribute('data-buffer-complete', 'true');
+    await page.getByRole('button', { name: 'Skip segment settings' }).click();
+    const seek = async at => { await page.locator('#seek').evaluate((el, at) => { el.value = String(at); el.dispatchEvent(new Event('change', { bubbles: true })); }, at); await expect(page.locator('#position')).toHaveText(`0:0${at}`); };
+    await seek(1); await page.getByRole('button', { name: 'Mark intro start', exact: true }).click();
+    await seek(3); await page.getByRole('button', { name: 'Save end here', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Remove intro marker', exact: true })).toHaveCount(1);
+    await page.getByRole('button', { name: 'Apply manual marks to this season', exact: true }).click();
+    const catalog = db.prepare('SELECT id, group_title, season, episode FROM items').all();
+    const saved = () => JSON.parse(db.prepare('SELECT data FROM user_state WHERE user_id = ?').get(userId).data).markers;
+    const season = catalog.filter(i => i.group_title === 'North' && i.season === 1);
+    await expect.poll(() => season.every(i => saved()[i.id]?.some(m => m.type === 'intro' && m.start === 1 && m.end === 3))).toBe(true);
+    for (const item of catalog.filter(i => !season.includes(i))) expect(saved()[item.id]?.length || 0).toBe(0);
+    await page.getByRole('button', { name: 'Close skip segments' }).click();
+    await seek(2); await expect(page.locator('#skip-segment')).toBeVisible();
+    await page.locator('#skip-segment').click(); await expect(page.locator('#position')).toHaveText('0:03');
+    await page.getByRole('button', { name: 'Skip segment settings' }).click();
+    await page.getByRole('button', { name: 'Remove intro marker', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Remove intro marker', exact: true })).toHaveCount(0);
+    const first = season.find(i => i.episode === 1);
+    await expect.poll(() => saved()[first.id]?.length).toBe(0);
+    expect(errors).toEqual([]);
+  } finally {
+    await browser?.close(); app.scanner.close(); app.downloads.close(); app.closePlayback();
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
     await fs.rm(root, { recursive: true, force: true });
   }
