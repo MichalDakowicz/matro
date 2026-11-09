@@ -117,6 +117,21 @@ test('a renderer crash restores the local movie position even when server saves 
     // Freshness, rather than furthest position, proves the local-only save.
     const recoveredAt = (await localCheckpoint()).updated;
     expect(serverProgress()[itemId]?.updated || 0).toBeLessThan(recoveredAt);
+    const durableCheckpoint = () => page.evaluate(id => new Promise((resolve, reject) => {
+      const key = Object.keys(localStorage).find(key => key.startsWith('matro:recovery:v1:') && key.endsWith(':' + id));
+      const request = indexedDB.open('matro-playback-recovery');
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const db = request.result, tx = db.transaction('checkpoints', 'readonly');
+        const entry = tx.objectStore('checkpoints').get(key);
+        tx.oncomplete = () => { db.close(); resolve(entry.result); };
+        tx.onabort = () => { db.close(); reject(tx.error); };
+      };
+    }), itemId);
+    await expect.poll(async () => (await durableCheckpoint())?.updated || 0).toBeGreaterThanOrEqual(recoveredAt);
+    // Model the crash that loses the quick localStorage write before it reaches
+    // disk. Recovery must still read the completed IndexedDB transaction.
+    await page.evaluate(id => { for (const key of Object.keys(localStorage)) if (key.startsWith('matro:recovery:v1:') && key.endsWith(':' + id)) localStorage.removeItem(key); }, itemId);
     const crashed = page.waitForEvent('crash');
     await browser.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer());
     await crashed;

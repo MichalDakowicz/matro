@@ -111,6 +111,7 @@ async function attempt(fn) { try { return await fn(); } catch (error) { toast(er
 function save() {
   if (!stateLoaded) return Promise.resolve();
   for (const [id, entry] of Object.entries(library.progress)) recovery.write(id, entry);
+  recovery.persist(library.progress);
   return api.save({ progress: library.progress, queue: library.queue, preferences: library.preferences, markers: library.markers || {} });
 }
 const completed = id => !!library.progress[id]?.completed;
@@ -1235,8 +1236,8 @@ api?.onSegments(update => {
   renderSegments(); renderTracks();
 });
 if (!api) { root.innerHTML = '<main class="page"><h1 class="page-title">Open Matro in its desktop app.</h1><p class="page-sub">Run npm start from the project folder.</p></main>'; }
-else void attempt(async () => { library = await api.load(); stateLoaded = true;
-  const restored = recovery.restore(library.progress, library.items.map(item => item.id)); library.progress = restored.progress;
+else void attempt(async () => { library = await api.load();
+  const restored = await recovery.restore(library.progress, library.items.map(item => item.id)); library.progress = restored.progress; stateLoaded = true;
   metadata = library.metadata || {}; metadataEnabled = !!library.metadataEnabled;
   scannerSummary = library.scanner || await api.scannerStatus();
   library.markers ||= {};
