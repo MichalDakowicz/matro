@@ -236,6 +236,7 @@ test('show tracking, early progress, completion, season groups, skip markers and
     await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
     await expect(page.locator('.continue-card')).toHaveCount(1);
     await expect(page.locator('.continue-card [data-play]')).toHaveAttribute('data-play', two.id);
+    expect((await page.evaluate(() => window.matro.load())).progress[one.id].completed).toBe(true);
     await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
     await expect(page.locator('.detail .season-heading')).toHaveCount(2);
     await page.locator(`.episode-row[data-play="${one.id}"]`).click();
@@ -244,7 +245,8 @@ test('show tracking, early progress, completion, season groups, skip markers and
     await page.getByRole('button', { name: 'Pause', exact: true }).click();
     await seekTo(2);
     await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
-    expect((await page.evaluate(() => window.matro.load())).progress[one.id].completed).toBe(true);
+    // Rewatching a completed title starts a new resumable session.
+    await expect(page.locator('.continue-card [data-play]')).toHaveAttribute('data-play', one.id);
     await page.getByRole('button', { name: 'Remove Northbound from Continue watching' }).click();
     await expect(page.locator('.continue-card')).toHaveCount(0);
     await app.close();
@@ -252,7 +254,8 @@ test('show tracking, early progress, completion, season groups, skip markers and
     await expect(page.getByRole('button', { name: 'Open Northbound', exact: true })).toBeVisible();
     await expect(page.locator('.continue-card')).toHaveCount(0);
     state = await page.evaluate(() => window.matro.load());
-    expect(state.progress[one.id].completed).toBe(true);
+    expect(state.progress[one.id].completed).toBe(false);
+    expect(state.progress[one.id].position).toBeCloseTo(2, 1);
     expect(state.markers[one.id].some(s => s.type === 'intro' && s.source === 'manual')).toBe(true);
     expect(state.preferences.tracks[one.group].subtitle.language).toBe('eng');
     expect(errors).toEqual([]);

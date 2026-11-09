@@ -38,7 +38,7 @@ function mergeMarkers(existing, detected, dismissed = []) {
 
 function createSegmentScheduler({ getState, engine, persist, onUpdate = () => {}, delay = 200 }) {
   let timer, active = null, currentId = null, closed = false, running = false, playing = false, buffering = false;
-  let status = { running: false, ready: 0, total: 0, message: 'Preparing background scan…' };
+  let status = { running: false, complete: false, ready: 0, total: 0, message: 'Preparing background scan…' };
   const waiters = new Map(), stats = new Map();
   function snapshot() { return { ...status }; }
   function publish(update = {}) { onUpdate({ ...update, scanner: snapshot() }); }
@@ -81,7 +81,7 @@ function createSegmentScheduler({ getState, engine, persist, onUpdate = () => {}
       status.ready = ordered.filter(i => state.segmentScans[i.id]?.quick).length; status.total = ordered.length;
       if (!job || closed) {
         const unavailable = ordered.some(i => state.segmentScans[i.id]?.retryAt > Date.now());
-        status = { ...status, running: false, id: null, message: unavailable ? 'Some episodes unavailable; retrying shortly' : ordered.length ? 'Background scan complete' : 'No seasons to scan' }; publish();
+        status = { ...status, running: false, complete: !unavailable && ordered.length > 0, id: null, message: unavailable ? 'Some episodes unavailable; retrying shortly' : ordered.length ? 'Background scan complete' : 'No seasons to scan' }; publish();
         return;
       }
       const { item, siblings, mode, signature: stamp } = job;
@@ -91,7 +91,7 @@ function createSegmentScheduler({ getState, engine, persist, onUpdate = () => {}
         state.segmentScans[item.id] = { signature: stamp };
         state.markers[item.id] = (state.markers[item.id] || []).filter(s => s.source !== 'automatic');
       }
-      status = { ...status, running: true, id: item.id, group: item.group, title: item.title, phase: mode, message: `${mode === 'quick' ? 'Preparing' : 'Checking full episode'} · ${item.group} · S${item.season} E${item.episode}` };
+      status = { ...status, running: true, complete: false, id: item.id, group: item.group, title: item.title, phase: mode, message: `${mode === 'quick' ? 'Preparing' : 'Checking full episode'} · ${item.group} · S${item.season} E${item.episode}` };
       publish({ id: item.id, stage: 'started', mode });
       const markers = await engine.detect(item, siblings, update => {
         if (closed || !getState().items.some(i => i.id === item.id)) return;

@@ -38,7 +38,7 @@ test('downloading reaches EOF on disk while a paused decoder has stopped consumi
         bufferPlayback(video, '/test-stream', 60, true);
         const deadline = Date.now() + 5000;
         while (video.dataset.bufferComplete !== 'true' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
-        const during = (await indexedDB.databases()).map(db => db.name).filter(name => !before.includes(name));
+        const during = (await indexedDB.databases()).map(db => db.name).filter(name => name.startsWith('matro-buffer-') && !before.includes(name));
         const state = { complete: video.dataset.bufferComplete, bytes: Number(video.dataset.bufferBytes), paused: video.paused, appendCount, diskFiles: during.length };
         releaseBuffer(video);
         for (let n = 0; n < 100 && (await indexedDB.databases()).some(db => during.includes(db.name)); n++) await new Promise(resolve => setTimeout(resolve, 20));
