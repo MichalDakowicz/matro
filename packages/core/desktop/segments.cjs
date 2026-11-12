@@ -2,6 +2,7 @@ const { mediaFS: fs } = require('./ssh-media.cjs');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const os = require('node:os');
+const { primaryMarkers } = require('./skip-markers.cjs');
 const idFor = value => require('node:crypto').createHash('sha256').update(value).digest('hex').slice(0, 24);
 
 // Perceptual samples: comparisons ignore brightness and minor edits.
@@ -75,7 +76,7 @@ function detectSegments(target, references) {
     });
     if (copiedStory) segment.type = 'recap';
   }
-  return merged;
+  return primaryMarkers(merged);
 }
 function createSegments(cacheDirectory, dependencies) {
   const { fs, run, ffmpeg, probe } = dependencies || { fs: require('./ssh-media.cjs').mediaFS, ...require('./media.cjs') };

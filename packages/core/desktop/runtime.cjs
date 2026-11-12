@@ -12,7 +12,7 @@ const { scan, describe, groupFolders, applyPreludes, sidecars, keepSidecar, SIDE
 const { createStreamServer } = require('./stream.cjs');
 const { createPreviews } = require('./previews.cjs');
 const { createSegments } = require('./segments.cjs');
-const { createSegmentScheduler } = require('./segment-scheduler.cjs');
+const { createSegmentScheduler, mergeMarkers } = require('./segment-scheduler.cjs');
 const { readEnv, credentials, createMetadata, cleanQuery, yearOf } = require('./metadata.cjs');
 const previews = createPreviews();
 protocol.registerSchemesAsPrivileged([{ scheme: 'matro', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
@@ -66,6 +66,7 @@ app.whenReady().then(async () => {
   const env = { ...readEnv([path.join(app.getAppPath(), '.env'), path.join(app.getPath('userData'), '.env')]), ...process.env };
   metadata = createMetadata({ dir: app.getPath('userData'), fetch: (url, options) => net.fetch(url, options), auth: env.MATRO_METADATA === 'off' ? null : credentials(env), onUpdate: snapshot => { if (win && !win.isDestroyed()) win.webContents.send('library:metadata', snapshot); } });
   try { state = { ...state, ...JSON.parse(await fs.readFile(storage, 'utf8')) }; } catch { /* First launch or damaged state uses a fresh library. */ }
+  state.markers = Object.fromEntries(Object.entries(state.markers || {}).filter(([, marks]) => Array.isArray(marks)).map(([id, marks]) => [id, mergeMarkers(marks, [], state.markerDismissals?.[id])]));
   for (const config of state.sshConnections || []) {
     try { remote.register(config); } catch { /* Leave cached titles available if a saved configuration is invalid. */ }
   }
@@ -182,7 +183,7 @@ app.whenReady().then(async () => {
       // must not overwrite matches saved while it was on the library screen.
       for (const [id, markers] of Object.entries(data.markers)) if (ids.has(id) && Array.isArray(markers)) {
         const manual = markers.filter(s => s.source !== 'automatic' && ['intro', 'outro', 'recap'].includes(s.type) && Number.isFinite(s.start) && Number.isFinite(s.end) && s.start >= 0 && s.end > s.start).map(s => ({ type: s.type, start: s.start, end: s.end, source: 'manual' }));
-        state.markers[id] = [...manual, ...(state.markers[id] || []).filter(s => s.source === 'automatic' && !manual.some(m => m.start < s.end && m.end > s.start))];
+        state.markers[id] = mergeMarkers(manual, (state.markers[id] || []).filter(s => s.source === 'automatic'), state.markerDismissals?.[id]);
       }
     }
     if (Array.isArray(data.queue)) state.queue = [...new Set(data.queue.filter(id => ids.has(id)))];

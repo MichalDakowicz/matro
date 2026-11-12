@@ -1,6 +1,6 @@
 {
   "name": "matro",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "Matro desktop, web and native mobile media player monorepo.",
   "main": "apps/desktop/main.cjs",
   "scripts": {
