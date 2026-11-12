@@ -136,7 +136,14 @@ export function createAdapter(session) {
     chooseSource: window.matroDesktop?.chooseSource,
     recoveryScope: `account:${session.user.id}:${session.user.username}`,
     load, inspect, prepare: inspect, subtitles, loadSubtitle, stream,
-    save: state => put('/api/state', { progress: state.progress, queue: state.queue, preferences: state.preferences, markers: state.markers || {} }, { keepalive: JSON.stringify(state).length < 60000 }),
+    save: (state, { keepalive = false } = {}) => {
+      // Automatic markers belong to the shared scanner, not each viewer's state.
+      const markers = Object.fromEntries(Object.entries(state.markers || {}).map(([id, marks]) => [id, marks.filter(m => m.source !== 'automatic')]).filter(([, marks]) => marks.length));
+      const body = { progress: state.progress, queue: state.queue, preferences: state.preferences, markers };
+      // Keepalive has a small shared in-flight byte quota. Reserve it for exit;
+      // ordinary overlapping checkpoints must not consume that quota.
+      return put('/api/state', body, { keepalive: keepalive && new Blob([JSON.stringify(body)]).size < 60000 });
+    },
     stop: keepUrl => post('/api/playback/stop', { keepPreload: !!keepUrl && new URL(keepUrl, location.origin).searchParams.get('preload') === '1' }), playbackState: value => post('/api/playback/state', typeof value === 'object' ? value : { playing: !!value }).catch(() => {}),
     preview: async ({ id, time, hover }) => `/api/items/${id}/frame?t=${Math.max(0, Number(time) || 0)}&w=${hover ? 320 : 480}`,
     segments: async ({ id, force }) => (await post(`/api/items/${id}/segments`, { force })).markers,

@@ -92,13 +92,28 @@ test('unavailable episodes back off without preventing other shows from being pr
   } finally { scanner.close(); }
 });
 
-test('outro matching gaps join, long breaks stay separate, manual boundaries win', () => {
+test('outro matching gaps join, long breaks are not skipped, manual boundaries win', () => {
   const marker = (start, end) => ({ type: 'outro', start, end, source: 'automatic' });
   assert.deepEqual(mergeMarkers([marker(1355, 1447)], [marker(1456, 1534)]), [marker(1355, 1534)]);
-  assert.equal(mergeMarkers([marker(1355, 1447)], [marker(1470, 1534)]).length, 2);
+  assert.deepEqual(mergeMarkers([marker(1355, 1447)], [marker(1470, 1534)]), [marker(1355, 1447)]);
   const manual = { type: 'outro', start: 1400, end: 1450, source: 'manual' };
   assert.deepEqual(mergeMarkers([manual], [marker(1355, 1447)]), [manual]);
   assert.deepEqual(mergeMarkers([], [marker(1355, 1447)], [marker(1360, 1440)]), []);
+  assert.deepEqual(mergeMarkers([manual], [marker(1470, 1534)]), [manual]);
+});
+
+test('old fragmented detections yield one main intro and outro without changing manual marks', () => {
+  const marker = (type, start, end, source = 'automatic') => ({ type, start, end, source });
+  const legacy = [marker('intro', 0, 12), marker('intro', 40, 130), marker('recap', 5, 20), marker('intro', 170, 185), marker('intro', 240, 260), marker('outro', 1100, 1120), marker('outro', 1300, 1390)];
+  const result = mergeMarkers(legacy, [marker('intro', 42, 125), marker('outro', 1385, 1400)]);
+  assert.deepEqual(result, [marker('recap', 5, 20), marker('intro', 40, 130), marker('outro', 1300, 1400)]);
+  assert.deepEqual(mergeMarkers(result, result), result);
+  const manual = [marker('intro', 20, 100, 'manual'), marker('outro', 1400, 1450, 'manual')];
+  assert.deepEqual(mergeMarkers(manual, legacy), [legacy[2], manual[0], manual[1]]);
+  assert.deepEqual(legacy[1], marker('intro', 40, 130));
+  assert.deepEqual(mergeMarkers([], [marker('intro', 40, 130), marker('recap', 145, 157)]), [marker('intro', 40, 130)]);
+  const recap = marker('recap', 145, 157, 'manual');
+  assert.deepEqual(mergeMarkers([recap], [marker('intro', 40, 130)]), [marker('intro', 40, 130), recap]);
 });
 
 test('scanner keeps processing during playback with gentle resource settings', async () => {

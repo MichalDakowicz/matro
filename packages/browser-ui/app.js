@@ -117,11 +117,11 @@ function hoverSeek(event) {
 const finishMargin = duration => Math.min(10, duration * .05);
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 5000); }
 async function attempt(fn) { try { return await fn(); } catch (error) { toast(error.message || String(error)); return null; } }
-function save() {
+function save(options) {
   if (!stateLoaded) return Promise.resolve();
   for (const [id, entry] of Object.entries(library.progress)) recovery.write(id, entry);
   recovery.persist(library.progress);
-  return api.save({ progress: library.progress, queue: library.queue, preferences: library.preferences, markers: library.markers || {} });
+  return api.save({ progress: library.progress, queue: library.queue, preferences: library.preferences, markers: library.markers || {} }, options);
 }
 const completed = id => !!library.progress[id]?.completed;
 const orderedEpisodes = item => library.items.filter(i => i.kind === 'show' && sameTitle(i, item)).sort((a, b) => a.season - b.season || a.episode - b.episode);
@@ -1238,7 +1238,7 @@ document.addEventListener('dragenter', event => { event.preventDefault(); if (!e
 document.addEventListener('dragover', event => event.preventDefault());
 document.addEventListener('dragleave', event => { event.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; $('#drop-overlay')?.remove(); } });
 document.addEventListener('drop', event => { event.preventDefault(); dragDepth = 0; $('#drop-overlay')?.remove(); const files = Array.from(event.dataTransfer.files); void attempt(async () => { const before = new Set(library.items.map(i => i.id)); library = await api.importDrop(files); const item = library.items.find(i => !before.has(i.id)); if (item) await play(item.id); else toast('No new supported media files found. Use Add folder for directories.'); }); });
-window.addEventListener('beforeunload', () => { remember(); void save().catch(() => {}); });
+window.addEventListener('beforeunload', () => { remember(); void save({ keepalive: true }).catch(() => {}); });
 window.addEventListener('pagehide', () => { if (video) releaseBuffer(video); discardPrepared(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { remember(); void attempt(save); } });
 // Closing the window waits for the latest position to be written before the app quits.

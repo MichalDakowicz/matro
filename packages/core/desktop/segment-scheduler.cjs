@@ -1,4 +1,5 @@
 const { mediaFS: fs } = require('./ssh-media.cjs');
+const { primaryMarkers } = require('./skip-markers.cjs');
 const idFor = value => require('node:crypto').createHash('sha256').update(value).digest('hex').slice(0, 24);
 const titleKey = item => item.groupId || item.group;
 const order = (a, b) => a.season - b.season || a.episode - b.episode || a.path.localeCompare(b.path);
@@ -27,13 +28,7 @@ function prioritizeEpisodes(state, currentId) {
 function mergeMarkers(existing, detected, dismissed = []) {
   const manual = (existing || []).filter(s => s.source !== 'automatic');
   const automatic = [...(existing || []).filter(s => s.source === 'automatic'), ...detected].filter(s => !manual.some(m => m.start < s.end && m.end > s.start) && !dismissed.some(m => m.type === s.type && m.start < s.end && m.end > s.start)).sort((a, b) => a.start - b.start);
-  const merged = [];
-  for (const marker of automatic) {
-    const prior = merged.at(-1);
-    if (prior && prior.type === marker.type && marker.start <= prior.end + (marker.type === 'outro' ? 10 : 2)) prior.end = Math.max(prior.end, marker.end);
-    else merged.push({ ...marker });
-  }
-  return [...manual, ...merged];
+  return primaryMarkers([...manual, ...automatic]);
 }
 
 function createSegmentScheduler({ getState, engine, persist, onUpdate = () => {}, delay = 200 }) {

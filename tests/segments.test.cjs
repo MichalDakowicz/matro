@@ -32,6 +32,17 @@ test('static frames and unrelated footage do not produce skip suggestions', () =
   assert.deepEqual(detectSegments(a, [a]), []);
   assert.deepEqual(detectSegments({ duration: 400, hashes: noise(999999, 200) }, [{ duration: 400, hashes: noise(888888, 200) }]), []);
 });
+
+test('short repeated shots do not create extra intro or outro suggestions', () => {
+  const target = { duration: 400, hashes: noise(123456, 200) };
+  const ref = { duration: 400, hashes: noise(98765, 200) };
+  for (const [from, to, count] of [[5, 0, 7], [20, 15, 25], [65, 65, 7], [145, 145, 6], [175, 175, 20]]) {
+    for (let i = 0; i < count; i++) target.hashes[to + i] = ref.hashes[from + i];
+  }
+  const result = detectSegments(target, [ref]);
+  assert.deepEqual(result.filter(m => m.type === 'intro'), [{ type: 'intro', start: 30, end: 80, source: 'automatic' }]);
+  assert.deepEqual(result.filter(m => m.type === 'outro'), [{ type: 'outro', start: 350, end: 390, source: 'automatic' }]);
+});
 test('real media fingerprint extraction caches samples and closes cleanly', async () => {
   const f = await fixtures();
   const detector = createSegments(path.join(f.dir, 'fingerprint-test'));

@@ -9,6 +9,19 @@ function launchOptions(profile) {
   return process.env.MATRO_EXECUTABLE ? { executablePath: process.env.MATRO_EXECUTABLE, args: [`--user-data-dir=${profile}`], env } : { args: [path.resolve(__dirname, '..')], env };
 }
 
+test('existing automatic skip markers are corrected when the desktop library opens', async () => {
+  const f = await fixtures(), profile = path.join(f.dir, `legacy-markers-${Date.now()}`);
+  await fs.mkdir(profile); const item = describe(f.mkv);
+  const marker = (type, start, end) => ({ type, start, end, source: 'automatic' });
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, folders: [], items: [item], queue: [], progress: {}, preferences: { autoplay: false, volume: .3 }, markers: { [item.id]: [marker('intro', 0, 1), marker('intro', 4, 7), marker('recap', 7, 8), marker('outro', 8, 10)] } }));
+  const app = await electron.launch(launchOptions(profile));
+  try {
+    const page = await app.firstWindow();
+    const state = await page.evaluate(() => window.matro.load());
+    expect(state.markers[item.id]).toEqual([marker('intro', 4, 7), marker('outro', 8, 10)]);
+  } finally { await app.close(); }
+});
+
 test('existing folder library migrates to two shows and one movie without losing progress', async () => {
   const root = path.resolve(__dirname, '../.test-media', `grouping-${Date.now()}`);
   const media = path.join(root, 'Media'), shows = path.join(media, 'Shows'), movies = path.join(media, 'Movies');
