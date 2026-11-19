@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('matro', {
   downloadConfig: () => ipcRenderer.invoke('downloads:config'),
   downloadConfigure: options => ipcRenderer.invoke('downloads:configure', options),
   downloadSearch: options => ipcRenderer.invoke('downloads:search', options),
+  downloadDiscover: options => ipcRenderer.invoke('downloads:discover', options),
+  downloadPreview: options => ipcRenderer.invoke('downloads:preview', options),
   downloadAdd: options => ipcRenderer.invoke('downloads:add', options),
   downloadList: target => ipcRenderer.invoke('downloads:list', target),
   load: () => ipcRenderer.invoke('library:load'),

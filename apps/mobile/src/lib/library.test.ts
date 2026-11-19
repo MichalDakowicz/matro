@@ -20,6 +20,42 @@ test('continue watching advances a completed episode and preserves a dismissed s
   assert.equal(resumeItem(data, data.items).id, 'two');
   data.progress.one.hidden = true; assert.equal(continueItems(data, groupLibrary(data.items)).length, 0);
 });
+test('continue watching and title playback cross seasons and return to a skipped episode', () => {
+  const skipped = episode('skipped', 1), last = episode('last', 2), next = { ...episode('next', 1), season: 2 };
+  const data = blank([next, last, skipped]), groups = groupLibrary(data.items);
+  const assertTarget = (target: Item) => {
+    assert.deepEqual(continueItems(data, groups), [target]);
+    assert.equal(resumeItem(data, groups[0]), target);
+  };
+
+  data.progress.last = { position: 98, duration: 100, updated: 1 };
+  data.progress.skipped = { position: 0, duration: 0, completed: false, updated: 2 };
+  assertTarget(next);
+
+  data.progress.next = { position: 0, duration: 0, completed: true, updated: 3 };
+  assertTarget(skipped);
+
+  data.progress.last = { position: 98, duration: 100, completed: false, updated: 4 };
+  assertTarget(last);
+
+  data.progress.last.completed = true;
+  data.progress.skipped.completed = true;
+  assert.deepEqual(continueItems(data, groups), []);
+});
+test('undated completions advance from the furthest episode and dismissed titles resume the latest partial', () => {
+  const items = [episode('one', 1), episode('two', 2), episode('three', 3), episode('four', 4)];
+  const data = blank(items), groups = groupLibrary(items);
+  data.progress.one = { position: 100, duration: 100, completed: true, updated: 0 };
+  data.progress.three = { position: 100, duration: 100, completed: true, updated: 0 };
+  assert.equal(continueItems(data, groups)[0].id, 'four');
+
+  data.progress.one.hidden = true;
+  data.progress.three.hidden = true;
+  data.progress.two = { position: 25, duration: 100, hidden: true, updated: 10 };
+  data.progress.four = { position: 50, duration: 100, hidden: true, updated: 20 };
+  assert.deepEqual(continueItems(data, groups), []);
+  assert.equal(resumeItem(data, items).id, 'four');
+});
 test('track preferences follow language/title across episode stream-index changes', () => {
   const tracks = [{ index: 2, title: 'Original mix', language: 'en', codec: 'aac', channels: 2 }, { index: 5, title: 'Dub', language: 'pl', codec: 'aac', channels: 2 }];
   assert.equal(matchTrack(tracks, { language: 'pl', title: 'Dub', codec: 'aac', channels: 2 })?.index, 5);

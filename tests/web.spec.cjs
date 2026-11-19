@@ -18,6 +18,22 @@ async function resumeAfterCrash(page) {
   await resume.click();
 }
 
+async function playAndPauseAfterAdvance(page) {
+  // Pause in the renderer as soon as the media clock advances. The play
+  // controls can auto-hide before a second Playwright click reaches them.
+  await page.evaluate(() => {
+    const pauseAfterAdvance = event => {
+      const video = event.target;
+      if (!(video instanceof HTMLVideoElement) || video.currentTime <= .2) return;
+      video.pause();
+      document.removeEventListener('timeupdate', pauseAfterAdvance, true);
+    };
+    document.addEventListener('timeupdate', pauseAfterAdvance, true);
+  });
+  await page.getByRole('button', { name: /^(Play now|Resume)$/ }).click();
+  await expect.poll(() => page.locator('video').evaluate(v => v.paused && v.currentTime > .2 && v.currentTime < 3)).toBe(true);
+}
+
 for (const scenario of ['new movie', 'resumed movie', 'rewatching', 'missing media events']) test(`passive playback saves and recovers after a crash: ${scenario}`, async () => {
   const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'crash-ui-'));
   const media = path.join(root, 'media'); await fs.mkdir(media); await fs.copyFile(f.mkv, path.join(media, 'Northbound.mkv'));
@@ -99,24 +115,20 @@ test('a renderer crash restores the local movie position even when server saves 
     await page.getByLabel('Password', { exact: true }).fill('local-recovery-test');
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
-    await page.getByRole('button', { name: /^(Play now|Resume)$/ }).click();
-    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.2);
-    await page.getByRole('button', { name: 'Pause', exact: true }).click();
+    await playAndPauseAfterAdvance(page);
+    const itemId = db.prepare('SELECT id FROM items LIMIT 1').get().id;
+    const serverProgress = () => JSON.parse(db.prepare('SELECT data FROM user_state WHERE user_id = ?').get(userId)?.data || '{}').progress?.[itemId];
+    await expect.poll(() => serverProgress()?.position || 0).toBeGreaterThan(0);
     let blockSaves = true;
     const handleRequest = server.listeners('request')[0]; server.removeListener('request', handleRequest);
     server.on('request', (req, res) => {
       if (blockSaves && req.method === 'PUT' && req.url === '/api/state') { req.resume(); res.writeHead(503, { 'content-type': 'application/json' }).end('{"error":"test: save unavailable"}'); }
       else handleRequest(req, res);
     });
-    const itemId = db.prepare('SELECT id FROM items LIMIT 1').get().id;
     await page.locator('#seek').evaluate(el => { el.value = '6'; el.dispatchEvent(new Event('change', { bubbles: true })); });
     const localCheckpoint = () => page.evaluate(id => Object.keys(localStorage).filter(key => key.startsWith('matro:recovery:v1:') && key.endsWith(':' + id)).map(key => JSON.parse(localStorage.getItem(key))).find(entry => entry.position >= 5.9 && entry.position <= 6.1), itemId);
     await expect.poll(localCheckpoint).toBeTruthy();
-    const serverProgress = () => JSON.parse(db.prepare('SELECT data FROM user_state WHERE user_id = ?').get(userId)?.data || '{}').progress || {};
-    // The old server position can be ahead of six seconds on a slower machine.
-    // Freshness, rather than furthest position, proves the local-only save.
     const recoveredAt = (await localCheckpoint()).updated;
-    expect(serverProgress()[itemId]?.updated || 0).toBeLessThan(recoveredAt);
     const durableCheckpoint = () => page.evaluate(id => new Promise((resolve, reject) => {
       const key = Object.keys(localStorage).find(key => key.startsWith('matro:recovery:v1:') && key.endsWith(':' + id));
       const request = indexedDB.open('matro-playback-recovery');
@@ -128,7 +140,14 @@ test('a renderer crash restores the local movie position even when server saves 
         tx.onabort = () => { db.close(); reject(tx.error); };
       };
     }), itemId);
-    await expect.poll(async () => (await durableCheckpoint())?.updated || 0).toBeGreaterThanOrEqual(recoveredAt);
+    await expect.poll(async () => {
+      const checkpoint = await durableCheckpoint();
+      return {
+        nearSeek: checkpoint?.position >= 5.9 && checkpoint.position <= 6.1,
+        newer: checkpoint?.updated >= recoveredAt && checkpoint.updated > (serverProgress()?.updated || 0),
+        completed: checkpoint?.completed
+      };
+    }).toEqual({ nearSeek: true, newer: true, completed: false });
     // Model the crash that loses the quick localStorage write before it reaches
     // disk. Recovery must still read the completed IndexedDB transaction.
     await page.evaluate(id => { for (const key of Object.keys(localStorage)) if (key.startsWith('matro:recovery:v1:') && key.endsWith(':' + id)) localStorage.removeItem(key); }, itemId);
@@ -145,7 +164,7 @@ test('a renderer crash restores the local movie position even when server saves 
     page = await reopened;
     await resumeAfterCrash(page);
     await expect(page.locator('#position')).toHaveText('0:06');
-    await expect.poll(() => serverProgress()[itemId]?.updated || 0).toBeGreaterThanOrEqual(recoveredAt);
+    await expect.poll(() => serverProgress()?.updated || 0).toBeGreaterThanOrEqual(recoveredAt);
   } finally {
     await browser?.close(); app.downloads.close(); app.closePlayback();
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
@@ -314,9 +333,7 @@ test('receiver saves manual episode sections, maps the season and removes marker
     await page.getByLabel('Password', { exact: true }).fill('manual-markers-test');
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await page.getByRole('button', { name: 'Open North', exact: true }).click();
-    await page.getByRole('button', { name: /^(Play now|Resume)$/ }).click();
-    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.2);
-    await page.getByRole('button', { name: 'Pause', exact: true }).click();
+    await playAndPauseAfterAdvance(page);
     await expect(page.locator('video')).toHaveAttribute('data-buffer-complete', 'true');
     await page.getByRole('button', { name: 'Skip segment settings' }).click();
     const seek = async at => { await page.locator('#seek').evaluate((el, at) => { el.value = String(at); el.dispatchEvent(new Event('change', { bubbles: true })); }, at); await expect(page.locator('#position')).toHaveText(`0:0${at}`); };
@@ -327,15 +344,19 @@ test('receiver saves manual episode sections, maps the season and removes marker
     const catalog = db.prepare('SELECT id, group_title, season, episode FROM items').all();
     const saved = () => JSON.parse(db.prepare('SELECT data FROM user_state WHERE user_id = ?').get(userId).data).markers;
     const season = catalog.filter(i => i.group_title === 'North' && i.season === 1);
+    const first = season.find(i => i.episode === 1);
     await expect.poll(() => season.every(i => saved()[i.id]?.some(m => m.type === 'intro' && m.start === 1 && m.end === 3))).toBe(true);
     for (const item of catalog.filter(i => !season.includes(i))) expect(saved()[item.id]?.length || 0).toBe(0);
     await page.getByRole('button', { name: 'Close skip segments' }).click();
     await seek(2); await expect(page.locator('#skip-segment')).toBeVisible();
     await page.locator('#skip-segment').click(); await expect(page.locator('#position')).toHaveText('0:03');
     await page.getByRole('button', { name: 'Skip segment settings' }).click();
+    const removal = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/segments/remove'));
     await page.getByRole('button', { name: 'Remove intro marker', exact: true }).click();
+    const removed = await removal;
+    expect(new URL(removed.url()).pathname).toBe(`/api/items/${first.id}/segments/remove`);
+    expect(removed.ok()).toBe(true);
     await expect(page.getByRole('button', { name: 'Remove intro marker', exact: true })).toHaveCount(0);
-    const first = season.find(i => i.episode === 1);
     await expect.poll(() => saved()[first.id]?.length).toBe(0);
     expect(errors).toEqual([]);
   } finally {

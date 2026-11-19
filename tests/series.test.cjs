@@ -26,7 +26,7 @@ test('series search is explicit, selects exact show and filters older release pa
   await assert.rejects(catalog.releases({ id: '8' }), /no release index/);
 });
 test('wrong IMDb, malformed hashes and expired show selections are rejected', async t => {
-  const catalog = createSeriesCatalog({ request: async url => url.pathname.endsWith('search/shows') ? [{ show }] : { torrents_count: 3, torrents: [{ ...release(1, 1, '720p'), imdb_id: '9999999' }, { ...release(1, 1, '720p'), hash: 'bad' }] }, json: async value => value, rememberRelease: () => { throw new Error('invalid release must not be remembered'); } });
+  const catalog = createSeriesCatalog({ request: async url => url.pathname.endsWith('search/shows') ? [{ show }] : { torrents_count: 5, torrents: [null, { hash, imdb_id: '1234567' }, { ...release(1, 1, '720p'), imdb_id: '9999999' }, { ...release(1, 1, '720p'), hash: 'bad' }, 'invalid'] }, json: async value => value, rememberRelease: () => { throw new Error('invalid release must not be remembered'); } });
   await catalog.search({ query: 'Sample' });
   assert.deepEqual((await catalog.releases({ id: '7' })).releases, []);
   const future = Date.now() + 61 * 60 * 1000; t.mock.method(Date, 'now', () => future);

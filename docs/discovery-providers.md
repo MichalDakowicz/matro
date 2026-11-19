@@ -13,6 +13,18 @@ These recommendations are based on the providers' documented interfaces and cove
 
 [Prowlarr search API](https://wiki.servarr.com/en/prowlarr/search) · [Supported indexers](https://github.com/Servarr/Wiki/blob/master/prowlarr/supported-indexers.md) · [Jackett](https://github.com/Jackett/Jackett) · [EZTV API](https://eztvx.to/api/) · [Nyaa RSS implementation](https://github.com/nyaadevs/nyaa/blob/master/nyaa/templates/rss.xml) · [Anime Tosho shutdown notice](https://animetosho.org/)
 
+### Listing sample
+
+These are the rows returned by one request per query on 2026-11-18. The counts describe the sampled response, including any repeated or loosely matched release. They vary with query, endpoint limit, and time.
+
+| Source | Query | Release rows | Highest reported seeds |
+| --- | --- | --- | --- |
+| YTS | Arrival (2016) | 3 | 100 |
+| EZTV | Severance (IMDb ID) | 20 | 343 |
+| Nyaa RSS | Frieren | 75 | 209 |
+| Nyaa RSS | Sousou no Frieren | 75 | 376 |
+| Nyaa RSS | 葬送のフリーレン | 56 | 75 |
+
 ## Title matches and release details
 
 Use a known TMDB ID or map a known IMDb ID first. Without an ID, match the title and year within the right media type and keep uncertain matches unlinked. Film and TV searches include alternative titles. Use Matro's existing artwork cache and credential setup. Load richer details and season information when the user opens a title preview.

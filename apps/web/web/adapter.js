@@ -1,6 +1,6 @@
 // window.matro for the browser: the desktop renderer calls this object where Electron would call its main process.
 // Everything here turns those calls into requests to the server.
-import { get, post, put, del, api } from './http.js';
+import { get, post, put, patch, del, api } from './http.js';
 import { h, say, dialog, languageSelect } from './dom.js';
 
 const SIDECAR = 10000; // uploaded subtitle tracks get indexes from here up, as sidecar files do on the desktop
@@ -136,10 +136,10 @@ export function createAdapter(session) {
     chooseSource: window.matroDesktop?.chooseSource,
     recoveryScope: `account:${session.user.id}:${session.user.username}`,
     load, inspect, prepare: inspect, subtitles, loadSubtitle, stream,
+    dismissContinue: async id => (await patch(`/api/items/${encodeURIComponent(id)}/progress`, { dismiss: true })).progress,
+    setCompleted: async (id, completed, checkpoint) => (await patch(`/api/items/${encodeURIComponent(id)}/progress`, { completed, checkpoint })).progress,
     save: (state, { keepalive = false } = {}) => {
-      // Automatic markers belong to the shared scanner, not each viewer's state.
-      const markers = Object.fromEntries(Object.entries(state.markers || {}).map(([id, marks]) => [id, marks.filter(m => m.source !== 'automatic')]).filter(([, marks]) => marks.length));
-      const body = { progress: state.progress, queue: state.queue, preferences: state.preferences, markers };
+      const body = { progress: state.progress, queue: state.queue, preferences: state.preferences };
       // Keepalive has a small shared in-flight byte quota. Reserve it for exit;
       // ordinary overlapping checkpoints must not consume that quota.
       return put('/api/state', body, { keepalive: keepalive && new Blob([JSON.stringify(body)]).size < 60000 });
@@ -147,6 +147,7 @@ export function createAdapter(session) {
     stop: keepUrl => post('/api/playback/stop', { keepPreload: !!keepUrl && new URL(keepUrl, location.origin).searchParams.get('preload') === '1' }), playbackState: value => post('/api/playback/state', typeof value === 'object' ? value : { playing: !!value }).catch(() => {}),
     preview: async ({ id, time, hover }) => `/api/items/${id}/frame?t=${Math.max(0, Number(time) || 0)}&w=${hover ? 320 : 480}`,
     segments: async ({ id, force }) => (await post(`/api/items/${id}/segments`, { force })).markers,
+    saveMarkers: async edits => (await post('/api/segments/manual', edits)).markers,
     removeMarker: async ({ id, marker }) => (await post(`/api/items/${id}/segments/remove`, { marker })).markers,
     scannerStatus: async () => (await get('/api/segments')).scanner,
     rescan: async () => { if (session.user.role === 'admin') await post('/api/admin/rescan'); return load(); },
@@ -191,6 +192,7 @@ export function createAdapter(session) {
     downloadUpgrade: unsupported('Edition upgrades'), downloadFavorite: unsupported('Edition favorites'),
     downloadJobs: () => download('jobs'), downloadRetry: id => download('retry', { id }), downloadRemove: value => download('remove', value),
     downloadConfig: () => download('config'), downloadConfigure: value => download('configure', value),
+    downloadDiscover: value => download('discover', value), downloadPreview: value => download('preview', value),
     downloadSearch: value => download('search', value), downloadAdd: value => download('add', value), downloadList: () => download('list')
   };
   return { matro, state: () => latest };

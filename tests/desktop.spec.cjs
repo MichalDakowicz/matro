@@ -424,6 +424,97 @@ test('leaving during an outro marks the episode watched and moves Continue watch
   } finally { await app.close(); }
 });
 
+test('show continuation crosses seasons, finds a skipped episode and preserves dismissal', async () => {
+  const f = await fixtures();
+  const last = path.join(f.dir, 'Northbound.S01E04.Continuation.mkv'), next = path.join(f.dir, 'Northbound.S02E01.Continuation.mkv');
+  await Promise.all([fs.copyFile(f.mkv, last), fs.copyFile(f.mkv, next)]);
+  const [skipped, seasonEnd, seasonStart] = [f.mkv, last, next].map(file => describe(file));
+  const profile = path.join(f.dir, `continuation-profile-${Date.now()}`); await fs.mkdir(profile);
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({
+    libraryVersion: 2, folders: [], items: [skipped, seasonStart, seasonEnd], queue: [],
+    progress: { [seasonEnd.id]: { position: 11.8, duration: 12 } },
+    preferences: { autoplay: false, volume: .3, motion: 'off' }
+  }));
+  const app = await electron.launch(launchOptions(profile)), page = await app.firstWindow();
+  const continuePlay = page.locator('.continue-card [data-play]');
+  const title = page.getByRole('button', { name: 'Open Northbound', exact: true });
+  const detailPlay = page.locator('.detail-actions .primary');
+  const markSkipped = page.locator(`.detail-actions [data-complete="${skipped.id}"]`);
+  const state = () => page.evaluate(() => window.matro.load());
+  try {
+    await expect(continuePlay).toHaveAttribute('data-play', seasonStart.id);
+    await expect(page.locator('#show-meta .primary')).toHaveAttribute('data-play', seasonStart.id);
+    await title.press('Enter');
+    await expect(detailPlay).toHaveAttribute('data-play', seasonStart.id);
+    await expect(page.getByRole('tab', { name: /Season 2/ })).toHaveAttribute('aria-selected', 'true');
+    await page.locator(`.episode-entry [data-complete="${seasonStart.id}"]`).click();
+    await expect(detailPlay).toHaveAttribute('data-play', skipped.id);
+    expect((await state()).progress[seasonEnd.id]).toMatchObject({ completed: true, updated: 0 });
+    await page.keyboard.press('Escape');
+    await expect(continuePlay).toHaveAttribute('data-play', skipped.id);
+
+    await page.getByRole('button', { name: 'Remove Northbound from Continue watching' }).click();
+    await expect(continuePlay).toHaveCount(0);
+    await page.reload();
+    await expect(title).toBeVisible();
+    await expect(continuePlay).toHaveCount(0);
+    await title.click();
+    await markSkipped.click();
+    await expect(markSkipped).toHaveText('Mark incomplete');
+    await expect.poll(async () => (await state()).progress[skipped.id]).toMatchObject({ completed: true, hidden: true });
+    await markSkipped.click();
+    await expect(markSkipped).toHaveText('Mark complete');
+    await expect.poll(async () => (await state()).progress[skipped.id]).toMatchObject({ completed: false, hidden: true });
+    await expect(continuePlay).toHaveCount(0);
+
+    await detailPlay.click();
+    await expect.poll(() => page.locator('video').evaluate(video => video.currentTime)).toBeGreaterThan(.5);
+    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    await expect(continuePlay).toHaveAttribute('data-play', skipped.id);
+    const saved = await state();
+    expect(saved.progress[skipped.id]).toMatchObject({ completed: false, hidden: false });
+    expect(saved.progress[skipped.id].position).toBeGreaterThan(0);
+    expect(saved.progress[seasonEnd.id]).toMatchObject({ completed: true, hidden: true });
+    expect(saved.progress[seasonStart.id]).toMatchObject({ completed: true, hidden: true });
+
+    await page.getByRole('button', { name: 'Remove Northbound from Continue watching' }).click();
+    await expect(continuePlay).toHaveCount(0);
+    const streamURL = /^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{64}$/;
+    await page.route(streamURL, route => route.abort());
+    await title.click();
+    await detailPlay.click();
+    await expect(page.getByRole('heading', { name: 'Couldn’t play this file.' })).toBeVisible();
+    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    await expect(title).toBeVisible();
+    await expect(continuePlay).toHaveCount(0);
+    expect((await state()).progress[skipped.id]).toMatchObject({ position: saved.progress[skipped.id].position, hidden: true });
+
+    await title.click();
+    await page.locator(`.episode-row[data-play="${seasonEnd.id}"]`).click();
+    await expect(page.getByRole('heading', { name: 'Couldn’t play this file.' })).toBeVisible();
+    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    expect((await state()).progress[seasonEnd.id]).toMatchObject({ position: 11.8, completed: true, hidden: true });
+    await page.unroute(streamURL);
+
+    await page.evaluate(({ id, progress }) => window.matro.save({ progress: { [id]: progress } }), {
+      id: skipped.id,
+      progress: { position: 11.65, duration: 12, completed: false, hidden: true, updated: Date.now() }
+    });
+    await page.reload();
+    await page.evaluate(() => { HTMLMediaElement.prototype.play = async () => {}; });
+    await title.click();
+    await detailPlay.click();
+    await expect.poll(() => page.locator('video').evaluate(video => video.readyState)).toBeGreaterThanOrEqual(2);
+    await expect(page.locator('#position')).toHaveText('0:11');
+    expect(await page.locator('video').evaluate(video => video.paused)).toBe(true);
+    await page.locator('#seek').evaluate(input => { input.value = '3'; input.dispatchEvent(new Event('change', { bubbles: true })); });
+    await expect(page.locator('#position')).toHaveText('0:03');
+    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    await expect(continuePlay).toHaveCount(0);
+    expect((await state()).progress[skipped.id]).toMatchObject({ position: 3, completed: false, hidden: true });
+  } finally { await app.close(); }
+});
+
 test('subtitles stay right after seeks and 5-second skips, paused or playing', async () => {
   const f = await fixtures(), items = [describe(f.mkv)], profile = path.join(f.dir, `subtitle-seek-profile-${Date.now()}`); await fs.mkdir(profile);
   await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items, folders: [], queue: [], progress: {}, preferences: { autoplay: false, volume: .3, motion: 'off' } }));

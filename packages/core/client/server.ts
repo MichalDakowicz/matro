@@ -100,6 +100,8 @@ export type Info = { duration: number; directPlay: boolean; video?: { codec: str
 export const library = async (base: string): Promise<Library> => { await ensureNativeSession(base); return request(base, '/api/library'); };
 export const inspect = (base: string, id: string): Promise<Info> => request(base, `/api/items/${encodeURIComponent(id)}/info`);
 export const saveProgress = (base: string, id: string, entry: Progress) => request(base, '/api/state', { method: 'PUT', body: { progress: { [id]: entry } } });
+export const changeProgress = (base: string, id: string, body: { dismiss: true } | { completed: boolean; checkpoint?: Progress }): Promise<{ progress: Record<string, Progress> }> =>
+  request(base, `/api/items/${encodeURIComponent(id)}/progress`, { method: 'PATCH', body });
 export function playbackPath(id: string, info: Info, position: number, audio: number | null, burn: number | null, delay = 0) {
   const root = `/api/items/${encodeURIComponent(id)}`;
   if (info.directPlay && burn === null && (audio === null || audio === info.audio[0]?.index)) return { path: root + '/direct', offset: 0, start: position };

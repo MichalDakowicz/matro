@@ -59,12 +59,18 @@ app.whenReady().then(async () => {
   embeddedSubtitles = createEmbeddedSubtitles({ dir: path.join(app.getPath('userData'), 'subtitles'), stat: mediaFS.stat, probe, remote,
     extractLocal: (file, index) => run(ffmpeg, ['-v', 'error', '-nostdin', '-i', file, '-map', '0:' + index, '-c:s', 'webvtt', '-f', 'webvtt', 'pipe:1'], { timeout: 180000 }) });
   const downloadFiles = { remote, connections: () => state.sshConnections || [] };
+  const env = { ...readEnv([path.join(app.getAppPath(), '.env'), path.join(app.getPath('userData'), '.env')]), ...process.env };
+  const prowlarr = env.MATRO_PROWLARR_URL || env.MATRO_PROWLARR_API_KEY ? { url: env.MATRO_PROWLARR_URL, key: env.MATRO_PROWLARR_API_KEY } : undefined;
   upgrades = createMovieUpgrades({ getState: () => state, probe, stat: mediaFS.stat, describe, persist, resolveFile: (target, config, file) => destinationFile(downloadFiles, target, config, file), metadata: item => metadata?.snapshot()?.[item.id] });
-  torrents = createTorrents({ dir: app.getPath('userData'), secure: safeStorage, catalogFetch: (url, options) => net.fetch(url, options), videos: app.getPath('videos'), validateUpgrade: (id, release) => upgrades.validate(id, release), onPrepared: (job, config) => upgrades.prepared(job, config), onComplete: async (job, config) => { await upgrades.completed(job, config); scanner?.invalidate(); void metadata?.sync(state.items); if (win && !win.isDestroyed()) win.webContents.send('library:downloads', state); }, checkPaths: createPathChecker({ remote, connections: () => state.sshConnections || [] }), ...(!app.isPackaged && process.env.MATRO_TORRENT_API ? { catalog: process.env.MATRO_TORRENT_API } : {}), ...(!app.isPackaged && process.env.MATRO_SERIES_METADATA_API ? { seriesShowsURL: process.env.MATRO_SERIES_METADATA_API } : {}), ...(!app.isPackaged && process.env.MATRO_SERIES_RELEASES_API ? { seriesReleasesURL: process.env.MATRO_SERIES_RELEASES_API } : {}) });
+  const dev = app.isPackaged ? {} : process.env;
+  torrents = createTorrents({ dir: app.getPath('userData'), secure: safeStorage, catalogFetch: (url, options) => net.fetch(url, options), videos: app.getPath('videos'), prowlarr,
+    catalog: dev.MATRO_TORRENT_API || undefined, seriesShowsURL: dev.MATRO_SERIES_METADATA_API || undefined, seriesReleasesURL: dev.MATRO_SERIES_RELEASES_API || undefined, animeCatalogURL: dev.MATRO_ANIME_API || undefined,
+    validateUpgrade: (id, release) => upgrades.validate(id, release), onPrepared: (job, config) => upgrades.prepared(job, config), onComplete: async (job, config) => { await upgrades.completed(job, config); scanner?.invalidate(); void metadata?.sync(state.items); if (win && !win.isDestroyed()) win.webContents.send('library:downloads', state); }, checkPaths: createPathChecker(downloadFiles) });
   segments = createSegments(path.join(app.getPath('userData'), 'fingerprints'));
   // TMDB lookups are opt-in: they run only when a key is configured in .env (project or user-data folder) or the environment.
-  const env = { ...readEnv([path.join(app.getAppPath(), '.env'), path.join(app.getPath('userData'), '.env')]), ...process.env };
-  metadata = createMetadata({ dir: app.getPath('userData'), fetch: (url, options) => net.fetch(url, options), auth: env.MATRO_METADATA === 'off' ? null : credentials(env), onUpdate: snapshot => { if (win && !win.isDestroyed()) win.webContents.send('library:metadata', snapshot); } });
+  metadata = createMetadata({ dir: app.getPath('userData'), fetch: (url, options) => net.fetch(url, options), auth: credentials(env),
+    apiBase: dev.MATRO_TMDB_API || undefined, imageBase: dev.MATRO_TMDB_IMAGES || undefined,
+    onUpdate: snapshot => { if (win && !win.isDestroyed()) win.webContents.send('library:metadata', snapshot); } });
   try { state = { ...state, ...JSON.parse(await fs.readFile(storage, 'utf8')) }; } catch { /* First launch or damaged state uses a fresh library. */ }
   state.markers = Object.fromEntries(Object.entries(state.markers || {}).filter(([, marks]) => Array.isArray(marks)).map(([id, marks]) => [id, mergeMarkers(marks, [], state.markerDismissals?.[id])]));
   for (const config of state.sshConnections || []) {
@@ -74,7 +80,7 @@ app.whenReady().then(async () => {
   streams = await createStreamServer({ dir: path.join(app.getPath('userData'), 'playback') });
   protocol.handle('matro', request => {
     const url = new URL(request.url);
-    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/playback-buffer.js': 'playback-buffer.js', '/recovery.js': 'recovery.js', '/icons.json': 'icons.json', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg','/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
+    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/playback-buffer.js': 'playback-buffer.js', '/recovery.js': 'recovery.js', '/core/client/watch-progress.js': '../core/client/watch-progress.js', '/icons.json': 'icons.json', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-discovery.js': 'downloads-discovery.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg', '/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
     const artwork = url.hostname === 'app' && url.pathname.startsWith('/artwork/') && metadata.artworkFile(url.pathname.slice('/artwork/'.length));
     if (artwork) return net.fetch(pathToFileURL(artwork).href);
     const file = url.hostname === 'app' && files[url.pathname];
@@ -114,6 +120,8 @@ app.whenReady().then(async () => {
   handle('downloads:config', () => torrents.config());
   handle('downloads:configure', options => torrents.configure(options));
   handle('downloads:search', options => torrents.search(options));
+  handle('downloads:discover', options => torrents.discovery(options));
+  handle('downloads:preview', options => metadata.preview(options));
   handle('downloads:add', options => torrents.add(options));
   handle('downloads:list', async target => {
     const jobs = await torrents.jobs(target);

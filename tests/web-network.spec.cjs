@@ -40,7 +40,7 @@ test('overlapping large progress saves work on a slow connection', async () => {
     expect(results.baseline).toContain('rejected');
     expect(results.normal).toEqual(['saved', 'saved', 'saved']);
     expect(results.options).toEqual([true, false]);
-    expect(requests.slice(-5).every(body => body.markers.episode.length === 1 && body.markers.episode[0].source === 'manual')).toBe(true);
+    expect(requests.slice(-5).every(body => !Object.hasOwn(body, 'markers'))).toBe(true);
   } finally {
     await browser?.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
     await fs.rm(profile, { recursive: true, force: true });

@@ -1,6 +1,8 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const { createDownloadPreview } = require('./download-preview.cjs');
 
 const API = 'https://api.themoviedb.org/3', IMAGES = 'https://image.tmdb.org/t/p/';
 const RECHECK_MISSING = 7 * 24 * 3600 * 1000;
@@ -19,6 +21,7 @@ function readEnv(files) {
   return env;
 }
 function credentials(env) {
+  if (env.MATRO_METADATA === 'off') return null;
   const token = env.TMDB_ACCESS_TOKEN || env.VITE_TMDB_ACCESS_TOKEN || '', key = env.TMDB_API_KEY || env.VITE_TMDB_API_KEY || '';
   return token || key ? { token, key } : null;
 }
@@ -61,7 +64,7 @@ function pick(results, query, year, dateKey, titleKeys) {
   return bestScore >= .9 ? best : null;
 }
 
-function createMetadata({ dir, fetch, auth, onUpdate }) {
+function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase = IMAGES }) {
   const file = path.join(dir, 'metadata.json'), artwork = path.join(dir, 'artwork');
   let entries = {}, queue = [], running = 0, saveTimer, updateTimer;
   const pending = new Set(), failed = new Set();
@@ -72,22 +75,30 @@ function createMetadata({ dir, fetch, auth, onUpdate }) {
   function save() { clearTimeout(saveTimer); saveTimer = setTimeout(() => { const contents = JSON.stringify({ version: 1, entries }); void fsp.writeFile(file + '.tmp', contents).then(() => fsp.rename(file + '.tmp', file)).catch(() => {}); }, 500); }
   function changed() { clearTimeout(updateTimer); updateTimer = setTimeout(() => onUpdate?.(snapshot()), 300); }
   function snapshot() { return Object.fromEntries(Object.entries(entries).filter(([, e]) => e.status === 'matched' && e.matcher === MATCHER).map(([key, { status, query, checked, matcher, ...rest }]) => [key, rest])); }
-  async function api(route, params = {}) {
-    const url = new URL(API + route);
+  async function api(route, params = {}, options) {
+    const url = new URL(apiBase.replace(/\/+$/, '') + route);
     for (const [name, value] of Object.entries(params)) if (value !== null && value !== undefined && value !== '') url.searchParams.set(name, value);
     if (!auth.token) url.searchParams.set('api_key', auth.key);
-    const response = await fetch(url.href, { headers: { accept: 'application/json', ...(auth.token ? { authorization: `Bearer ${auth.token}` } : {}) } });
+    const response = await fetch(url.href, { ...options, headers: { accept: 'application/json', ...(auth.token ? { authorization: `Bearer ${auth.token}` } : {}) } });
     if (response.status === 404) return null;
     if (!response.ok) throw new Error(`TMDB ${response.status}`);
     return response.json();
   }
-  async function image(pathname, size, name) {
+  async function image(pathname, size, name, options) {
     if (!pathname) return null;
     const target = path.join(artwork, name);
     try { await fsp.access(target); return `artwork/${name}`; } catch { /* Not cached yet. */ }
-    const response = await fetch(IMAGES + size + pathname);
+    const response = await fetch(`${imageBase.replace(/\/+$/, '')}/${size}${pathname}`, options);
     if (!response.ok) return null;
-    await fsp.writeFile(target, Buffer.from(await response.arrayBuffer()));
+    const bytes = Buffer.from(await response.arrayBuffer());
+    const staged = `${target}.${randomUUID()}.tmp`;
+    try {
+      await fsp.writeFile(staged, bytes);
+      await fsp.rename(staged, target);
+    } catch (error) {
+      await fsp.rm(staged, { force: true }).catch(() => {});
+      throw error;
+    }
     return `artwork/${name}`;
   }
   const castOf = credits => Promise.all((credits?.cast || []).slice(0, CAST_SHOWN).map(async c => ({ name: c.name, role: c.character || '', photo: await image(c.profile_path, 'w185', `person-${c.id}.jpg`).catch(() => null) })));
@@ -183,6 +194,11 @@ function createMetadata({ dir, fetch, auth, onUpdate }) {
     record(job, result, true); failed.delete(job.key);
     return snapshot();
   }
-  return { enabled: !!auth, sync, search, assign, snapshot: () => snapshot(), loaded, artworkFile: name => artworkName.test(name) ? path.join(artwork, name) : null };
+  const previewOptions = () => ({ redirect: 'error', signal: AbortSignal.timeout(10000) });
+  const preview = createDownloadPreview({ enabled: !!auth, loaded,
+    api: (route, params) => api(route, params, previewOptions()),
+    image: (pathname, size, name) => image(pathname, size, name, previewOptions()),
+  });
+  return { enabled: !!auth, sync, search, assign, preview, snapshot: () => snapshot(), loaded, artworkFile: name => artworkName.test(name) ? path.join(artwork, name) : null };
 }
 module.exports = { readEnv, credentials, createMetadata, cleanQuery, yearOf, keyFor };

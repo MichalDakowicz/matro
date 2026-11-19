@@ -53,7 +53,8 @@ function createDownloads({ dataDir, library, tmdb, pathMap = JSON.parse(process.
     for (const folder of library.folders()) if (within(await canonical(folder.path), actual)) return actual;
     throw new Error('Add this destination under Folders first. Downloads must stay inside a shared library folder.');
   }
-  const torrents = createTorrents({ ...options, dir: dataDir, secure, videos: config.mediaDir,
+  const prowlarr = process.env.MATRO_PROWLARR_URL || process.env.MATRO_PROWLARR_API_KEY ? { url: process.env.MATRO_PROWLARR_URL, key: process.env.MATRO_PROWLARR_API_KEY } : undefined;
+  const torrents = createTorrents({ prowlarr, ...options, dir: dataDir, secure, videos: config.mediaDir,
     checkPaths: async (_target, _config, files) => {
       let exists = false;
       for (const file of files) {

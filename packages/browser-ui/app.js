@@ -2,6 +2,7 @@ import icons from './icons.json' with { type: 'json' };
 import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
+import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, normalizeProgress, resumeTarget } from '../core/client/watch-progress.js';
 const api = window.matro;
 if (api?.chooseSource && !document.querySelector('.desktop-source-button')) {
   const button = document.createElement('button'); button.className = 'pill desktop-source-button'; button.textContent = 'Server'; button.setAttribute('aria-label', 'Playback source');
@@ -52,6 +53,7 @@ let current = null, info = null, video = null, offset = 0, audio = null, subtitl
 let queueOpen = false, sidePanel = null, generation = 0, lastSave = 0, idleTimer, toastTimer, subtitleGeneration = 0;
 let loading = false, playbackError = '', trackCues = [];
 let playIntent = true, streamId = null, pendingStream = null, playerEvents;
+let showPlaybackAdvanced = false, rewatchingShow = false, dismissedShow = false;
 let segmentStatus = '', markerDraft = null;
 let scannerSummary = null;
 function renderScannerStatus() {
@@ -123,8 +125,8 @@ function save(options) {
   recovery.persist(library.progress);
   return api.save({ progress: library.progress, queue: library.queue, preferences: library.preferences, markers: library.markers || {} }, options);
 }
-const completed = id => !!library.progress[id]?.completed;
-const orderedEpisodes = item => library.items.filter(i => i.kind === 'show' && sameTitle(i, item)).sort((a, b) => a.season - b.season || a.episode - b.episode);
+const completed = id => isCompleted(library.progress[id]);
+const orderedEpisodes = item => library.items.filter(i => i.kind === 'show' && sameTitle(i, item)).sort(compareEpisodes);
 function statusLabel(id) { return completed(id) ? ' · Completed' : library.progress[id]?.position > 0 ? ' · In progress' : ''; }
 function trackChoice(t) { return t ? { language: t.language, title: t.title, codec: t.codec, channels: t.channels } : null; }
 function matchTrack(tracks, choice) {
@@ -150,36 +152,36 @@ function applyStyles(scope = document) {
   scope.querySelectorAll('[data-hue]').forEach(el => el.style.setProperty('--h', el.dataset.hue));
   scope.querySelectorAll('[data-progress]').forEach(el => { el.style.width = `${el.dataset.progress}%`; });
 }
-function continueItems() {
-  const result = [], seen = new Set();
-  const recent = library.items.filter(i => library.progress[i.id] && !library.progress[i.id].hidden).sort((a, b) => library.progress[b.id].updated - library.progress[a.id].updated);
-  for (const item of recent) {
-    const key = item.kind === 'show' ? titleKey(item) : item.id;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    let next = item;
-    if (completed(item.id)) {
-      if (item.kind !== 'show') continue;
-      const episodes = orderedEpisodes(item), index = episodes.reduce((last, episode, n) => completed(episode.id) ? n : last, -1);
-      next = episodes.slice(index + 1).find(i => !completed(i.id));
-    }
-    if (next && (completed(item.id) || library.progress[item.id].position > 0) && (!folderFilter || next.root === folderFilter)) result.push(next);
-  }
-  return result;
-}
 async function markComplete(id) {
+  const item = library.items.find(i => i.id === id);
+  if (!item) return;
   const old = library.progress[id] || { position: 0, duration: 0 };
-  library.progress[id] = { ...old, completed: !completed(id), hidden: false, updated: Date.now() };
-  await save();
+  const done = !completed(id);
+  if (api.setCompleted) {
+    const patch = normalizeProgress(await api.setCompleted(id, done, old));
+    if (patch[id].updated >= (library.progress[id]?.updated || 0)) applyProgress(patch);
+  } else {
+    const hidden = item.kind === 'show' && (!!old.hidden || isContinueDismissed(orderedEpisodes(item), library.progress));
+    library.progress[id] = { ...old, completed: done, hidden, updated: Date.now() };
+    await save();
+  }
   if (view === 'player') { renderQueue(); renderSegments(); }
   else { const selectedId = selected?.id; renderLibrary(); if (selectedId) detail(selectedId); }
 }
+function applyProgress(patch) {
+  Object.assign(library.progress, patch);
+  for (const [id, entry] of Object.entries(patch)) recovery.write(id, entry);
+  recovery.persist(patch);
+}
 async function removeContinue(id) {
-  const item = library.items.find(i => i.id === id);
-  for (const candidate of item.kind === 'show' ? orderedEpisodes(item) : [item]) {
-    const old = library.progress[candidate.id]; if (old) old.hidden = true;
-  }
-  await save(); renderLibrary();
+  const item = library.items.find(i => i.id === id); if (!item) return;
+  const siblings = item.kind === 'show' ? orderedEpisodes(item) : [item];
+  const previous = { ...library.progress };
+  const resolved = api.dismissContinue ? normalizeProgress(await api.dismissContinue(id)) : {};
+  const patch = dismissedProgress(siblings, previous, library.progress, resolved);
+  applyProgress(patch);
+  if (!api.dismissContinue) await save();
+  if (view === 'library') rerender();
 }
 // Progress is offset + currentTime of the stream that belongs to `current`. While a new stream is being requested (a seek,
 // an audio change, a resume) the target position counts instead, so exiting mid-load or mid-buffer still saves where you were.
@@ -190,12 +192,27 @@ function remember() {
   if (pending === null && streamId !== current.id) return;
   const old = library.progress[current.id] || {};
   const position = Math.min(info.duration || Infinity, pending ?? offset + video.currentTime);
+  if (current.kind === 'show' && !showPlaybackAdvanced) {
+    // Played ranges include actual media playback, even if the user has already paused between samples.
+    const played = video.played;
+    for (let i = 0; i < played.length; i++) {
+      if (played.end(i) - played.start(i) > .03) { showPlaybackAdvanced = true; break; }
+    }
+  }
   if (!position && !old.position) return;
+  const waitingForPlayback = current.kind === 'show' && !showPlaybackAdvanced;
+  if (waitingForPlayback && (rewatchingShow || position === old.position)) return;
+  // Paused seeks can save a new position without overriding a dismissal on the server.
+  const hidden = waitingForPlayback ? (old.hidden || dismissedShow || undefined) : false;
   // Reaching an outro (skipping it, or leaving during the credits) counts as watched, so Continue watching moves to the next episode.
   // Only outros in the second half count, so a mis-detected early marker can't complete an episode.
   const pastOutro = info.duration > 0 && (library.markers?.[current.id] || []).some(s => s.type === 'outro' && s.start > info.duration / 2 && position >= s.start);
-  library.progress[current.id] = { ...old, position, duration: info.duration, completed: !!old.completed || pastOutro || (info.duration > 0 && position >= info.duration - finishMargin(info.duration)), hidden: false, updated: Date.now() };
-  if (old.position === position && old.duration === info.duration && old.completed === library.progress[current.id].completed && !old.hidden) library.progress[current.id].updated = old.updated;
+  const reachedEnd = !waitingForPlayback && (pastOutro || position >= info.duration - finishMargin(info.duration));
+  const entry = { ...old, position, duration: info.duration, completed: (!rewatchingShow && !!old.completed) || (!hidden && reachedEnd), hidden, updated: Date.now() };
+  rewatchingShow = false;
+  const sameVisibility = current.kind === 'show' ? old.hidden === hidden : !!old.hidden === hidden;
+  if (old.position === position && old.duration === info.duration && old.completed === entry.completed && sameVisibility) entry.updated = old.updated;
+  library.progress[current.id] = entry;
   recovery.write(current.id, library.progress[current.id]);
   return true;
 }
@@ -265,7 +282,7 @@ const sectionGrid = (title, items, count, more) => items.length ? `<section clas
 const kinds = [['show', 'Shows', 'shows'], ['movie', 'Movies', 'titles'], ['audio', 'Music & audio', 'files']];
 function landingPage() {
   if (!library.items.length) return `<section class="welcome"><p class="show-kicker">Matro · local library</p><h1>Your collection.<br>Your kind of player.</h1><p>All your films, shows and favourite files in one quiet place. Add a folder to build your library, or drop media anywhere in this window — seasons and episodes are picked up from file names.</p><div class="show-actions"><button class="pill" data-action="ssh">${icon('network')}Connect SSH</button><button class="pill primary" data-action="folder">${icon('folder')}Add folder</button><button class="pill" data-action="files">${icon('plus')}Open files</button></div><div class="formats">${['MKV', 'MP4', 'AVI', 'MOV', 'WEBM', 'FLAC', '+ MORE'].map(f => `<span>${f}</span>`).join('')}</div></section>`;
-  const continues = continueItems();
+  const continues = continueWatching(groupTitles(library.items), library.progress).filter(item => !folderFilter || item.root === folderFilter);
   const featured = !folderFilter ? featuredTitles() : [];
   return `${folderFilter ? `<div class="page-head"><div><h1 class="page-title">${esc(base(folderFilter))}</h1><p class="page-sub">${esc(folderFilter)}</p></div><button class="text-button" data-action="all-folders">Show all folders</button></div>` : ''}
     ${continues.length ? `<section class="section"><div class="section-heading"><h2>Continue watching ${icon('chevron')}</h2><span>${continues.length} in progress</span></div><div class="cw-row">${continues.map(continueCard).join('')}</div></section>` : ''}
@@ -409,7 +426,8 @@ function drawLines() {
 function renderShowMeta() {
   const panel = $('#show-meta'); if (!panel || !reel.list.length) return;
   const items = reel.list[reelCentre()], item = items[0], m = meta(item), name = displayName(item);
-  const resume = items.find(i => library.progress[i.id]?.position > 0 && !completed(i.id)), target = resume || items.find(i => !completed(i.id)) || item;
+  const target = resumeTarget(items, library.progress);
+  const resume = library.progress[target.id]?.position > 0 && !completed(target.id);
   const rows = m ? [[m.peopleLabel, m.people?.slice(0, 2).join(', ')], ['Year', m.year], ['Genre', m.genres?.slice(0, 2).join(', ')]] : [];
   if (!rows.some(([, value]) => value)) rows.splice(0, rows.length, ['Type', item.kind === 'show' ? 'Series' : 'Movie'], ...(item.kind === 'show' ? [['Seasons', String(new Set(items.map(i => i.season)).size)], ['Episodes', String(items.length)]] : [['Format', item.format]]), ['Folder', item.root ? base(item.root) : 'Opened file']);
   panel.innerHTML = `<p class="show-kicker">${resume ? 'Pick up where you left off' : 'Featured from your library'}</p><h2 class="show-title ${name.length > 22 ? 'longer' : name.length > 12 ? 'long' : name.length > 7 ? 'mid' : ''}">${esc(name)}</h2><dl class="meta-list">${rows.filter(([, value]) => value).map(([label, value]) => `<div><dt>${esc(label)}</dt><dd title="${esc(value)}">${esc(value)}</dd></div>`).join('')}</dl><div class="show-actions"><button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? 'Resume watching' : 'Play'}</button><button class="pill" data-detail="${item.id}">Details</button></div>${reel.list.length > 1 ? `<p class="show-hint">${icon('arrows')}Scroll sideways or drag to browse</p>` : ''}`;
@@ -574,9 +592,10 @@ const openTitlePage = site => { const m = selected && meta(selected); if (m) voi
 function restoreFocus(element) { element?.focus({ preventScroll: true, focusVisible: false }); }
 function detail(id, focus = true) {
   selected = library.items.find(i => i.id === id); if (!selected) return;
-  const items = selected.kind === 'show' ? library.items.filter(i => i.kind === 'show' && sameTitle(i, selected)).sort((a, b) => a.season - b.season || a.episode - b.episode) : [selected];
+  const items = selected.kind === 'show' ? orderedEpisodes(selected) : [selected];
   const m = meta(selected), name = displayName(selected), seasons = new Set(items.map(i => i.season)).size;
-  const resume = items.find(i => library.progress[i.id]?.position > 0 && !completed(i.id)), target = resume || items.find(i => !completed(i.id)) || selected, p = resume ? library.progress[resume.id] : null;
+  const target = resumeTarget(items, library.progress, selected), p = library.progress[target.id];
+  const resume = p?.position > 0 && !completed(target.id) ? target : null;
   const facts = [[m?.year, m?.genres?.slice(0, 3).join(' · ')], [selected.kind === 'show' ? `${seasons} ${seasons === 1 ? 'season' : 'seasons'} · ${items.length} episodes` : m?.runtime ? `${Math.floor(m.runtime / 60) ? `${Math.floor(m.runtime / 60)}h ` : ''}${m.runtime % 60}m` : null]].flat().filter(Boolean);
   const overlay = document.createElement('div'); overlay.className = 'detail'; overlay.id = 'detail-overlay'; overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-labelledby', 'detail-title');
   overlay.innerHTML = `<div class="detail-hero"><span class="detail-hero-art ${artFor(selected)}">${m?.backdrop ? `<img src="${esc(m.backdrop)}" alt="" draggable="false">` : `<span class="cover-title">${esc(name)}</span>`}</span><span class="detail-hero-fade"></span></div>
@@ -707,6 +726,10 @@ async function play(id, keepQueue = false, compareEdition = false) {
   const ready = fresh ? prepared : null; if (ready) prepared = null; discardPrepared();
   resetPlayer();
   await api.stop(ready?.url); current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
+  if (item.kind === 'show') {
+    rewatchingShow = completed(id);
+    dismissedShow = isContinueDismissed(orderedEpisodes(item), library.progress);
+  }
   if (item.kind === 'show' && (!keepQueue || library.queue.some(queued => { const entry = library.items.find(i => i.id === queued); return !entry || entry.kind !== 'show' || !sameTitle(entry, item); }))) {
     library.queue = orderedEpisodes(item).map(i => i.id);
   } else if (!library.queue.includes(id)) {
@@ -726,11 +749,11 @@ async function play(id, keepQueue = false, compareEdition = false) {
         if (token !== generation) return;
       }
     }
-    if (library.progress[id]) library.progress[id].hidden = false;
+    if (item.kind !== 'show' && library.progress[id]) library.progress[id].hidden = false;
     updateMetadata();
-    const start = startAt(id, info.duration);
+    const start = startAt(item, info.duration);
     // Starting an already watched title begins a new viewing session with a resumable position.
-    if (completed(id) && !start) library.progress[id] = { ...library.progress[id], position: 0, completed: false, updated: Date.now() };
+    if (item.kind !== 'show' && completed(id) && !start) library.progress[id] = { ...library.progress[id], position: 0, completed: false, updated: Date.now() };
     if (ready) await adoptStream(ready, token); else await loadStream(start, true, token);
     await save(); void detectMarkers(id);
   } catch (error) { if (token === generation) { loading = false; playbackError = error.message; showMessage(); } }
@@ -743,7 +766,12 @@ function chooseTracks(item, details) {
     delay: choice?.delay || 0
   };
 }
-const startAt = (id, duration) => { const progress = library.progress[id]; return progress && !completed(id) && progress.position < duration - finishMargin(duration) ? progress.position : 0; };
+function startAt(item, duration) {
+  const progress = library.progress[item.id];
+  if (!progress || completed(item.id)) return 0;
+  if (item.kind === 'show') return Math.min(progress.position, Math.max(0, duration - .1));
+  return progress.position < duration - finishMargin(duration) ? progress.position : 0;
+}
 // Near the end of an episode (the last 45 seconds, or once its outro starts) the next queue item is prepared: tracks are
 // chosen as play() would and its stream opens in a detached video element, so the first seconds are already buffered
 // when this one ends and the next starts without waiting. The shared service prepares the stream ahead on disk.
@@ -758,12 +786,13 @@ async function prepareNext(position) {
   discardPrepared();
   const run = preparing = { id }, from = current.id, stale = () => preparing !== run || current?.id !== from;
   try {
-    const details = await api.prepare(id), tracks = chooseTracks(library.items.find(i => i.id === id), details);
+    const item = library.items.find(i => i.id === id); if (!item) return;
+    const details = await api.prepare(id), tracks = chooseTracks(item, details);
     let text = null;
     if (details.subtitles.find(t => t.index === tracks.subtitle)?.text) { try { text = await api.subtitles({ id, index: tracks.subtitle }); } catch { tracks.subtitle = null; } }
     if (stale()) return;
     const bitmapSubtitle = details.video ? details.subtitles.find(t => t.index === tracks.subtitle && t.bitmap)?.index ?? null : null;
-    const result = await api.stream({ id, offset: startAt(id, details.duration), audio: tracks.audio, bitmapSubtitle, subtitleDelay: tracks.delay, preload: true, forceTranscode: supportsFullBuffer(!!details.video) });
+    const result = await api.stream({ id, offset: startAt(item, details.duration), audio: tracks.audio, bitmapSubtitle, subtitleDelay: tracks.delay, preload: true, forceTranscode: supportsFullBuffer(!!details.video) });
     if (stale()) return;
     const element = document.createElement('video'); element.playsInline = true; element.crossOrigin = 'anonymous'; element.preload = 'auto'; element.src = bufferPlayback(element, result.url, details.duration - result.offset, !!details.video); element.load();
     prepared = { id, info: details, ...tracks, subtitleText: text, offset: result.offset, url: result.url, element };
@@ -926,6 +955,19 @@ function acceptMarkers(id, detected) {
   const manual = (library.markers[id] || []).filter(s => s.source !== 'automatic');
   library.markers[id] = [...manual, ...detected.filter(s => s.source === 'automatic' && !manual.some(m => m.start < s.end && m.end > s.start))];
 }
+async function saveManualMarkers(changes, replaceType = false) {
+  if (!changes.length) return;
+  library.markers ||= {};
+  if (api.saveMarkers) {
+    Object.assign(library.markers, await api.saveMarkers({ changes, replaceType }));
+    return;
+  }
+  for (const { id, markers } of changes) {
+    const kept = (library.markers[id] || []).filter(s => !markers.some(m => replaceType && m.type === s.type || m.start < s.end && m.end > s.start));
+    library.markers[id] = [...kept, ...markers];
+  }
+  await save();
+}
 async function detectMarkers(id, force = false) {
   library.markers ||= {};
   if (!current || current.kind !== 'show' || scanningSegments.has(id)) return;
@@ -1080,6 +1122,7 @@ function resetPlayer() {
   // load() resets currentTime and queues media events. Invalidate the stream
   // first so those events cannot overwrite the checkpoint we just saved.
   streamId = null; pendingStream = null; settlePending = null;
+  showPlaybackAdvanced = false; rewatchingShow = false; dismissedShow = false;
   playerEvents?.abort();
   clearTimeout(saveTimer); saveTimer = null;
   if (video) { video.pause(); releaseBuffer(video); video.removeAttribute('src'); video.load(); }
@@ -1160,9 +1203,10 @@ const actions = {
   'marker-end': async () => {
     const end = offset + video.currentTime;
     if (!markerDraft || end <= markerDraft.start) { toast('End must come after start.'); return; }
-    library.markers ||= {}; library.markers[current.id] ||= [];
-    library.markers[current.id] = library.markers[current.id].filter(s => !(s.start < end && s.end > markerDraft.start));
-    library.markers[current.id].push({ ...markerDraft, end, source: 'manual' }); markerDraft = null; await save(); renderSegments(); renderTracks();
+    const draft = markerDraft;
+    await saveManualMarkers([{ id: current.id, markers: [{ ...draft, end, source: 'manual' }] }]);
+    if (markerDraft === draft) markerDraft = null;
+    renderSegments(); renderTracks();
   },
   'markers-season': async () => {
     const item = current, duration = info.duration, manual = (library.markers[item.id] || []).filter(s => s.source === 'manual');
@@ -1174,10 +1218,9 @@ const actions = {
         const shift = s.type === 'outro' ? details.duration - duration : 0;
         return { ...s, start: Math.max(0, s.start + shift), end: Math.min(details.duration, s.end + shift) };
       }).filter(s => s.end > s.start && s.start < details.duration);
-      copies.push([episode.id, marks]);
+      copies.push({ id: episode.id, markers: marks });
     }
-    for (const [id, marks] of copies) library.markers[id] = [...(library.markers[id] || []).filter(s => !marks.some(m => m.type === s.type || (m.start < s.end && m.end > s.start))), ...marks];
-    await save(); toast(`Manual marks saved for ${copies.length + 1} episodes in this season.`);
+    await saveManualMarkers(copies, true); toast(`Manual marks saved for ${copies.length + 1} episodes in this season.`);
   },
   'marker-cancel': () => { markerDraft = null; renderTracks(); },
   'skip-segment': () => { const position = offset + video.currentTime; const marker = (library.markers?.[current.id] || []).find(s => position >= s.start && position < s.end); if (marker) return seek(marker.end); },
@@ -1256,9 +1299,8 @@ api?.onSegments(update => {
 });
 if (!api) { root.innerHTML = '<main class="page"><h1 class="page-title">Open Matro in its desktop app.</h1><p class="page-sub">Run npm start from the project folder.</p></main>'; }
 else void attempt(async () => { library = await api.load();
-  const restored = await recovery.restore(library.progress, library.items.map(item => item.id)); library.progress = restored.progress; stateLoaded = true;
+  const restored = await recovery.restore(library.progress, library.items.map(item => item.id)); library.progress = normalizeProgress(restored.progress); stateLoaded = true;
   metadata = library.metadata || {}; metadataEnabled = !!library.metadataEnabled;
   scannerSummary = library.scanner || await api.scannerStatus();
   library.markers ||= {};
-  for (const p of Object.values(library.progress)) if (p.completed === undefined) p.completed = p.duration > 0 && p.position >= p.duration - finishMargin(p.duration);
   applyMotion(); renderLibrary(); if (restored.recovered) void attempt(save); });

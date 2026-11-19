@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 
-// Folder grouping follows the desktop player: one video in a title folder is a movie, several are a show, and
+// A title folder with one feature is a movie. Multiple videos or explicitly numbered episodes are a show.
 // S01/Season 1 folders stay seasons of their parent title.
 const VIDEO = new Set('mkv mp4 m4v avi mov webm flv wmv mpg mpeg ts mts m2ts vob ogv 3gp'.split(' '));
 const idFor = value => createHash('sha256').update(value).digest('hex').slice(0, 24);
@@ -17,7 +17,7 @@ function titleOf(name) {
 }
 function describe(file) {
   const name = path.basename(file, path.extname(file));
-  const episode = name.match(/S(\d{1,2})[ ._-]*E(\d{1,3})/i) || name.match(/(\d{1,2})x(\d{2,3})/i);
+  const episode = name.match(/S(\d{1,2})[ ._-]*E(\d{1,4})(?!\d)/i) || name.match(/(?<!\d)(\d{1,2})x(\d{2,4})(?!\d)/i);
   return { title: titleOf(name).title, year: titleOf(name).year, season: episode ? Number(episode[1]) : null, episode: episode ? Number(episode[2]) : null,
     group: episode ? clean(name.slice(0, episode.index)).replace(/[-\s]+$/, '') || path.basename(path.dirname(file)) : null };
 }
@@ -67,7 +67,7 @@ async function scan(root) {
   }
   const rows = [];
   for (const [key, group] of groups) {
-    const groupId = idFor(key), isShow = group.entries.length > 1 || (group.entries[0].info.episode !== null && !group.folder);
+    const groupId = idFor(key), isShow = group.entries.length > 1 || group.entries[0].info.episode !== null;
     const name = group.folder ? path.basename(group.folder) : group.name || group.entries[0].info.title;
     const { title, year } = titleOf(name);
     const seasons = new Map();

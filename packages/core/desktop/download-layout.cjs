@@ -26,10 +26,19 @@ function seasonOf(name, fallbackSeason = 1) {
   const season = name.match(/(?:^|\/)(?:s|season[ ._-]*)(\d{1,2})(?:\/|$)/i);
   return season ? +season[1] : fallbackSeason;
 }
-function episodeOf(name, fallbackSeason = 1) {
-  const match = name.match(/\bS(\d{1,2})[ ._-]*E(\d{1,3})\b/i) || name.match(/\b(\d{1,2})x(\d{2,3})\b/i);
+function animeAbsoluteEpisode(name) {
+  const match = /\s[-–]\s+(\d{1,4})(?:v\d+)?(?=$|[\s[(.])/i.exec(name);
+  if (!match || !Number(match[1]) || /^(?:19|20)\d{2}$/.test(match[1])) return null;
+  // A range, date, or decimal is not a single episode number.
+  const suffix = name.slice(match.index + match[0].length);
+  if (/^[.\/]\d|^\s*[-~–/]\s*\d|^\s*to\s+\d/i.test(suffix)) return null;
+  return match;
+}
+function episodeOf(name, fallbackSeason = 1, { anime = false } = {}) {
+  const match = name.match(/\bS(\d{1,2})[ ._-]*E(\d{1,4})\b/i) || name.match(/\b(\d{1,2})x(\d{2,4})\b/i);
   if (match) return { season: +match[1], episode: +match[2] };
-  const episode = path.posix.basename(name).match(/(?:^|\b)(?:e|ep|episode|chapter)[ ._-]*(\d{1,3})\b/i);
+  const basename = path.posix.basename(name);
+  const episode = basename.match(/\b(?:e|ep|episode|chapter)[ ._-]*(\d{1,4})\b/i) || (anime ? animeAbsoluteEpisode(basename) : null);
   return episode ? { season: seasonOf(name, fallbackSeason), episode: +episode[1] } : null;
 }
 function planDownload(files, release, storage) {
@@ -40,11 +49,12 @@ function planDownload(files, release, storage) {
   if (!videos.length) throw new Error('No playable movie or episode found; torrent left stopped.');
   const videoCount = videos.length;
   const kind = release.kind === 'show' ? 'show' : 'movie';
+  const parseEpisode = name => episodeOf(name, release.season ?? 1, { anime: release.anime === true });
   const episodes = new Map();
   if (kind === 'show') {
     const used = new Map();
     for (const video of videos) {
-      const episode = episodeOf(video.name, release.season ?? 1) || (videos.length === 1 && release.episode > 0 ? { season: release.season ?? 1, episode: release.episode } : null);
+      const episode = parseEpisode(video.name) || (videos.length === 1 && release.episode > 0 ? { season: release.season ?? 1, episode: release.episode } : null);
       if (!episode) continue;
       episodes.set(video.index, episode);
       if (!used.has(episode.season)) used.set(episode.season, new Set());
@@ -87,7 +97,7 @@ function planDownload(files, release, storage) {
     const stem = (storage.naming === 'original' ? clean(original.slice(0, -ext.length)) : kind === 'movie' ? `${titleYear} [${resolution}]` : code ? `${code} ${titleYear} [${resolution}]` : `${clean(original.slice(0, -ext.length))} [${resolution}]`) + (release.edition || '');
     const name = unique(path.posix.join(folder, stem + ext), video.index);
     output.push({ index: video.index, oldPath: video.name, newPath: name, type: 'video' });
-    const subtitles = storage.subtitles ? entries.filter(file => SUBTITLE.test(file.name) && !EXTRA.test(file.name) && Number(file.size) <= 16 * 1024 * 1024 && !output.some(chosen => chosen.index === file.index) && (kind === 'movie' || videoCount === 1 && release.episode > 0 || (() => { const sub = episodeOf(file.name, release.season || 1); return sub && episode && sub.season === episode.season && sub.episode === episode.episode || path.posix.basename(file.name).toLowerCase().startsWith(original.slice(0, -ext.length).toLowerCase() + '.'); })())) : [];
+    const subtitles = storage.subtitles ? entries.filter(file => SUBTITLE.test(file.name) && !EXTRA.test(file.name) && Number(file.size) <= 16 * 1024 * 1024 && !output.some(chosen => chosen.index === file.index) && (kind === 'movie' || videoCount === 1 && release.episode > 0 || (() => { const sub = parseEpisode(file.name); return sub && episode && sub.season === episode.season && sub.episode === episode.episode || path.posix.basename(file.name).toLowerCase().startsWith(original.slice(0, -ext.length).toLowerCase() + '.'); })())) : [];
     for (const sub of subtitles) {
       const subExt = path.posix.extname(sub.name).toLowerCase();
       const base = path.posix.basename(sub.name, path.posix.extname(sub.name));
@@ -100,4 +110,4 @@ function planDownload(files, release, storage) {
   }
   return { root, kind, files: output, skip: entries.filter(file => !output.some(chosen => chosen.index === file.index)).map(file => file.index) };
 }
-module.exports = { defaultStorage, storageOptions, planDownload, clean, episodeOf, join, absolute };
+module.exports = { defaultStorage, storageOptions, planDownload, clean, episodeOf, animeAbsoluteEpisode, join, absolute };

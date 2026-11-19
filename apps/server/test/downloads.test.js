@@ -14,8 +14,11 @@ test('host downloads enforce roles, protect credentials and prepare without dele
   let torrent = null, files = [{ index: 0, name: 'Example.mkv', size: 100, priority: 1 }];
   const reply = value => new Response(typeof value === 'string' ? value : JSON.stringify(value));
   async function mock(url, options = {}) {
-    const route = new URL(url).pathname.split('/api/v2/')[1], body = options.body;
+    const pathname = new URL(url).pathname, route = pathname.split('/api/v2/')[1], body = options.body;
     calls.push({ route, body: body?.toString() });
+    if (pathname === '/catalog/list_movies.json') return reply({ status: 'ok', data: { movie_count: 1, movies: [{ id: 1, title: 'Example', year: 2024, torrents: [{ hash, quality: '1080p', seeds: 23 }] }] } });
+    if (pathname === '/prowlarr/api/v1/search') return reply([{ title: 'Example.2024.1080p', protocol: 'torrent', indexerId: 7, guid: 'example', seeders: 12, downloadUrl: 'http://127.0.0.1/prowlarr/7/download?link=fixture&file=example.torrent' }]);
+    if (pathname === '/prowlarr/7/download') return new Response(null, { status: 302, headers: { location: `magnet:?xt=urn:btih:${hash}` } });
     if (route === 'auth/login') return new Response('Ok.', { headers: { 'set-cookie': 'SID=mock' } });
     if (route === 'app/version') return reply('v5.1.4');
     if (route === 'torrents/add') { torrent = { hash, tags: body.get('tags'), save_path: body.get('savepath'), progress: 0, state: 'stoppedDL' }; return reply('Ok.'); }
@@ -27,7 +30,7 @@ test('host downloads enforce roles, protect credentials and prepare without dele
     if (route === 'torrents/delete') torrent = null;
     return reply('');
   }
-  const created = createApp({ dataDir, downloads: { fetch: mock, hostConfig: { url: 'http://127.0.0.1:8080', movieRoot: path.join(media, 'Movies'), showRoot: path.join(media, 'Shows') } }, tmdb: { env: {} } });
+  const created = createApp({ dataDir, downloads: { fetch: mock, catalog: 'http://127.0.0.1/catalog/', prowlarr: { url: 'http://127.0.0.1/prowlarr/', key: 'fixture-prowlarr-key' }, hostConfig: { url: 'http://127.0.0.1:8080', movieRoot: path.join(media, 'Movies'), showRoot: path.join(media, 'Shows') } }, tmdb: { env: {} } });
   const { app, server, db, library } = created;
   t.after(async () => { app.downloads.close(); await new Promise(resolve => server.close(resolve)); db.close(); fs.rmSync(root, { recursive: true, force: true }); });
   await library.addFolder(media);
@@ -42,10 +45,19 @@ test('host downloads enforce roles, protect credentials and prepare without dele
   const head = (await request('', '/api/login', { username: 'head', password: 'head password' })).cookie;
   const viewer = (await request('', '/api/login', { username: 'viewer', password: 'viewer password' })).cookie;
   const api = '/api/admin/downloads/';
-  for (const [route, body] of [['config'], ['list'], ['jobs'], ['configure', {}], ['add', {}], ['remove', {}], ['retry', {}], ['search', {}], ['series-search', {}], ['series-releases', {}]]) {
+  for (const [route, body] of [['config'], ['list'], ['jobs'], ['configure', {}], ['add', {}], ['remove', {}], ['retry', {}], ['search', {}], ['series-search', {}], ['series-releases', {}], ['discover', {}], ['preview', {}]]) {
     assert.equal((await request('', api + route, body)).status, 401);
     assert.equal((await request(viewer, api + route, body)).status, 403);
   }
+  const discovered = await request(head, api + 'discover', { kind: 'movie' });
+  assert.equal(discovered.status, 200);
+  assert.equal(discovered.body.result.results[0].seeds, 23);
+  assert.ok(discovered.body.result.results[0].selectionId);
+  assert.ok(!JSON.stringify(discovered.body).includes('http://127.0.0.1'));
+  const hashless = discovered.body.result.results.find(item => item.hash === null);
+  assert.ok(hashless?.selectionId);
+  assert.deepEqual((await request(head, api + 'preview', { titles: [{ key: 'example', title: 'Example', kind: 'movie' }] })).body.result,
+    { enabled: false, results: [{ key: 'example', metadata: null }] });
   const storage = { movieRoot: path.join(media, 'Movies'), showRoot: path.join(media, 'Shows') };
   const settings = { target: 'server', url: 'http://127.0.0.1:8080', username: 'test', password: 'private-test-password', storage };
   assert.equal((await request(head, api + 'configure', { ...settings, target: 'local' })).status, 400);
@@ -61,7 +73,11 @@ test('host downloads enforce roles, protect credentials and prepare without dele
   assert.ok(!fs.readFileSync(path.join(dataDir, 'downloads.json'), 'utf8').includes(settings.password));
   const reopened = createDownloads({ dataDir, library, tmdb: app.tmdb, fetch: mock, hostConfig: { url: settings.url, ...storage } });
   await reopened.configure({ ...settings, password: '' }); reopened.close();
-  assert.equal((await request(head, api + 'add', { target: 'server', magnet: `magnet:?xt=urn:btih:${hash}`, title: 'Example', kind: 'movie', seed: false })).status, 200);
+  const legacy = await request(head, api + 'add', { target: 'server', magnet: `magnet:?xt=urn:btih:${hash}`, title: 'Example', kind: 'movie', seed: false });
+  assert.equal(legacy.status, 200);
+  assert.equal(legacy.body.result.hash, undefined);
+  const selection = { target: 'server', selectionId: hashless.selectionId, seed: false };
+  assert.deepEqual((await request(head, api + 'add', selection)).body.result, { duplicate: true, hash });
   for (let i = 0; i < 5; i++) await app.downloads.process();
   assert.equal((await request(head, api + 'jobs')).body.result[0].phase, 'ready');
   assert.ok(calls.some(c => c.route === 'torrents/start'));
@@ -70,6 +86,10 @@ test('host downloads enforce roles, protect credentials and prepare without dele
   assert.equal(fs.readFileSync(kept, 'utf8'), 'keep');
   assert.ok(calls.some(c => c.route === 'torrents/delete' && c.body.includes('deleteFiles=false')));
   assert.deepEqual((await request(head, api + 'jobs')).body.result, []);
+  const selected = await request(head, api + 'add', selection);
+  assert.equal(selected.status, 200);
+  assert.equal(selected.body.result.hash, hash);
+  assert.equal(selected.body.result.preparing, true);
 });
 
 test('Docker path mappings check existing files through the library mount', async () => {

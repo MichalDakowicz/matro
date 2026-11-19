@@ -300,6 +300,64 @@ test('saving progress never drops or rewinds a title another page already saved'
   assert.equal(now[b].position, 5);
 });
 
+test('dismissing a show from an older client preserves current playback and other state', async () => {
+  const { groups } = await catalog('eve');
+  const movie = groups[0][0].id, [first, second] = groups[1].map(item => item.id);
+  const older = { [first]: { position: 10, duration: 100, completed: false, updated: 400 },
+    [movie]: { position: 20, duration: 100, completed: false, updated: 400 } };
+  const put = body => call('eve', 'PUT', '/api/state', body);
+  assert.equal((await put({ progress: older, queue: [movie, first], preferences: { autoplay: false } })).status, 200);
+  const advanced = { [first]: { position: 100, duration: 100, completed: true, updated: 500 },
+    [second]: { position: 35, duration: 100, completed: false, updated: 510 } };
+  assert.equal((await put({ progress: advanced })).status, 200);
+
+  const route = `/api/items/${second}/progress`;
+  assert.equal((await call(null, 'PATCH', route, { dismiss: true })).status, 401);
+  assert.equal((await call('eve', 'PATCH', '/api/items/missing/progress', { dismiss: true })).status, 404);
+  const otherBefore = await catalog('sam');
+  const dismissed = await call('eve', 'PATCH', route, { dismiss: true });
+  assert.equal(dismissed.status, 200);
+  const hidden = { [first]: { ...advanced[first], hidden: true }, [second]: { ...advanced[second], hidden: true } };
+  assert.deepEqual(dismissed.data.progress, hidden);
+
+  // A late full save from either client cannot undo the dismissal.
+  await put({ progress: older });
+  await put({ progress: advanced });
+  const after = await catalog('eve');
+  assert.deepEqual(after.progress, { ...hidden, [movie]: older[movie] });
+  assert.deepEqual(after.queue, [movie, first]);
+  assert.deepEqual(after.preferences, { autoplay: false });
+  assert.deepEqual((await catalog('sam')).progress, otherBefore.progress);
+
+  const pausedSeek = { ...advanced[second], position: 37, updated: 515 };
+  await put({ progress: { [second]: pausedSeek } });
+  assert.deepEqual((await catalog('eve')).progress[second], { ...pausedSeek, hidden: true });
+
+  const resumed = { ...advanced[second], position: 40, hidden: false, updated: 520 };
+  await put({ progress: { [second]: resumed } });
+  assert.deepEqual((await catalog('eve')).progress[second], resumed);
+
+  assert.equal((await call('eve', 'PATCH', route, { dismiss: true })).status, 200);
+  const staleToggle = await call('eve', 'PATCH', `/api/items/${first}/progress`, { completed: false, checkpoint: older[first] });
+  assert.equal(staleToggle.status, 200);
+  assert.deepEqual({ ...staleToggle.data.progress[first], updated: 500 }, { ...hidden[first], completed: false });
+  const recovered = { position: 55, duration: 100, hidden: false, updated: 530 };
+  const newerToggle = await call('eve', 'PATCH', route, { completed: true, checkpoint: recovered });
+  assert.equal(newerToggle.status, 200);
+  assert.deepEqual({ ...newerToggle.data.progress[second], updated: 530 }, { ...recovered, completed: true, hidden: true });
+  assert.deepEqual((await catalog('eve')).progress, { ...staleToggle.data.progress, ...newerToggle.data.progress, [movie]: older[movie] });
+
+  // A stale client can seek in an episode with no existing progress row.
+  assert.equal((await join('seek-viewer', 'seek-viewer', 'viewer-pass-3')).status, 200);
+  const saveFirst = await call('seek-viewer', 'PUT', '/api/state', { progress: { [first]: advanced[first] } });
+  assert.equal(saveFirst.status, 200);
+  const dismissFirst = await call('seek-viewer', 'PATCH', `/api/items/${first}/progress`, { dismiss: true });
+  assert.deepEqual(dismissFirst.data.progress, { [first]: hidden[first] });
+  const saveSeek = await call('seek-viewer', 'PUT', '/api/state', { progress: { [second]: pausedSeek, [movie]: older[movie] } });
+  assert.equal(saveSeek.status, 200);
+  assert.deepEqual((await catalog('seek-viewer')).progress, { [first]: hidden[first], [second]: { ...pausedSeek, hidden: true }, [movie]: older[movie] });
+});
+
 test('head account upload lands in the library; logout and password reset end sessions', async () => {
   const bytes = fs.readFileSync(path.join(mediaDir, 'Heat (1995)', 'Heat.1995.mp4'));
   const up = await call('admin', 'POST', '/api/admin/upload?path=' + encodeURIComponent('Up Movie (2001)/../Up.Movie.mp4'), bytes, { 'content-type': 'application/octet-stream' });

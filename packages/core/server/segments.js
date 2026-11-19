@@ -35,7 +35,9 @@ function createScanner({ dataDir, db }) {
     ...scheduler,
     markers: (manual = {}, dismissed = {}) => {
       const result = Object.fromEntries(Object.entries(manual).filter(([, marks]) => Array.isArray(marks)).map(([id, marks]) => [id, marks.filter(m => m && m.source !== 'automatic')]));
-      for (const [id, detected] of Object.entries(state.markers)) result[id] = mergeMarkers(result[id], detected, dismissed[id]);
+      for (const [id, detected] of Object.entries(state.markers)) {
+        result[id] = mergeMarkers(result[id], detected, dismissed[id]?.filter(marker => !marker.legacyOnly));
+      }
       return result;
     }
   };

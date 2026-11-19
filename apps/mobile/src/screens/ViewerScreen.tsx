@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, BackHandler, FlatList, Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { library, mediaHeaders, request, ServerError, type Item, type Library, type Progress, type ScannerStatus } from '../lib/server';
+import { changeProgress, library, mediaHeaders, request, ServerError, type Item, type Library, type ScannerStatus } from '../lib/server';
+import { progressRecovery, recoveryScope } from '../lib/storage';
 import { continueItems, groupLibrary, metadataFor, nameFor, statusOf, titleKey } from '../../../../packages/core/client/library';
+import { dismissedProgress, normalizeProgress } from '../../../../packages/core/client/watch-progress.js';
 import { colors, fonts } from '../theme';
 import { Icon, Pill, styles as t } from '../components/Matro';
 import { AccountSheet, ContinueRow, Corner, Dock, FeaturedReel, PosterCard } from '../components/LibraryParts';
@@ -15,13 +17,17 @@ type Props = { base: string; onSignedOut: () => void; onChangeServer: () => void
 const kinds = [{ kind: 'show', title: 'Shows', noun: 'shows' }, { kind: 'movie', title: 'Movies', noun: 'titles' }, { kind: 'audio', title: 'Music & audio', noun: 'files' }];
 export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Props) {
   const [data, setData] = useState<Library | null>(null), [headers, setHeaders] = useState<Record<string, string>>({});
+  const dataRef = useRef(data); dataRef.current = data;
   const [error, setError] = useState(''), [query, setQuery] = useState(''), [tab, setTab] = useState('home'), [filter, setFilter] = useState('all');
   const [selected, setSelected] = useState<string | null>(null), [playing, setPlaying] = useState<{ item: Item; start?: number; queue: Item[] } | null>(null);
   const [refreshing, setRefreshing] = useState(false), [account, setAccount] = useState(false), [folder, setFolder] = useState<string | null>(null);
   const { width } = useWindowDimensions(), insets = useSafeAreaInsets(), columns = Math.max(3, Math.floor((width - 24) / 108)), cardWidth = (width - 36 - (columns - 1) * 12) / columns;
   const load = useCallback(async () => {
     setRefreshing(true); setError('');
-    try { const next = await library(base); const auth = await mediaHeaders(base); setData(next); setHeaders(auth); }
+    try {
+      const next = await library(base), auth = await mediaHeaders(base);
+      setData({ ...next, progress: normalizeProgress(next.progress) }); setHeaders(auth);
+    }
     catch (e) { if (e instanceof ServerError && e.status === 401) onSignedOut(); else setError(e instanceof Error ? e.message : 'Could not load the library.'); }
     finally { setRefreshing(false); }
   }, [base, onSignedOut]);
@@ -43,18 +49,24 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const continues = useMemo(() => data ? continueItems(data, allGroups) : [], [data, allGroups]);
   const detail = allGroups.find(items => titleKey(items[0]) === selected);
   const art = { base, headers };
-  const updateProgress = async (patch: Record<string, Progress>) => {
+  const updateProgress = async (item: Item, dismiss: boolean) => {
     if (!data) return;
-    setData({ ...data, progress: { ...data.progress, ...patch } });
-    try { await request(base, '/api/state', { method: 'PUT', body: { progress: patch } }); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Could not save progress.'); }
+    const checkpoint = data.progress[item.id];
+    try {
+      const { progress } = await changeProgress(base, item.id, dismiss ? { dismiss: true } : { completed: !checkpoint?.completed, checkpoint });
+      const current = dataRef.current;
+      if (!current || current.user.id !== data.user.id) return;
+      const resolved = normalizeProgress(progress);
+      if (!dismiss && resolved[item.id].updated < (current.progress[item.id]?.updated || 0)) return;
+      const siblings = allGroups.find(items => titleKey(items[0]) === titleKey(item)) || [item];
+      const patch = dismiss ? dismissedProgress(siblings, data.progress, current.progress, resolved) : resolved;
+      setData(latest => latest ? { ...latest, progress: { ...latest.progress, ...patch } } : latest);
+      const scope = recoveryScope(base, data.user);
+      await Promise.all(Object.entries(patch).map(([id, entry]) => progressRecovery.write(scope, id, entry)));
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not save progress.'); }
   };
-  const complete = (item: Item) => { if (data) void updateProgress({ [item.id]: { ...(data.progress[item.id] || { position: 0, duration: 0, updated: 0 }), completed: !data.progress[item.id]?.completed, hidden: false, updated: Date.now() } }); };
-  const removeContinue = (item: Item) => {
-    if (!data) return;
-    const siblings = allGroups.find(items => items.some(i => i.id === item.id)) || [item];
-    void updateProgress(Object.fromEntries(siblings.filter(i => data.progress[i.id]).map(i => [i.id, { ...data.progress[i.id], hidden: true, updated: Date.now() }])));
-  };
+  const complete = (item: Item) => void updateProgress(item, false);
+  const removeContinue = (item: Item) => void updateProgress(item, true);
   const enqueue = (items: Item[]) => {
     if (!data) return;
     const queue = [...new Set([...data.queue, ...items.map(i => i.id)])]; setData({ ...data, queue });
