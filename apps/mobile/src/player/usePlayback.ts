@@ -2,18 +2,22 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 import { useVideoPlayer } from 'expo-video';
 import { inspect, mediaHeaders, playbackPath, request, saveProgress, type Info, type Item, type Library, type Preferences, type Progress, type Track } from '../lib/server';
-import { matchTrack, trackKey } from '../../../../packages/core/client/library';
+import { matchTrack, titleKey, trackKey } from '../../../../packages/core/client/library';
+import { isContinueDismissed } from '../../../../packages/core/client/watch-progress.js';
 import { parseVtt, type Cue } from '../../../../packages/core/client/subtitles';
 import { downloadPlayback } from './diskBuffer';
 import { progressRecovery, recoveryScope } from '../lib/storage';
+import type { SavedMedia } from '../lib/offline';
 
-export function usePlayback({ base, data, item, initialPosition, onEnd }: { base: string; data: Library; item: Item; initialPosition?: number; onEnd: () => void }) {
+export function usePlayback({ base, data, item, initialPosition, saved, offline = false, onEnd }: { base: string; data: Library; item: Item; initialPosition?: number; saved?: SavedMedia; offline?: boolean; onEnd: () => void }) {
   const initial = initialPosition ?? (data.progress[item.id]?.completed ? 0 : data.progress[item.id]?.position || 0);
   const pref = data.preferences.tracks?.[trackKey(item)];
   const [info, setInfo] = useState<Info | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState(''), [position, setPosition] = useState(initial), [buffered, setBuffered] = useState(initial), [playing, setPlaying] = useState(false), [caption, setCaption] = useState('');
   const [audio, setAudio] = useState<number | null>(null), [subtitle, setSubtitle] = useState<number | null>(null), [delay, setDelayValue] = useState(pref?.delay || 0), [subtitleSize, setSubtitleSizeValue] = useState(pref?.size || 1), [rate, setRate] = useState(1);
   const choices = useRef({ audio, subtitle, delay, size: subtitleSize }), prefs = useRef<Preferences>(data.preferences), dataRef = useRef(data), infoRef = useRef<Info | null>(null), endRef = useRef(onEnd);
-  const sourceReady = useRef(false), advanced = useRef(false), pendingStart = useRef<number | null>(null);
+  const sourceReady = useRef(false), advanced = useRef(false), sampledPlayback = useRef(false), playbackStart = useRef<number | null>(null);
+  const pendingStart = useRef<{ time: number; since: number } | null>(null);
+  const replacement = useRef<Promise<void>>(Promise.resolve()), localSource = useRef(false);
   const disk = useRef<{ uri: string; offset: number; audio: number | null; burn: number | null; delay: number } | null>(null), cancelDownload = useRef<(() => void) | null>(null);
   dataRef.current = data; endRef.current = onEnd;
   const at = useRef(initial), offset = useRef(0), direct = useRef(false), replacing = useRef(true), mounted = useRef(true), intent = useRef(true), generation = useRef(0), subtitleRun = useRef(0), retries = useRef(0), moved = useRef(Date.now()), lastSaved = useRef(0), forceTranscode = useRef(false), cues = useRef<Cue[]>([]), prefTimer = useRef<ReturnType<typeof setTimeout> | null>(null), bitmapTimer = useRef<ReturnType<typeof setTimeout> | null>(null), rateRef = useRef(1);
@@ -27,24 +31,33 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
   const lastLocal = useRef(0), rewatching = useRef(!!data.progress[item.id]?.completed);
   const [markers, setMarkers] = useState(data.markers?.[item.id] || []);
   useEffect(() => {
+    if (offline) return;
     let active = true;
     const poll = async () => { try { const update = await request(base, '/api/segments'); if (active) setMarkers(update.markers[item.id] || []); } catch { /* Keep the last known markers offline. */ } };
     void poll();
     if (item.kind === 'show') void request(base, `/api/items/${item.id}/segments`, { method: 'POST', body: {} }, 600000).catch(() => {});
     const timer = setInterval(poll, 5000);
     return () => { active = false; clearInterval(timer); };
-  }, [base, item.id, item.kind]);
+  }, [base, item.id, item.kind, offline]);
   const savedEntry = useRef<Progress | null>(null);
   const persist = useCallback(async (sync = true) => {
-    const duration = infoRef.current?.duration || 0;
-    if (!duration || (!at.current && !dataRef.current.progress[item.id]?.position)) return;
-    const entry = { ...dataRef.current.progress[item.id], position: Math.min(duration, at.current), duration, hidden: false, completed: (!rewatching.current && !!dataRef.current.progress[item.id]?.completed) || at.current >= duration - Math.min(10, duration * .05), updated: Date.now() };
-    if (savedEntry.current?.position === entry.position && savedEntry.current.duration === entry.duration && savedEntry.current.completed === entry.completed) entry.updated = savedEntry.current.updated;
+    const { items, progress } = dataRef.current;
+    const duration = infoRef.current?.duration || 0, previous = progress[item.id];
+    if (!duration || (!at.current && !previous?.position)) return;
+    const waitingForPlayback = item.kind === 'show' && !sampledPlayback.current;
+    const position = Math.min(duration, at.current);
+    if (waitingForPlayback && (rewatching.current || position === previous?.position)) return;
+    const hidden = waitingForPlayback
+      ? (previous?.hidden || isContinueDismissed(items.filter(i => i.kind === 'show' && titleKey(i) === titleKey(item)), progress) || undefined)
+      : false;
+    const reachedEnd = !waitingForPlayback && at.current >= duration - Math.min(10, duration * .05);
+    const entry = { ...previous, position, duration, hidden, completed: (!rewatching.current && !!previous?.completed) || reachedEnd, updated: Date.now() };
+    if (savedEntry.current?.position === entry.position && savedEntry.current.duration === entry.duration && savedEntry.current.completed === entry.completed && savedEntry.current.hidden === hidden) entry.updated = savedEntry.current.updated;
     savedEntry.current = entry;
     try { await progressRecovery.write(recoveryScope(base, dataRef.current.user), item.id, entry); }
     catch { if (mounted.current) setError('Could not save playback recovery on this device. Check available storage.'); }
-    if (sync) await saveProgress(base, item.id, entry);
-  }, [base, item.id]);
+    if (sync && !offline) await saveProgress(base, item.id, entry);
+  }, [base, item, offline]);
   const remember = useCallback(() => {
     const details = infoRef.current; if (!details) return;
     const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true }))];
@@ -56,6 +69,7 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
   const loadText = useCallback(async (index: number | null) => {
     const run = ++subtitleRun.current; cues.current = []; setCaption('');
     if (index === null || infoRef.current?.embedded.find(t => t.index === index)?.bitmap) return;
+    if (saved) { cues.current = parseVtt(saved.text[index] || ''); return; }
     const headers = await mediaHeaders(base), route = index >= 10000 ? `u${index - 10000}` : `e${index}`;
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15000);
     try {
@@ -64,43 +78,45 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
       const parsed = parseVtt(await response.text());
       if (mounted.current && run === subtitleRun.current) cues.current = parsed;
     } finally { clearTimeout(timer); }
-  }, [base, item.id]);
+  }, [base, item.id, saved]);
   const load = useCallback(async (position: number, shouldPlay = intent.current) => {
     const details = infoRef.current; if (!details) return;
-    const run = ++generation.current; replacing.current = true; sourceReady.current = false; advanced.current = false; intent.current = shouldPlay; at.current = position; setPosition(position); setBusy(true); setError(''); moved.current = Date.now();
+    playbackStart.current = null;
+    const run = ++generation.current; replacing.current = true; sourceReady.current = false; advanced.current = false; intent.current = shouldPlay; at.current = position; setPosition(position); setCaption(''); setBusy(true); setError(''); moved.current = Date.now();
+    player.pause();
+    if (!disk.current) { cancelDownload.current?.(); cancelDownload.current = null; }
     try {
-      const headers = await mediaHeaders(base), burn = details.embedded.find(t => t.index === choices.current.subtitle && t.bitmap)?.index ?? null;
+      const headers = saved ? undefined : await mediaHeaders(base), burn = details.embedded.find(t => t.index === choices.current.subtitle && t.bitmap)?.index ?? null;
       const compatible = forceTranscode.current || (Platform.OS === 'ios' && item.format === 'WEBM') ? { ...details, directPlay: false } : details;
-      const source = playbackPath(item.id, compatible, position, choices.current.audio, burn, choices.current.delay);
+      const source = saved ? { path: '', start: position, offset: 0 } : playbackPath(item.id, compatible, position, choices.current.audio, burn, choices.current.delay);
       if (!mounted.current || run !== generation.current) return;
-      const saved = disk.current;
-      const local = saved && position >= saved.offset && saved.audio === choices.current.audio && saved.burn === burn && saved.delay === choices.current.delay ? saved : null;
+      const diskCopy = disk.current;
+      const local = saved ? { uri: saved.uri, offset: 0 } : diskCopy && position >= diskCopy.offset && diskCopy.audio === choices.current.audio && diskCopy.burn === burn && diskCopy.delay === choices.current.delay ? diskCopy : null;
       const start = local ? position - local.offset : source.start;
-      offset.current = local ? local.offset : source.offset; direct.current = !!local || source.path.endsWith('/direct'); pendingStart.current = start;
       if (!local) { cancelDownload.current?.(); cancelDownload.current = null; disk.current = null; }
-      await player.replaceAsync({ uri: local?.uri || base + source.path, headers: local ? undefined : headers, contentType: 'progressive', metadata: { title: item.title, artist: item.group } });
+      // Native source replacements cannot be cancelled. Let an in-flight one
+      // finish, then apply only the latest requested source and its timeline.
+      const apply = replacement.current.catch(() => {}).then(async () => {
+        if (!mounted.current || run !== generation.current) return;
+        offset.current = local ? local.offset : source.offset; direct.current = !!local || source.path.endsWith('/direct'); localSource.current = !!local;
+        await player.replaceAsync({ uri: local?.uri || base + source.path, headers: local ? undefined : headers, contentType: 'progressive', metadata: { title: item.title, artist: item.group } });
+        if (!mounted.current || run !== generation.current) return;
+        pendingStart.current = { time: start, since: Date.now() };
+        player.currentTime = start; player.playbackRate = rateRef.current; replacing.current = false; sourceReady.current = true;
+        if (intent.current && AppState.currentState === 'active') player.play(); else { player.pause(); setBusy(false); }
+      });
+      replacement.current = apply;
+      await apply;
       if (!mounted.current || run !== generation.current) return;
-      player.currentTime = start; player.playbackRate = rateRef.current; replacing.current = false; sourceReady.current = true;
-      if (shouldPlay) player.play(); else { player.pause(); setBusy(false); }
-      if (!local) cancelDownload.current = downloadPlayback(base + source.path, headers, file => {
+      if (!local && headers) cancelDownload.current = downloadPlayback(base + source.path, headers, file => {
         if (!mounted.current || run !== generation.current) return;
         const saved = { uri: file, offset: source.offset, audio: choices.current.audio, burn, delay: choices.current.delay };
         disk.current = saved; setBuffered(details.duration);
-        // Switch to the finished local file at the same point; subsequent
-        // playback and seeks no longer depend on the network connection.
-        void (async () => {
-          const atSource = Math.max(0, at.current - saved.offset), wasPlaying = intent.current && AppState.currentState === 'active';
-          replacing.current = true; pendingStart.current = atSource;
-          try {
-            await player.replaceAsync({ uri: file, contentType: 'progressive', metadata: { title: item.title, artist: item.group } });
-            if (!mounted.current || run !== generation.current) return;
-            direct.current = true; player.currentTime = atSource; player.playbackRate = rateRef.current; replacing.current = false;
-            if (wasPlaying) player.play();
-          } catch { if (mounted.current && run === generation.current) { replacing.current = false; disk.current = null; void load(at.current, intent.current); } }
-        })();
+        // Keep the current decoder running. Use the completed copy on the next
+        // seek/retry instead of interrupting playback when a download finishes.
       });
     } catch (e) { if (mounted.current && run === generation.current) { replacing.current = false; setBusy(false); setError(e instanceof Error ? e.message : 'Could not play this file.'); } }
-  }, [base, item.id, player]);
+  }, [base, item.id, player, saved]);
   const recover = useCallback(() => {
     if (!mounted.current || !intent.current) return;
     if (retries.current++ >= 2) { setBusy(false); setError('The media service stopped responding. Check the connection, then try again.'); return; }
@@ -111,7 +127,7 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
     mounted.current = true;
     void (async () => {
       try {
-        const details = await inspect(base, item.id); if (!mounted.current) return;
+        const details = saved?.info || await inspect(base, item.id); if (!mounted.current) return;
         infoRef.current = details; setInfo(details);
         const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true }))];
         const choice = prefs.current.tracks?.[trackKey(item)];
@@ -136,11 +152,16 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
       // Native decoders emit time zero while applying the initial seek. Keep
       // the requested resume position until that seek has actually landed.
       if (pendingStart.current !== null) {
-        if (currentTime < pendingStart.current - .25) return;
+        const pending = pendingStart.current, elapsed = Math.max(0, Date.now() - pending.since) / 1000 * rateRef.current;
+        if (currentTime < pending.time - .25 || currentTime > pending.time + .5 + elapsed) return;
         pendingStart.current = null;
       }
       const next = Math.min(infoRef.current?.duration || Infinity, offset.current + currentTime);
       if (sourceReady.current && currentTime > .1) advanced.current = true;
+      if (sourceReady.current && player.playing) {
+        playbackStart.current ??= currentTime;
+        if (currentTime > playbackStart.current + .03) sampledPlayback.current = true;
+      } else playbackStart.current = null;
       if (Math.abs(next - at.current) > .05) moved.current = Date.now();
       at.current = next; setPosition(next); setBuffered(disk.current ? infoRef.current?.duration || 0 : offset.current + Math.max(0, player.bufferedPosition));
       const subtitleTime = next - choices.current.delay;
@@ -151,35 +172,38 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
         void persist(sync).catch(() => {});
       }
     };
-    const time = player.addListener('timeUpdate', event => sample(event.currentTime));
+    // An event can still be queued from before a seek or source replacement.
+    // Read the live native clock so old payloads cannot rewind subtitles/progress.
+    const time = player.addListener('timeUpdate', () => sample(player.currentTime));
     const checkpoint = setInterval(() => { if (sourceReady.current && player.playing) sample(player.currentTime); }, 1000);
     const status = player.addListener('statusChange', event => {
       setBusy(event.status === 'loading');
       if (event.status === 'readyToPlay') { setError(''); moved.current = Date.now(); }
       if (event.status === 'error' && !replacing.current) recover();
     });
-    const playing = player.addListener('playingChange', event => { setPlaying(event.isPlaying); void request(base, '/api/playback/state', { method: 'POST', body: { playing: event.isPlaying } }).catch(() => {}); });
+    const playing = player.addListener('playingChange', event => { if (!event.isPlaying) playbackStart.current = null; setPlaying(event.isPlaying); void request(base, '/api/playback/state', { method: 'POST', body: { playing: event.isPlaying } }).catch(() => {}); });
     const end = player.addListener('playToEnd', () => {
       // A player constructed with a null source can emit end before inspect /
       // replaceAsync finishes. It must never navigate away or mark a movie watched.
-      if (!sourceReady.current || replacing.current || !advanced.current || !infoRef.current) return;
+      if (!sourceReady.current || replacing.current || pendingStart.current !== null || !advanced.current || !infoRef.current) return;
       const duration = infoRef.current.duration;
       if (duration && at.current < duration - Math.min(10, duration * .05)) { recover(); return; }
       intent.current = false; at.current = duration || at.current;
       void persist().catch(() => {}).then(() => endRef.current());
     });
-    const appState = AppState.addEventListener('change', state => { if (state !== 'active') { player.pause(); void persist().catch(() => {}); } });
-    const timer = setInterval(() => { if (intent.current && (player.playing || player.status === 'loading') && Date.now() - moved.current > 25000) { moved.current = Date.now(); recover(); } }, 2000);
+    const appState = AppState.addEventListener('change', state => { if (state !== 'active') { intent.current = false; player.pause(); void persist().catch(() => {}); } });
+    const timer = setInterval(() => { if (AppState.currentState === 'active' && intent.current && (player.playing || player.status === 'loading') && Date.now() - moved.current > 25000) { moved.current = Date.now(); recover(); } }, 2000);
     return () => { void request(base, '/api/playback/state', { method: 'POST', body: { playing: false } }).catch(() => {}); clearInterval(checkpoint); time.remove(); status.remove(); playing.remove(); end.remove(); appState.remove(); clearInterval(timer); };
   }, [base, player, persist, recover]);
   const seek = useCallback((value: number) => {
     const duration = infoRef.current?.duration || 0; if (!duration) return;
-    const target = Math.max(0, Math.min(duration - .1, value)); at.current = target; setPosition(target); moved.current = Date.now();
-    if (direct.current && target >= offset.current) { pendingStart.current = target - offset.current; player.currentTime = target - offset.current; }
+    playbackStart.current = null;
+    const target = Math.max(0, Math.min(duration - .1, value)); at.current = target; setPosition(target); setCaption(''); moved.current = Date.now();
+    if (direct.current && !replacing.current && (!disk.current || localSource.current) && target >= offset.current) { pendingStart.current = { time: target - offset.current, since: Date.now() }; player.currentTime = target - offset.current; }
     else void load(target, intent.current);
     void persist().catch(() => {});
   }, [player, load, persist]);
-  const toggle = () => { const shouldPlay = !player.playing; intent.current = shouldPlay; moved.current = Date.now(); if (shouldPlay) player.play(); else { player.pause(); void persist().catch(() => {}); } };
+  const toggle = () => { const shouldPlay = replacing.current ? !intent.current : !player.playing; intent.current = shouldPlay; setPlaying(shouldPlay); moved.current = Date.now(); if (shouldPlay && !replacing.current) player.play(); else { player.pause(); void persist().catch(() => {}); } };
   const chooseAudio = (index: number) => { choices.current.audio = index; setAudio(index); remember(); void load(at.current); };
   const chooseSubtitle = (index: number | null) => {
     const previousBurn = infoRef.current?.embedded.find(t => t.index === choices.current.subtitle && t.bitmap)?.index ?? null;
@@ -194,5 +218,5 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
   };
   const setSubtitleSize = (value: number) => { choices.current.size = value; setSubtitleSizeValue(value); remember(); };
   const changeSpeed = () => { const values = [.75, 1, 1.25, 1.5, 2], next = values[(values.indexOf(rateRef.current) + 1) % values.length]; rateRef.current = next; player.playbackRate = next; setRate(next); };
-  return { player, info, markers, busy, error, playing, position, buffered, caption, audio, subtitle, delay, subtitleSize, rate, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setSubtitleSize, changeSpeed, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
+  return { player, info, markers, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, subtitleSize, rate, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setSubtitleSize, changeSpeed, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
 }

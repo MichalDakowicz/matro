@@ -44,6 +44,8 @@ async function fakeTmdb(url) {
   if (u.hostname === 'image.tmdb.org') return new Response(Buffer.from([0xff, 0xd8, 0xff, 0xd9]), { status: 200 });
   const route = u.pathname.replace('/3', '');
   if (route === '/search/movie') return json({ results: [{ id: 1, title: 'Heat', release_date: '1995-12-15', overview: 'A crew and a cop.', poster_path: '/p.jpg' }, { id: 9, title: 'Heat Wave', release_date: '2001-01-01', poster_path: '/q.jpg' }] });
+  if (route === '/movie/1' && u.searchParams.get('language') === 'pl-PL') return json({ id: 1, title: 'Gorączka', original_language: 'en',
+    release_date: '1995-12-15', images: { posters: [{ iso_639_1: 'pl', file_path: '/pl.jpg' }] } });
   if (route === '/movie/1') return json({ id: 1, title: 'Heat', release_date: '1995-12-15', genres: [{ name: 'Crime' }], overview: 'A crew and a cop.', tagline: 'A Los Angeles crime saga', runtime: 170, imdb_id: 'tt0113277',
     vote_count: 100, vote_average: 8.3, poster_path: '/p.jpg', backdrop_path: '/b.jpg', credits: { cast: [{ id: 5, name: 'Al Pacino', character: 'Vincent', profile_path: '/a.jpg' }], crew: [{ job: 'Director', name: 'Michael Mann' }] } });
   if (route === '/search/tv') return json({ results: [{ id: 2, name: 'Show', first_air_date: '2020-01-01' }] });
@@ -166,6 +168,15 @@ test('TMDB metadata is matched on the server and artwork is served to signed-in 
   assert.deepEqual(found.map(r => r.id), [1, 9]);
   assert.equal((await call('sam', 'POST', '/api/admin/metadata/assign', { key: film.id, tmdbId: 9 })).status, 403);
   assert.equal((await call('admin', 'POST', '/api/admin/metadata/assign', { key: 'nope', tmdbId: 1 })).status, 404);
+  const language = { key: film.id, language: 'pl-PL' };
+  assert.equal((await call('sam', 'POST', '/api/admin/metadata/language', language)).status, 403);
+  assert.equal((await call('admin', 'POST', '/api/admin/metadata/language', { ...language, language: '../pl-PL' })).status, 400);
+  const changed = await call('admin', 'POST', '/api/admin/metadata/language', language);
+  assert.equal(changed.status, 200);
+  const localized = (await catalog('sam')).metadata[film.id];
+  assert.equal(localized.title, 'Gorączka');
+  assert.equal(localized.poster, 'artwork/movie-1-pl-PL-poster.jpg');
+  assert.equal((await call('sam', 'GET', '/api/' + localized.poster)).status, 200);
   const none = await call('admin', 'POST', '/api/admin/metadata/assign', { key: film.id, tmdbId: null });
   assert.equal(none.data.metadata[film.id], undefined, 'pinning "no match" falls back to the file name');
 });
@@ -226,6 +237,34 @@ test('track info, direct play ranges, transcode and embedded subtitles', async (
   const vtt = await call('sam', 'GET', `/api/items/${ep.id}/subtitles/e${epInfo.embedded[0].index}`);
   assert.match(vtt.data, /^WEBVTT/);
   assert.match(vtt.data, /Hello there/);
+});
+
+test('offline media preparation is authenticated and serves versioned, seekable files', async () => {
+  const { groups } = await catalog('sam');
+  const movie = `/api/items/${groups[0][0].id}/offline`;
+  assert.equal((await call(null, 'GET', movie)).status, 401);
+  const direct = (await call('sam', 'GET', movie)).data;
+  assert.equal(direct.state, 'ready');
+  assert.equal(direct.file, undefined);
+  assert.equal((await call('sam', 'GET', movie + '/file?version=old')).status, 409);
+  const headers = { cookie: jar.sam, range: 'bytes=0-31' };
+  const first = await fetch(base + movie + '/file?version=' + direct.version, { headers });
+  assert.equal(first.status, 206);
+  assert.equal(first.headers.get('content-range'), `bytes 0-31/${direct.size}`);
+  assert.equal((await first.arrayBuffer()).byteLength, 32);
+
+  const episode = `/api/items/${groups[1][0].id}/offline`, info = (await call('sam', 'GET', episode.replace('/offline', '/info'))).data;
+  const audio = info.audio[1].index;
+  let ready;
+  for (let i = 0; i < 100; i++) {
+    ready = (await call('sam', 'GET', episode + '?audio=' + audio)).data;
+    if (ready.state === 'ready') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(ready.state, 'ready');
+  const second = await fetch(base + episode + '/file?audio=' + audio + '&version=' + ready.version, { headers });
+  assert.equal(second.status, 206);
+  assert.match(Buffer.from(await second.arrayBuffer()).toString('latin1'), /ftyp/);
 });
 
 test('any viewer can add labelled subtitles; only owner or head account can edit them', async () => {
@@ -298,6 +337,64 @@ test('saving progress never drops or rewinds a title another page already saved'
   const now = (await catalog('eve')).progress;
   assert.equal(now[a].position, 70);
   assert.equal(now[b].position, 5);
+});
+
+test('dismissing a show from an older client preserves current playback and other state', async () => {
+  const { groups } = await catalog('eve');
+  const movie = groups[0][0].id, [first, second] = groups[1].map(item => item.id);
+  const older = { [first]: { position: 10, duration: 100, completed: false, updated: 400 },
+    [movie]: { position: 20, duration: 100, completed: false, updated: 400 } };
+  const put = body => call('eve', 'PUT', '/api/state', body);
+  assert.equal((await put({ progress: older, queue: [movie, first], preferences: { autoplay: false } })).status, 200);
+  const advanced = { [first]: { position: 100, duration: 100, completed: true, updated: 500 },
+    [second]: { position: 35, duration: 100, completed: false, updated: 510 } };
+  assert.equal((await put({ progress: advanced })).status, 200);
+
+  const route = `/api/items/${second}/progress`;
+  assert.equal((await call(null, 'PATCH', route, { dismiss: true })).status, 401);
+  assert.equal((await call('eve', 'PATCH', '/api/items/missing/progress', { dismiss: true })).status, 404);
+  const otherBefore = await catalog('sam');
+  const dismissed = await call('eve', 'PATCH', route, { dismiss: true });
+  assert.equal(dismissed.status, 200);
+  const hidden = { [first]: { ...advanced[first], hidden: true }, [second]: { ...advanced[second], hidden: true } };
+  assert.deepEqual(dismissed.data.progress, hidden);
+
+  // A late full save from either client cannot undo the dismissal.
+  await put({ progress: older });
+  await put({ progress: advanced });
+  const after = await catalog('eve');
+  assert.deepEqual(after.progress, { ...hidden, [movie]: older[movie] });
+  assert.deepEqual(after.queue, [movie, first]);
+  assert.deepEqual(after.preferences, { autoplay: false });
+  assert.deepEqual((await catalog('sam')).progress, otherBefore.progress);
+
+  const pausedSeek = { ...advanced[second], position: 37, updated: 515 };
+  await put({ progress: { [second]: pausedSeek } });
+  assert.deepEqual((await catalog('eve')).progress[second], { ...pausedSeek, hidden: true });
+
+  const resumed = { ...advanced[second], position: 40, hidden: false, updated: 520 };
+  await put({ progress: { [second]: resumed } });
+  assert.deepEqual((await catalog('eve')).progress[second], resumed);
+
+  assert.equal((await call('eve', 'PATCH', route, { dismiss: true })).status, 200);
+  const staleToggle = await call('eve', 'PATCH', `/api/items/${first}/progress`, { completed: false, checkpoint: older[first] });
+  assert.equal(staleToggle.status, 200);
+  assert.deepEqual({ ...staleToggle.data.progress[first], updated: 500 }, { ...hidden[first], completed: false });
+  const recovered = { position: 55, duration: 100, hidden: false, updated: 530 };
+  const newerToggle = await call('eve', 'PATCH', route, { completed: true, checkpoint: recovered });
+  assert.equal(newerToggle.status, 200);
+  assert.deepEqual({ ...newerToggle.data.progress[second], updated: 530 }, { ...recovered, completed: true, hidden: true });
+  assert.deepEqual((await catalog('eve')).progress, { ...staleToggle.data.progress, ...newerToggle.data.progress, [movie]: older[movie] });
+
+  // A stale client can seek in an episode with no existing progress row.
+  assert.equal((await join('seek-viewer', 'seek-viewer', 'viewer-pass-3')).status, 200);
+  const saveFirst = await call('seek-viewer', 'PUT', '/api/state', { progress: { [first]: advanced[first] } });
+  assert.equal(saveFirst.status, 200);
+  const dismissFirst = await call('seek-viewer', 'PATCH', `/api/items/${first}/progress`, { dismiss: true });
+  assert.deepEqual(dismissFirst.data.progress, { [first]: hidden[first] });
+  const saveSeek = await call('seek-viewer', 'PUT', '/api/state', { progress: { [second]: pausedSeek, [movie]: older[movie] } });
+  assert.equal(saveSeek.status, 200);
+  assert.deepEqual((await catalog('seek-viewer')).progress, { [first]: hidden[first], [second]: { ...pausedSeek, hidden: true }, [movie]: older[movie] });
 });
 
 test('head account upload lands in the library; logout and password reset end sessions', async () => {

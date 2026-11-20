@@ -1,4 +1,5 @@
 const { episodeOf } = require('./download-layout.cjs');
+const { canonicalHash, cleanMagnet, normalizeImdbId } = require('./release-discovery.cjs');
 const text = (value, limit = 500) => typeof value === 'string' ? value.trim().slice(0, limit) : '';
 const integer = (value, max, optional = false) => {
   if (optional && (value === undefined || value === null || value === '')) return null;
@@ -9,19 +10,20 @@ const integer = (value, max, optional = false) => {
 const plain = value => text(value, 4000).replace(/<[^>]*>/g, '').replace(/&(amp|quot|apos|lt|gt|nbsp);/g, (_, name) => ({ amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', nbsp: ' ' })[name]);
 function createSeriesCatalog({ request, json, rememberRelease, showsURL = 'https://api.tvmaze.com/', releasesURL = 'https://eztvx.to/api/' }) {
   const shows = new Map(), pages = new Map(), pending = new Map();
-  const publicShow = ({ id, title, year, overview, language, status, genres, imdb }) => ({ id, title, year, overview, language, status, genres, indexed: !!imdb });
+  const publicShow = ({ id, title, year, overview, language, status, genres, imdb }) => ({ id, title, year, overview, language, status, genres, imdbId: normalizeImdbId(imdb), indexed: !!imdb });
   function select(id) {
     const show = shows.get(String(id));
     if (!show || show.expires < Date.now()) throw new Error('Search again to refresh this series.');
     return show;
   }
   async function releasePage(show, page) {
-    const key = `${show.imdb}:${page}`, cached = pages.get(key);
+    const key = `${show?.imdb || 'recent'}:${page}`, cached = pages.get(key);
     if (cached && cached.expires > Date.now()) return cached.data;
     if (pending.has(key)) return pending.get(key);
     const task = (async () => {
       const url = new URL('get-torrents', releasesURL);
-      url.search = new URLSearchParams({ imdb_id: show.imdb, limit: 100, page }).toString();
+      url.search = new URLSearchParams({ limit: 100, page });
+      if (show) url.searchParams.set('imdb_id', show.imdb);
       const data = await json(await request(url, { headers: { 'User-Agent': 'Matro' } }));
       if (!data || !Number.isFinite(Number(data.torrents_count)) || data.torrents !== undefined && !Array.isArray(data.torrents)) throw new Error('Series release catalog is unavailable. Try again later.');
       pages.set(key, { expires: Date.now() + 5 * 60 * 1000, data });
@@ -31,6 +33,20 @@ function createSeriesCatalog({ request, json, rememberRelease, showsURL = 'https
     pending.set(key, task); return task;
   }
   return {
+    async recent() {
+      const data = await releasePage(null, 1);
+      return (data.torrents || []).slice(0, 100).flatMap(item => {
+        const hash = canonicalHash(item?.hash);
+        if (!hash) return [];
+        return [{
+          hash, magnet: cleanMagnet(item.magnet_url, hash)?.magnet, provider: 'EZTV',
+          releaseTitle: text(item.filename || item.title, 500), imdbId: item.imdb_id,
+          season: /^\d{1,2}$/.test(String(item.season)) ? Number(item.season) : null,
+          episode: /^\d{1,3}$/.test(String(item.episode)) ? Number(item.episode) : null,
+          sizeBytes: item.size_bytes, seeds: item.seeds, peers: item.peers
+        }];
+      });
+    },
     async search(options) {
       const query = text(options?.query, 200);
       if (!query) throw new Error('Enter a series title to search.');
@@ -59,9 +75,11 @@ function createSeriesCatalog({ request, json, rememberRelease, showsURL = 'https
       while (scanned < maximum && current <= 100) {
         const data = await releasePage(show, current); scanned++; total = Math.max(0, Number(data.torrents_count) || 0);
         for (const item of (data.torrents || []).slice(0, 100)) {
-          const hash = typeof item.hash === 'string' && /^[a-f0-9]{40}$/i.test(item.hash) ? item.hash.toLowerCase() : null;
+          const hash = typeof item?.hash === 'string' && /^[a-f0-9]{40}$/i.test(item.hash) ? item.hash.toLowerCase() : null;
           if (!hash || String(item.imdb_id).replace(/^tt/, '').replace(/^0+/, '') !== show.imdb.replace(/^0+/, '') || seen.has(hash)) continue;
-          const filename = text(item.filename || item.title, 500), parsed = episodeOf(filename);
+          const filename = text(item.filename, 500) || text(item.title, 500);
+          if (!filename) continue;
+          const parsed = episodeOf(filename);
           const releaseSeason = /^\d{1,2}$/.test(String(item.season)) ? Number(item.season) : parsed?.season ?? null;
           const releaseEpisode = /^\d{1,3}$/.test(String(item.episode)) ? Number(item.episode) : parsed?.episode ?? null;
           const resolution = filename.match(/\b(480p|720p|1080p|1440p|2160p)\b/i)?.[1]?.toLowerCase() || (/\b4k\b/i.test(filename) ? '2160p' : '');

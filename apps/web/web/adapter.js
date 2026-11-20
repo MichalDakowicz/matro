@@ -1,7 +1,9 @@
 // window.matro for the browser: the desktop renderer calls this object where Electron would call its main process.
 // Everything here turns those calls into requests to the server.
-import { get, post, put, del, api } from './http.js';
+import { get, post, put, patch, del, api } from './http.js';
 import { h, say, dialog, languageSelect } from './dom.js';
+import { createOffline, networkLost } from './offline.js';
+import { toVtt } from './offline-store.js';
 
 const SIDECAR = 10000; // uploaded subtitle tracks get indexes from here up, as sidecar files do on the desktop
 const KIND = { full: '', forced: ' (forced)', sdh: ' (SDH)' };
@@ -13,6 +15,7 @@ const artwork = value => typeof value === 'string' ? (value.startsWith('artwork/
 export function createAdapter(session) {
   const noop = () => () => {};
   const watchers = new Set();
+  const offline = createOffline(session.user);
   let polling = 0;
   const unsupported = what => () => Promise.reject(new Error(`${what} is a desktop feature.`));
   const headOnly = (message = 'Only the head account can add or remove media.') => { if (session.user.role !== 'admin') throw new Error(message); };
@@ -25,27 +28,46 @@ export function createAdapter(session) {
   let latest = null;
 
   async function load() {
-    const data = await get('/api/library');
+    if (session.offline) return latest = await offline.library();
+    let data;
+    try { data = await get('/api/library'); }
+    catch (error) {
+      if (!networkLost(error)) throw error;
+      latest = await offline.library();
+      session.offline = true;
+      return latest;
+    }
+    if (await offline.sync(body => put('/api/state', body)).catch(() => false)) data = await get('/api/library').catch(() => data);
+    if (offlineSync) await offlineSync.catch(() => {});
+    offlineSync = offline.flushSubtitles(({ id, query, body }) => api('POST', `/api/items/${id}/subtitles?${query}`, body)).catch(() => {});
     data.metadata = artwork(data.metadata);
     session.user = data.user; latest = data;
+    await offline.remember(data).catch(() => {});
     if (data.metadataEnabled) follow();
     return data;
   }
+  let offlineSync;
   // TMDB matching runs on the server in the background; keep asking for a short while so posters appear as they arrive.
   function follow() {
-    const run = ++polling; let quiet = 0, last = JSON.stringify(Object.keys(latest.metadata).length);
+    const run = ++polling; let quiet = 0, last = JSON.stringify(latest.metadata);
     (async () => {
       while (run === polling && quiet < 12) {
         await new Promise(resolve => setTimeout(resolve, 5000));
         if (run !== polling) return;
         try {
-          const { metadata } = await get('/api/metadata'), fixed = artwork(metadata), signature = JSON.stringify(Object.keys(fixed).length);
+          const { metadata } = await get('/api/metadata'), fixed = artwork(metadata), signature = JSON.stringify(fixed);
           if (signature !== last) { last = signature; quiet = 0; latest.metadata = fixed; for (const cb of watchers) cb(fixed); } else quiet++;
         } catch { quiet++; }
       }
     })();
   }
   async function inspect(id) {
+    if (session.offline) {
+      const saved = await offline.store.meta(id);
+      if (!saved?.complete) throw new Error('This title is not saved on this device.');
+      details.set(id, saved.info);
+      return saved.info;
+    }
     const info = await get(`/api/items/${id}/info`);
     const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay,
       subtitles: [...info.embedded.map(({ forced: _f, ...t }) => t), ...info.uploaded.map(u => track(u))] };
@@ -67,6 +89,17 @@ export function createAdapter(session) {
       e.preventDefault(); submit.disabled = true; status.textContent = 'Uploading…';
       try {
         const q = new URLSearchParams({ name: name.value, lang: language.value, kind: kind.value, filename: file.files[0].name });
+        if (session.offline) {
+          const local = file.files[0];
+          if (local.size > 4 * 1024 * 1024) throw new Error('Subtitle files must be smaller than 4 MB.');
+          const text = toVtt(await local.text(), local.name);
+          const index = -Number(crypto.getRandomValues(new Uint32Array(1))[0]) - 1;
+          const track = { index, title: name.value, language: language.value, codec: 'vtt', text: true, sidecar: true };
+          q.set('queued', '1');
+          await offline.queueSubtitle(id, track, text, local, q.toString());
+          box.close({ queued: { text, track: text ? track : undefined, warning: 'Queued to upload when Matro reconnects.' } });
+          return;
+        }
         const { subtitle } = await api('POST', `/api/items/${id}/subtitles?${q}`, file.files[0]);
         box.close(subtitle);
       } catch (error) { status.textContent = error.message; submit.disabled = false; }
@@ -76,17 +109,25 @@ export function createAdapter(session) {
     const box = dialog('Add subtitles', form);
     const subtitle = await box.done;
     if (!subtitle) return null;
+    if (subtitle.queued) { details.delete(id); return subtitle.queued; }
     const text = await subtitles({ id, index: SIDECAR + subtitle.id });
     return { text, track: track({ ...subtitle, addedBy: session.user.username }) };
   }
-  async function subtitles({ id, index }) {
-    const res = await fetch(`/api/items/${id}/subtitles/${index >= SIDECAR ? `u${index - SIDECAR}` : `e${index}`}`, { credentials: 'same-origin' });
+  async function subtitles({ id, index, signal }) {
+    if (session.offline) return (await offline.store.meta(id))?.subtitles[index] || '';
+    const res = await fetch(`/api/items/${id}/subtitles/${index >= SIDECAR ? `u${index - SIDECAR}` : `e${index}`}`, { credentials: 'same-origin', signal });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not load subtitles.');
     return res.text();
   }
 
   // Direct play when the browser can handle the file as-is; otherwise a transcode that starts at `offset`.
   async function stream({ id, offset = 0, audio = null, bitmapSubtitle = null, subtitleDelay = 0, preload = false, forceTranscode = false }) {
+    const saved = await offline.store.meta(id).catch(() => null);
+    if (saved?.complete && bitmapSubtitle === null && (audio === null || audio === saved.info.audio[0]?.index)) {
+      const url = await offline.playback(id);
+      if (url) return { url: preload && offset > 0 ? `${url}#t=${offset}` : url, offset: 0 };
+    }
+    if (session.offline) throw new Error('This title or track is unavailable offline.');
     const d = details.get(id) || await inspect(id), first = d.audio[0];
     if (!forceTranscode && d.directPlay && bitmapSubtitle === null && (audio === null || !first || audio === first.index)) return { url: `/api/items/${id}/direct${preload ? '?preload=1' : ''}${offset > 0 ? `#t=${offset}` : ''}`, offset: 0 };
     const q = new URLSearchParams({ t: String(Math.floor(offset * 10) / 10) });
@@ -136,17 +177,31 @@ export function createAdapter(session) {
     chooseSource: window.matroDesktop?.chooseSource,
     recoveryScope: `account:${session.user.id}:${session.user.username}`,
     load, inspect, prepare: inspect, subtitles, loadSubtitle, stream,
+    offlineSave: session.offline ? null : async id => {
+      const item = latest.items.find(item => item.id === id);
+      if (!item) throw new Error('That title is no longer in the library.');
+      const saved = await offline.store.meta(id);
+      if (!saved?.complete) await offline.download({ ...item, title: latest.metadata[item.groupId || item.id]?.title || item.title }, inspect, subtitles);
+    },
+    dismissContinue: session.offline ? undefined : async id => (await patch(`/api/items/${encodeURIComponent(id)}/progress`, { dismiss: true })).progress,
+    setCompleted: session.offline ? undefined : async (id, completed, checkpoint) => (await patch(`/api/items/${encodeURIComponent(id)}/progress`, { completed, checkpoint })).progress,
     save: (state, { keepalive = false } = {}) => {
-      // Automatic markers belong to the shared scanner, not each viewer's state.
-      const markers = Object.fromEntries(Object.entries(state.markers || {}).map(([id, marks]) => [id, marks.filter(m => m.source !== 'automatic')]).filter(([, marks]) => marks.length));
-      const body = { progress: state.progress, queue: state.queue, preferences: state.preferences, markers };
+      const body = { progress: state.progress, queue: state.queue, preferences: state.preferences };
       // Keepalive has a small shared in-flight byte quota. Reserve it for exit;
       // ordinary overlapping checkpoints must not consume that quota.
-      return put('/api/state', body, { keepalive: keepalive && new Blob([JSON.stringify(body)]).size < 60000 });
+      if (session.offline) return offline.queue({ progress: body.progress });
+      return put('/api/state', body, { keepalive: keepalive && new Blob([JSON.stringify(body)]).size < 60000 }).catch(error => {
+        if (!networkLost(error)) throw error;
+        return offline.queue({ progress: body.progress });
+      });
     },
-    stop: keepUrl => post('/api/playback/stop', { keepPreload: !!keepUrl && new URL(keepUrl, location.origin).searchParams.get('preload') === '1' }), playbackState: value => post('/api/playback/state', typeof value === 'object' ? value : { playing: !!value }).catch(() => {}),
+    stop: async keepUrl => {
+      offline.release(keepUrl);
+      if (!session.offline) await post('/api/playback/stop', { keepPreload: !!keepUrl && new URL(keepUrl, location.origin).searchParams.get('preload') === '1' }).catch(error => { if (!networkLost(error)) throw error; });
+    }, playbackState: value => post('/api/playback/state', typeof value === 'object' ? value : { playing: !!value }).catch(() => {}),
     preview: async ({ id, time, hover }) => `/api/items/${id}/frame?t=${Math.max(0, Number(time) || 0)}&w=${hover ? 320 : 480}`,
     segments: async ({ id, force }) => (await post(`/api/items/${id}/segments`, { force })).markers,
+    saveMarkers: async edits => (await post('/api/segments/manual', edits)).markers,
     removeMarker: async ({ id, marker }) => (await post(`/api/items/${id}/segments/remove`, { marker })).markers,
     scannerStatus: async () => (await get('/api/segments')).scanner,
     rescan: async () => { if (session.user.role === 'admin') await post('/api/admin/rescan'); return load(); },
@@ -178,20 +233,23 @@ export function createAdapter(session) {
     onMetadata: callback => { watchers.add(callback); return () => watchers.delete(callback); },
     searchMetadata: async ({ kind, query, year }) => { headOnly('Only the head account can change TMDB matches.'); const q = new URLSearchParams({ kind, query }); if (year) q.set('year', year); return artwork((await get(`/api/admin/metadata/search?${q}`)).results); },
     assignMetadata: async ({ key, tmdbId }) => { headOnly('Only the head account can change TMDB matches.'); const { metadata } = await post('/api/admin/metadata/assign', { key, tmdbId }); latest.metadata = artwork(metadata); return latest.metadata; },
+    setMetadataLanguage: async ({ key, language }) => { headOnly('Only the head account can change TMDB metadata.'); const { metadata } = await post('/api/admin/metadata/language', { key, language }); latest.metadata = artwork(metadata); return latest.metadata; },
     openTitlePage: async ({ site, type, tmdbId, imdbId }) => {
       const url = site === 'imdb' && /^ttd{5,12}$/.test(imdbId || '') ? `https://www.imdb.com/title/${imdbId}/` : site === 'tmdb' && Number.isInteger(Number(tmdbId)) ? `https://www.themoviedb.org/${type === 'tv' ? 'tv' : 'movie'}/${Number(tmdbId)}` : null;
       if (url) window.open(url, '_blank', 'noopener');
     },
     connectSSH: unsupported('SSH sources'), setPrelude: unsupported('Preludes'), 
     downloadHostOnly: true,
-    hiddenTabs: session.user.role === 'admin' ? [] : ['folders', 'downloads'],
-    canCompareEditions: session.user.role === 'admin',
+    hiddenTabs: session.user.role === 'admin' && !session.offline ? [] : ['folders', 'downloads'],
+    canCompareEditions: session.user.role === 'admin' && !session.offline,
+    canEditMetadata: session.user.role === 'admin' && !session.offline,
     downloadSeriesSearch: value => download('series-search', value), downloadSeriesReleases: value => download('series-releases', value),
     downloadSeriesSource: async () => { say('Release information is provided by EZTV.'); },
     downloadUpgrade: unsupported('Edition upgrades'), downloadFavorite: unsupported('Edition favorites'),
     downloadJobs: () => download('jobs'), downloadRetry: id => download('retry', { id }), downloadRemove: value => download('remove', value),
     downloadConfig: () => download('config'), downloadConfigure: value => download('configure', value),
+    downloadDiscover: value => download('discover', value), downloadPreview: value => download('preview', value),
     downloadSearch: value => download('search', value), downloadAdd: value => download('add', value), downloadList: () => download('list')
   };
-  return { matro, state: () => latest };
+  return { matro, offline, state: () => latest };
 }

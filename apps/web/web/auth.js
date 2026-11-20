@@ -1,12 +1,27 @@
 import { get, post } from './http.js';
 import { h } from './dom.js';
+import { forgetOfflineSession, lastOfflineUser, networkLost } from './offline.js';
 
 // The way in: nothing else loads until you are signed in. Two forms share the page: sign in, and join with a one-time
 // invite code from the head account (opened directly by a link ending in #/join/CODE). Enter moves between fields and submits.
 // The head account itself is created from the command line on the server, so a fresh server shows instructions instead.
-export async function signIn(root) {
-  const { setup, user } = await get('/api/status');
+export async function signIn(root, onOffline) {
+  let response;
+  try { response = await get('/api/status'); }
+  catch (error) {
+    if (networkLost(error)) {
+      const user = await lastOfflineUser().catch(() => null);
+      if (user) { onOffline(); return user; }
+      root.replaceChildren(h('main', { class: 'page' }, h('section', { class: 'welcome' },
+        h('h1', {}, 'Matro is unavailable.'), h('p', {}, 'Connect to your server to open the library.'),
+        h('button', { class: 'pill', onclick: () => location.reload() }, 'Try again'))));
+      return new Promise(() => {});
+    }
+    throw error;
+  }
+  const { setup, user } = response;
   if (user) return user;
+  await forgetOfflineSession().catch(() => {});
   if (setup) {
     root.replaceChildren(h('main', { class: 'page' }, h('section', { class: 'welcome' }, h('p', { class: 'show-kicker' }, 'Matro · first run'), h('h1', {}, 'This server needs setting up.'),
       h('p', {}, 'Create the head account on the machine that runs Matro, then come back and sign in here. Everything after that happens in the browser.'),

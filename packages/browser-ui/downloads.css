@@ -6,12 +6,21 @@
 .download-destination .path{display:flex;align-items:center;gap:8px;min-width:0;overflow-wrap:anywhere;font-size:12px}
 .status-dot.off{background:var(--warn)}
 .search-hero .search-field{padding-right:10px}
-.kind-toggle{width:44px;height:44px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;border:1px solid rgb(var(--ink) / 0.2);color:var(--text)}
-.kind-toggle:hover{background:rgb(var(--ink) / 0.08)}.kind-toggle svg{width:18px;height:18px}
+.download-catalog-controls{max-width:760px;margin:0 auto 14px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
+.download-catalog-controls .chip-row{margin:0}
+#download-browse[aria-pressed=true]{border-color:var(--text);color:var(--text)}
+#torrent-search-form{margin-bottom:0}
+#torrent-search-form .pill{flex:none}
 #download-browser>.note{margin:12px 0 36px}
 .download-error{color:var(--warn)}
 .pager{margin-top:36px}
 .series-credit{margin-top:24px;font-size:12.5px;line-height:1.6}
+.discovery-heading{margin:22px 0 14px}
+.discovery-heading h3{font-size:16px;font-weight:600}
+#discovery-results>.download-error{margin:0 0 14px;line-height:1.6}
+.discovery-more,.discovery-alias-retry{margin-top:18px}
+.cover.has-download-poster .cover-title{visibility:hidden}
+.cover .format-badge,.cover .status-badge{z-index:1}
 
 /* transfers */
 .xfer{position:relative;flex:none;width:300px;min-height:172px;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;gap:30px;padding:12px 14px;box-shadow:0 14px 30px #0007,0 0 0 1px #ffffff0d;transition:transform .35s cubic-bezier(.2,.75,.15,1)}
@@ -38,10 +47,24 @@
 .detail-dialog .year{font-size:16px;font-weight:400}
 .dlg-meta{color:var(--dim);font-size:13px;margin-top:2px}
 .detail-dialog .lede{line-height:1.65;margin:14px 0 0}
+.download-preview.has-download-poster{display:grid;grid-template-columns:minmax(70px,104px) minmax(0,1fr);align-items:start;gap:16px}
+.download-detail-poster{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:6px}
+.download-preview .dlg-meta{overflow-wrap:anywhere}
+.download-preview .dlg-meta+.dlg-meta,.download-aliases,.download-credit{margin-top:8px}
+.download-preview .download-credit{font-size:11px}
+.download-preview+[data-preview-aliases]{margin-top:12px}
+.download-episode-picker,.download-release-kind{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;margin:10px 0}
+.download-episode-picker[hidden]{display:none}
+.download-episode-picker select,.download-release-kind select,.anime-release-filters select,.download-fields select{min-height:38px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--text);padding:4px 8px}
+.download-release-kind{flex-wrap:wrap}
+.anime-release-filters{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}
+.anime-release-filters label{display:grid;gap:4px;color:var(--muted);font-size:12px}
+.download-release[hidden]{display:none}
 .release-heading{margin:22px 0 4px;font-size:12px;color:var(--dim)}
 .download-release{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:12px 0;border-bottom:1px solid var(--line)}.download-release:first-of-type{border-top:1px solid var(--line)}
 .download-release strong{font-weight:500}.download-release small{display:block;margin-top:5px;color:var(--dim)}.download-release button{white-space:nowrap}
 .series-release-title{overflow-wrap:anywhere}
+.download-release>span{min-width:0;overflow-wrap:anywhere}
 .detail-note{margin:14px 0;font-size:13px;line-height:1.6}
 .series-filters{margin:20px 0 6px;display:grid;gap:14px}
 .series-filters .fields{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -49,6 +72,12 @@
 .quality-badge{display:inline-block;font-size:11px;color:var(--good);margin-left:12px}
 .download-seed-dialog{width:min(580px,calc(100vw - 40px))}.download-seed-dialog p{margin:16px 0;line-height:1.6}.download-seed-dialog label{display:flex;align-items:center;gap:10px}
 .download-seed-dialog .show-actions,.settings-dialog .show-actions{margin-top:22px}
+@media(max-width:500px){
+  #torrent-search-form .search-field{gap:8px;padding-left:14px}
+  #torrent-search-form .search-field input{font-size:16px}
+  .detail-dialog .download-release{align-items:flex-start;flex-direction:column;gap:8px}
+  .download-preview.has-download-poster{grid-template-columns:64px minmax(0,1fr);gap:10px}
+}
 
 /* jobs, magnet, editions */
 .download-magnet{margin:44px 0 0}.download-magnet summary{cursor:pointer;width:fit-content;padding:8px 0}

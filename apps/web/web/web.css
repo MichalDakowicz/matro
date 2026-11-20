@@ -10,6 +10,14 @@ body.role-viewer [data-action="folder"],body.role-viewer [data-action="files"]{d
 .web-avatar.big{width:84px;height:84px;font-size:34px}
 .web-profile{display:block;padding:0;border-radius:50%;transition:transform .35s cubic-bezier(.2,.75,.15,1)}
 .web-profile:hover,.web-profile:focus-visible{transform:scale(1.08)}
+.desktop-receiver .web-profile{display:inline-flex;align-items:center;gap:8px;border-radius:999px}
+.receiver-account-name{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:13px}
+.saved-downloads{max-height:min(66vh,620px);overflow:auto;display:grid;gap:12px}
+.saved-download-row{display:grid;gap:8px;padding:12px 0;border-top:1px solid var(--line)}
+.saved-download-row progress{width:100%;accent-color:var(--white)}
+.saved-download-row .pill{justify-self:start}
+.offline-indicator{white-space:nowrap}
+body.in-player .offline-indicator,body.fullscreen .offline-indicator{display:none}
 .web-layer{position:fixed;inset:0;z-index:120;background:var(--bg);overflow-y:auto}
 .web-back{position:fixed;top:18px;left:28px;z-index:121;width:50px;height:50px;border-radius:50%;background:rgb(var(--glass) / .55);border:1px solid rgb(var(--ink) / 0.08);backdrop-filter:blur(18px);box-shadow:0 10px 30px #0006;color:var(--soft);font-size:20px;display:flex;align-items:center;justify-content:center}
 .web-back:hover{color:var(--text);background:rgb(var(--glass-hi) / .8)}

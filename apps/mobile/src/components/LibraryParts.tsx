@@ -70,14 +70,35 @@ export function Corner({ username, onHome, onProfile, onHelp }: { username?: str
   const insets = useSafeAreaInsets();
   return <View pointerEvents="box-none" style={[s.corner, { top: insets.top + 12 }]}><Pressable onPress={onHelp} accessibilityLabel="About Matro and this library" style={s.help}><Text style={[t.text, { fontSize: 15 }]}>?</Text></Pressable><View style={t.row}><Pressable onPress={onHome} accessibilityRole="button" accessibilityLabel="Matro, back to landing" style={{ width: 44, height: 44, justifyContent: 'center', alignItems: 'center' }}><Brand /></Pressable><Pressable onPress={onProfile} accessibilityRole="button" accessibilityLabel="Your profile" style={s.avatar}><Text style={[t.text, { fontSize: 14, fontFamily: fonts.medium }]}>{(username || 'M').slice(0, 1).toUpperCase()}</Text></Pressable></View></View>;
 }
-export function Dock({ tab, onChange, audio, admin }: { tab: string; onChange: (tab: string) => void; audio: boolean; admin: boolean }) {
+export function Dock({ tab, onChange, audio }: { tab: string; onChange: (tab: string) => void; audio: boolean }) {
   const insets = useSafeAreaInsets();
-  const items: { id: string; label: string; icon: Glyph }[] = [{ id: 'movie', label: 'Movies', icon: 'movies' }, { id: 'show', label: 'Shows', icon: 'shows' }, ...(audio ? [{ id: 'audio', label: 'Music', icon: 'music' as Glyph }] : []), { id: 'search', label: 'Search', icon: 'search' }, ...(admin ? [{ id: 'folders', label: 'Folders', icon: 'folder' as Glyph }, { id: 'downloads', label: 'Downloads', icon: 'download' as Glyph }] : [])];
+  const items: { id: string; label: string; icon: Glyph }[] = [{ id: 'movie', label: 'Movies', icon: 'movies' }, { id: 'show', label: 'Shows', icon: 'shows' }, ...(audio ? [{ id: 'audio', label: 'Music', icon: 'music' as Glyph }] : []), { id: 'search', label: 'Search', icon: 'search' }];
   return <View style={[s.dockWrap, { bottom: insets.bottom + 14 }]}><View style={s.dock}>{items.map(item => <Pressable key={item.id} onPress={() => onChange(tab === item.id ? 'home' : item.id)} accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.id }} style={({ pressed }) => [s.dockItem, tab === item.id && { backgroundColor: '#ffffff1f' }, pressed && { opacity: .65 }]}><Icon name={item.icon} color={tab === item.id ? colors.text : '#bebab3'} /></Pressable>)}</View></View>;
 }
-export function AccountSheet({ visible, onClose, data, base, onRefresh, onServer, onSignOut }: { visible: boolean; onClose: () => void; data: Library | null; base: string; onRefresh: () => void; onServer: () => void; onSignOut: () => void }) {
+export function AccountSheet({ visible, onClose, data, base, offline, onGo, onRefresh, onServer, onSignOut }: { visible: boolean; onClose: () => void; data: Library | null; base: string; offline: boolean; onGo: (tab: string) => void; onRefresh: () => void; onServer: () => void; onSignOut: () => void }) {
   const insets = useSafeAreaInsets();
-  return <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}><Pressable style={s.scrim} onPress={onClose} accessibilityLabel="Close profile" /><View style={[s.sheet, { paddingBottom: insets.bottom + 24 }]}><View style={t.sectionHeading}><Text style={[t.heading, { fontSize: 28 }]}>Your profile</Text><IconButton name="close" label="Close profile" onPress={onClose} /></View><Text style={[t.text, { fontSize: 20 }]}>{data?.user.username}</Text><Text style={t.muted}>{data?.user.role === 'admin' ? 'Head account' : 'Viewer'} · {base.replace(/^https?:\/\//, '')}</Text><View style={[t.row, { marginVertical: 24, gap: 36 }]}><View><Text style={s.stat}>{data?.items.length || 0}</Text><Text style={t.dim}>Files</Text></View><View><Text style={s.stat}>{Object.values(data?.progress || {}).filter(p => p.completed).length}</Text><Text style={t.dim}>Watched</Text></View></View><View style={{ gap: 12 }}><Pill label="Refresh library" icon="refresh" onPress={() => { onClose(); onRefresh(); }} /><Pill label="Change server" icon="network" onPress={onServer} /><Pill label="Sign out" onPress={onSignOut} /></View></View></Modal>;
+  const go = (tab: string) => { onClose(); onGo(tab); };
+  return <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+    <Pressable style={s.scrim} onPress={onClose} accessibilityLabel="Close profile" />
+    <View style={[s.sheet, { paddingBottom: insets.bottom + 24 }]}>
+      <View style={t.sectionHeading}><Text style={[t.heading, { fontSize: 28 }]}>Your profile</Text><IconButton name="close" label="Close profile" onPress={onClose} /></View>
+      <Text style={[t.text, { fontSize: 20 }]}>{data?.user.username}</Text>
+      <Text style={t.muted}>{offline ? 'Offline' : data?.user.role === 'admin' ? 'Head account' : 'Viewer'} · {base.replace(/^https?:\/\//, '')}</Text>
+      <View style={[t.row, { marginVertical: 24, gap: 36 }]}>
+        <View><Text style={s.stat}>{data?.items.length || 0}</Text><Text style={t.dim}>Files</Text></View>
+        <View><Text style={s.stat}>{Object.values(data?.progress || {}).filter(p => p.completed).length}</Text><Text style={t.dim}>Watched</Text></View>
+      </View>
+      <View style={{ gap: 10 }}>
+        {data && <Pill label="Saved for offline" icon="download" onPress={() => go('offline')} />}
+        {!offline && data?.user.role === 'admin' && <View style={[t.row, { gap: 10 }]}>
+          <Pill label="Folders" icon="folder" onPress={() => go('folders')} />
+          <Pill label="Host downloads" icon="download" onPress={() => go('downloads')} />
+        </View>}
+        <Pill label={offline ? 'Reconnect' : 'Refresh library'} icon="refresh" onPress={() => { onClose(); onRefresh(); }} />
+        <Pill label="Change server" icon="network" onPress={onServer} /><Pill label="Sign out" onPress={onSignOut} />
+      </View>
+    </View>
+  </Modal>;
 }
 
 const s = StyleSheet.create({

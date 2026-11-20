@@ -1,5 +1,6 @@
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('node:fs/promises');
+const http = require('node:http');
 const path = require('node:path');
 const { fixtures, bitmapFixture } = require('./fixtures.cjs');
 const { describe } = require('../packages/core/desktop/media.cjs');
@@ -8,6 +9,53 @@ function launchOptions(profile) {
   const env = { ...process.env, MATRO_USER_DATA: profile, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
   return process.env.MATRO_EXECUTABLE ? { executablePath: process.env.MATRO_EXECUTABLE, args: [`--user-data-dir=${profile}`], env } : { args: [path.resolve(__dirname, '..')], env };
 }
+
+test('the selected movie metadata language updates the grid title and poster', async ({}, testInfo) => {
+  test.skip(!!process.env.MATRO_EXECUTABLE, 'Packaged builds do not accept fixture TMDB endpoints');
+  const profile = testInfo.outputPath('profile');
+  await fs.mkdir(profile, { recursive: true });
+  const file = path.join(profile, 'Day of the Wacko (2002).mkv');
+  await fs.writeFile(file, '');
+  const item = describe(file);
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items: [item], folders: [] }));
+  const pixels = await fs.readFile(path.join(__dirname, '../assets/icon.png'));
+  const movie = { id: 42, title: 'Day of the Wacko', original_title: 'Dzień świra', original_language: 'pl',
+    release_date: '2002-06-07', poster_path: '/en.png' };
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    if (url.pathname.startsWith('/images/')) { res.setHeader('Content-Type', 'image/png'); res.end(pixels); return; }
+    res.setHeader('Content-Type', 'application/json');
+    if (url.pathname === '/tmdb/search/movie') { res.end(JSON.stringify({ results: [movie] })); return; }
+    const polish = url.searchParams.get('language') === 'pl-PL';
+    res.end(JSON.stringify(polish ? { ...movie, overview: 'Polski opis', images: { posters: [{ iso_639_1: 'pl', file_path: '/pl.png' }] } } : movie));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = 'http://127.0.0.1:' + server.address().port;
+  const launch = launchOptions(profile);
+  Object.assign(launch.env, { MATRO_METADATA: '', TMDB_ACCESS_TOKEN: 'fixture', MATRO_TMDB_API: base + '/tmdb', MATRO_TMDB_IMAGES: base + '/images' });
+  let app;
+  try {
+    app = await electron.launch(launch);
+    const page = await app.firstWindow();
+    await page.getByRole('button', { name: 'Movies 1', exact: true }).click();
+    const card = name => page.locator('.card').getByText(name, { exact: true });
+    await card('Day of the Wacko').click();
+    await page.getByRole('button', { name: 'TMDB settings' }).click();
+    const dialog = page.getByRole('dialog', { name: 'TMDB settings' });
+    await dialog.getByLabel('Metadata language').selectOption({ label: 'Polski' });
+    await dialog.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Dzień świra', exact: true })).toBeVisible();
+    await expect(page.getByText('Polski opis')).toBeVisible();
+    await page.getByRole('button', { name: 'Close details', exact: true }).click();
+    await expect(card('Dzień świra')).toBeVisible();
+    const poster = page.getByRole('button', { name: 'Open Dzień świra', exact: true }).locator('.cover img');
+    await expect(poster).toHaveAttribute('src', 'artwork/movie-42-pl-PL-poster.jpg');
+    await expect.poll(() => poster.evaluate(image => image.naturalWidth)).toBeGreaterThan(0);
+  } finally {
+    await app?.close();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
 
 test('existing automatic skip markers are corrected when the desktop library opens', async () => {
   const f = await fixtures(), profile = path.join(f.dir, `legacy-markers-${Date.now()}`);
@@ -421,6 +469,97 @@ test('leaving during an outro marks the episode watched and moves Continue watch
     await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
     expect((await page.evaluate(() => window.matro.load())).progress[items[0].id].completed).toBe(true);
     await expect(page.locator('.continue-card [data-play]')).toHaveAttribute('data-play', items[1].id);
+  } finally { await app.close(); }
+});
+
+test('show continuation crosses seasons, finds a skipped episode and preserves dismissal', async () => {
+  const f = await fixtures();
+  const last = path.join(f.dir, 'Northbound.S01E04.Continuation.mkv'), next = path.join(f.dir, 'Northbound.S02E01.Continuation.mkv');
+  await Promise.all([fs.copyFile(f.mkv, last), fs.copyFile(f.mkv, next)]);
+  const [skipped, seasonEnd, seasonStart] = [f.mkv, last, next].map(file => describe(file));
+  const profile = path.join(f.dir, `continuation-profile-${Date.now()}`); await fs.mkdir(profile);
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({
+    libraryVersion: 2, folders: [], items: [skipped, seasonStart, seasonEnd], queue: [],
+    progress: { [seasonEnd.id]: { position: 11.8, duration: 12 } },
+    preferences: { autoplay: false, volume: .3, motion: 'off' }
+  }));
+  const app = await electron.launch(launchOptions(profile)), page = await app.firstWindow();
+  const continuePlay = page.locator('.continue-card [data-play]');
+  const title = page.getByRole('button', { name: 'Open Northbound', exact: true });
+  const detailPlay = page.locator('.detail-actions .primary');
+  const markSkipped = page.locator(`.detail-actions [data-complete="${skipped.id}"]`);
+  const state = () => page.evaluate(() => window.matro.load());
+  try {
+    await expect(continuePlay).toHaveAttribute('data-play', seasonStart.id);
+    await expect(page.locator('#show-meta .primary')).toHaveAttribute('data-play', seasonStart.id);
+    await title.press('Enter');
+    await expect(detailPlay).toHaveAttribute('data-play', seasonStart.id);
+    await expect(page.getByRole('tab', { name: /Season 2/ })).toHaveAttribute('aria-selected', 'true');
+    await page.locator(`.episode-entry [data-complete="${seasonStart.id}"]`).click();
+    await expect(detailPlay).toHaveAttribute('data-play', skipped.id);
+    expect((await state()).progress[seasonEnd.id]).toMatchObject({ completed: true, updated: 0 });
+    await page.keyboard.press('Escape');
+    await expect(continuePlay).toHaveAttribute('data-play', skipped.id);
+
+    await page.getByRole('button', { name: 'Remove Northbound from Continue watching' }).click();
+    await expect(continuePlay).toHaveCount(0);
+    await page.reload();
+    await expect(title).toBeVisible();
+    await expect(continuePlay).toHaveCount(0);
+    await title.click();
+    await markSkipped.click();
+    await expect(markSkipped).toHaveText('Mark incomplete');
+    await expect.poll(async () => (await state()).progress[skipped.id]).toMatchObject({ completed: true, hidden: true });
+    await markSkipped.click();
+    await expect(markSkipped).toHaveText('Mark complete');
+    await expect.poll(async () => (await state()).progress[skipped.id]).toMatchObject({ completed: false, hidden: true });
+    await expect(continuePlay).toHaveCount(0);
+
+    await detailPlay.click();
+    await expect.poll(() => page.locator('video').evaluate(video => video.currentTime)).toBeGreaterThan(.5);
+    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    await expect(continuePlay).toHaveAttribute('data-play', skipped.id);
+    const saved = await state();
+    expect(saved.progress[skipped.id]).toMatchObject({ completed: false, hidden: false });
+    expect(saved.progress[skipped.id].position).toBeGreaterThan(0);
+    expect(saved.progress[seasonEnd.id]).toMatchObject({ completed: true, hidden: true });
+    expect(saved.progress[seasonStart.id]).toMatchObject({ completed: true, hidden: true });
+
+    await page.getByRole('button', { name: 'Remove Northbound from Continue watching' }).click();
+    await expect(continuePlay).toHaveCount(0);
+    const streamURL = /^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{64}$/;
+    await page.route(streamURL, route => route.abort());
+    await title.click();
+    await detailPlay.click();
+    await expect(page.getByRole('heading', { name: 'Couldn’t play this file.' })).toBeVisible();
+    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    await expect(title).toBeVisible();
+    await expect(continuePlay).toHaveCount(0);
+    expect((await state()).progress[skipped.id]).toMatchObject({ position: saved.progress[skipped.id].position, hidden: true });
+
+    await title.click();
+    await page.locator(`.episode-row[data-play="${seasonEnd.id}"]`).click();
+    await expect(page.getByRole('heading', { name: 'Couldn’t play this file.' })).toBeVisible();
+    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    expect((await state()).progress[seasonEnd.id]).toMatchObject({ position: 11.8, completed: true, hidden: true });
+    await page.unroute(streamURL);
+
+    await page.evaluate(({ id, progress }) => window.matro.save({ progress: { [id]: progress } }), {
+      id: skipped.id,
+      progress: { position: 11.65, duration: 12, completed: false, hidden: true, updated: Date.now() }
+    });
+    await page.reload();
+    await page.evaluate(() => { HTMLMediaElement.prototype.play = async () => {}; });
+    await title.click();
+    await detailPlay.click();
+    await expect.poll(() => page.locator('video').evaluate(video => video.readyState)).toBeGreaterThanOrEqual(2);
+    await expect(page.locator('#position')).toHaveText('0:11');
+    expect(await page.locator('video').evaluate(video => video.paused)).toBe(true);
+    await page.locator('#seek').evaluate(input => { input.value = '3'; input.dispatchEvent(new Event('change', { bubbles: true })); });
+    await expect(page.locator('#position')).toHaveText('0:03');
+    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    await expect(continuePlay).toHaveCount(0);
+    expect((await state()).progress[skipped.id]).toMatchObject({ position: 3, completed: false, hidden: true });
   } finally { await app.close(); }
 });
 

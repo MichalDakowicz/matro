@@ -5,6 +5,7 @@ const path = require('node:path');
 const config = require('./config');
 
 const vendor = require('../desktop/metadata.cjs');
+const { createDownloadPreview } = require('../desktop/download-preview.cjs');
 
 // A tiny KEY=VALUE reader so a developer's .env next to the project works; real environment variables win.
 function loadEnv(files) {
@@ -24,14 +25,29 @@ function createTmdb(db, { fetchImpl = fetch, env = loadEnv([path.join(config.dat
   const auth = vendor && vendor.credentials(env);
   const rows = db.prepare('SELECT id, kind, group_id, group_title, year, path, season FROM items');
   const items = () => rows.all().map(asItem);
+  function matchingItems(key) {
+    const matching = items().filter(item => keyOf(item) === key);
+    if (!matching.length) throw Object.assign(new Error('That title is no longer in the library.'), { status: 404 });
+    return matching;
+  }
   const dir = path.join(config.dataDir, 'tmdb');
   fs.mkdirSync(dir, { recursive: true });
   const meta = auth ? vendor.createMetadata({ dir, auth, fetch: (url, options) => fetchImpl(url, { signal: AbortSignal.timeout(20000), ...options }) }) : null;
+  const preview = meta?.preview || createDownloadPreview({ enabled: false });
   // Download matches share the image cache, but are not part of viewers' library metadata.
   const snapshot = () => Object.fromEntries(Object.entries(meta?.snapshot() || {}).filter(([key]) => !key.startsWith('download:')));
   return {
     enabled: !!meta,
     snapshot,
+    async preview(request) {
+      const { enabled, results } = await preview(request);
+      return { enabled, results: results.map(({ key, metadata }) => {
+        if (!metadata) return { key, metadata };
+        const artwork = { poster: metadata.poster ? `/api/${metadata.poster}` : null };
+        if (metadata.backdrop) artwork.backdrop = `/api/${metadata.backdrop}`;
+        return { key, metadata: { ...metadata, ...artwork } };
+      }) };
+    },
     async downloadArtwork(downloads) {
       if (!meta) return downloads;
       const titles = downloads.map(item => {
@@ -52,9 +68,12 @@ function createTmdb(db, { fetchImpl = fetch, env = loadEnv([path.join(config.dat
     search: (kind, query, year) => meta ? meta.search(kind, query, year) : Promise.reject(new Error('TMDB is not configured on this server.')),
     async assign(key, tmdbId) {
       if (!meta) throw new Error('TMDB is not configured on this server.');
-      const matching = items().filter(item => keyOf(item) === key);
-      if (!matching.length) throw Object.assign(new Error('That title is no longer in the library.'), { status: 404 });
-      await meta.assign(matching, tmdbId ?? null);
+      await meta.assign(matchingItems(key), tmdbId ?? null);
+      return snapshot();
+    },
+    async setLanguage(key, language) {
+      if (!meta) throw new Error('TMDB is not configured on this server.');
+      await meta.setLanguage(matchingItems(key), language);
       return snapshot();
     }
   };

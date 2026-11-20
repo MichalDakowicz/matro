@@ -1,6 +1,14 @@
 # Downloads, storage layouts and seeding
 
-Open Downloads in the dock. Search movie releases through YTS, or use Add a movie or show magnet for an existing magnet link. CineCLI is the reference flow; it is not a runtime dependency.
+Open Downloads in the dock. Search Movies, Series or Anime, browse by reported seed count, or add a magnet link you already have. Downloads is available in standalone Electron and to the head account on the web or in the desktop receiver.
+
+## Catalogs and title previews
+
+Movies uses YTS. Series uses TVmaze for title search and EZTV for episodes. Anime uses Nyaa's published RSS results and supports alternate title searches. Browse ranking uses a bounded sample from each source and the highest reported seed count for each title. Seed counts can change. Anime releases may show season and episode numbers, absolute numbers, or a batch label according to the listing. Audio and subtitle hints come from release names. Matro displays the actual tracks after the file is available to probe.
+
+When TMDB credentials are configured, result cards can show cached posters and title details. Open a result for the overview, rating, genres, runtime or season information when available. Release lookup and manual magnets still work if TMDB is unavailable.
+
+Prowlarr can add more movie, series and anime indexes. Set `MATRO_PROWLARR_URL` and `MATRO_PROWLARR_API_KEY` on the machine running Matro. In standalone Electron these are also read from the existing `.env` locations. For web and receiver mode configure the Matro server environment. Set up the wanted torrent indexers in Prowlarr and use its Matro-reachable origin or base path. To use `.torrent` results, configure Prowlarr to serve their metadata through its own proxy. Matro's qBittorrent preparation applies to both magnets and supported v1 torrent files. See the [release source comparison](discovery-providers.md) for providers and coverage.
 
 ## Destinations and storage
 
@@ -42,7 +50,7 @@ Before the first download, Matro asks Seed after downloading? The user can remem
 
 Run npm test for media/service/layout checks and npm run test:e2e for Electron checks. node --test tests/torrents.test.cjs tests/download-layout.test.cjs runs the download backend checks alone. The tests use mock torrent clients, isolated profiles and generated media; they do not download real movie payloads. MATRO_TORRENT_API overrides the catalog for development fixtures only; packaged apps ignore it.
 
-For a connection failure, check the Web UI address, credentials, CSRF/host validation and login bans. Temporary connection errors retry automatically with a 10–60 second backoff; permanent authentication or configuration errors still need attention. Refresh downloads checks immediately. Keep client protections enabled. An unseeded magnet may wait indefinitely for metadata. Failed file permissions and disk capacity are reported by the client's transfer state. Search sends the query to YTS only on submit; a provider outage does not affect playback.
+For a connection failure, check the Web UI address, credentials, CSRF/host validation and login bans. Temporary connection errors retry automatically with a 10–60 second backoff; permanent authentication or configuration errors still need attention. Refresh downloads checks immediately. Keep client protections enabled. An unseeded magnet may wait indefinitely for metadata. Failed file permissions and disk capacity are reported by the client's transfer state. A provider outage does not affect playback.
 
 References: [qBittorrent API](https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-%28qBittorrent-5.0%29), [qBittorrent 5.1.4 submission implementation](https://github.com/qbittorrent/qBittorrent/blob/release-5.1.4/src/webui/api/torrentscontroller.cpp), [CineCLI](https://github.com/eyeblech/cinecli).
 
@@ -88,7 +96,7 @@ the configured movie root and show root.
 Series search uses TVmaze for exact show selection, then EZTV's IMDb-filtered
 release API for that show's torrents. No API key is required. The UI credits
 TVmaze, links each show to its source and links the CC BY-SA 4.0 data license.
-Summaries are stripped of HTML and shortened. No remote images are loaded.
+Summaries are stripped of HTML and shortened. When configured, the TMDB artwork cache supplies posters and backdrops.
 Typing performs no requests: Search series submits the title; Choose episodes
 loads release metadata. The UI explains which provider receives each action.
 

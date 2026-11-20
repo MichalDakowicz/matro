@@ -12,7 +12,7 @@ test('overlapping large progress saves work on a slow connection', async () => {
       requests.push(JSON.parse(body));
       await new Promise(resolve => setTimeout(resolve, 500));
       res.writeHead(200, { 'Content-Type': 'application/json' }).end('{}');
-    } else if (['/adapter.js', '/http.js', '/dom.js'].includes(req.url)) {
+    } else if (['/adapter.js', '/http.js', '/dom.js', '/offline.js', '/offline-store.js'].includes(req.url)) {
       res.writeHead(200, { 'Content-Type': 'text/javascript' }).end(await fs.readFile(path.join(__dirname, '../apps/web/web', req.url.slice(1))));
     } else res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><title>Network regression</title>');
   });
@@ -40,7 +40,7 @@ test('overlapping large progress saves work on a slow connection', async () => {
     expect(results.baseline).toContain('rejected');
     expect(results.normal).toEqual(['saved', 'saved', 'saved']);
     expect(results.options).toEqual([true, false]);
-    expect(requests.slice(-5).every(body => body.markers.episode.length === 1 && body.markers.episode[0].source === 'manual')).toBe(true);
+    expect(requests.slice(-5).every(body => !Object.hasOwn(body, 'markers'))).toBe(true);
   } finally {
     await browser?.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
     await fs.rm(profile, { recursive: true, force: true });

@@ -9,7 +9,8 @@ const { PassThrough } = require('node:stream');
 const { createPlaybackCache } = require('../packages/core/playback/cache.cjs');
 const { argumentsFor, SOFTWARE } = require('../packages/core/playback/encoding.cjs');
 const { fixtures } = require('./fixtures.cjs');
-const { ffmpeg, probe } = require('../packages/core/desktop/media.cjs');
+const { ffmpeg, probe, run } = require('../packages/core/desktop/media.cjs');
+const ffprobe = require('ffprobe-static').path;
 async function until(fn) { for (let i = 0; i < 500; i++) { if (fn()) return; await new Promise(r => setTimeout(r, 20)); } throw Error('Timed out waiting for preparation'); }
 
 test('compatible H.264 is remuxed; precise seeks and bitmap subtitles require encoding with bounded CPU threads', () => {
@@ -22,6 +23,35 @@ test('compatible H.264 is remuxed; precise seeks and bitmap subtitles require en
   assert.ok(accelerated.indexOf('-hwaccel') < accelerated.indexOf('-i'));
   assert.equal(accelerated[accelerated.indexOf('-hwaccel') + 1], 'auto');
   assert.equal(argumentsFor({ ...options, burn: 2 }, ['-c:v', 'h264_nvenc']).includes('-hwaccel'), false);
+});
+
+test('fragmented playback preserves continuous AAC timestamps and the video timeline with B-frames', async t => {
+  const encoder = process.env.MATRO_VIDEO_ENCODER;
+  process.env.MATRO_VIDEO_ENCODER = 'software';
+  t.after(() => { if (encoder === undefined) delete process.env.MATRO_VIDEO_ENCODER; else process.env.MATRO_VIDEO_ENCODER = encoder; });
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-sync-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const input = path.join(dir, 'reordered.mkv');
+  await run(ffmpeg, ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24', '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000', '-c:v', 'libx264', '-preset', 'medium', '-bf', '3', '-c:a', 'pcm_s16le', '-t', '5', input]);
+  const info = await probe(input);
+  // Offset zero exercises stream copy; resuming exercises the software encoder.
+  for (const offset of [0, 1.5]) {
+    const cache = createPlaybackCache({ ffmpeg, dir: path.join(dir, String(offset)) });
+    t.after(() => cache.close());
+    const entry = await cache.get({ file: input, input, info, offset, audio: null, burn: null, delay: 0 });
+    await until(() => entry.done || entry.error); assert.ifError(entry.error);
+    const output = JSON.parse(await run(ffprobe, ['-v', 'error', '-show_packets', '-show_streams', '-of', 'json', entry.file]));
+    const audio = output.streams.find(s => s.codec_type === 'audio'), video = output.streams.find(s => s.codec_type === 'video');
+    const packets = output.packets.filter(p => p.stream_index === audio.index);
+    assert.ok(packets.length > 100);
+    const step = 1024 / Number(audio.sample_rate);
+    for (let i = 1; i < packets.length; i++) {
+      const gap = Number(packets[i].pts_time) - Number(packets[i - 1].pts_time);
+      assert.ok(Math.abs(gap - step) < .002, `offset ${offset}: audio gap ${gap} at packet ${i} instead of ${step}`);
+    }
+    const start = Number(output.packets.find(p => p.stream_index === video.index).pts_time);
+    assert.ok(Math.abs(start) < 1 / 24, `offset ${offset}: video starts ${start}s away from its requested timeline`);
+  }
 });
 
 test('preparation completes without a viewer, is shared, survives restart and serves valid byte ranges', async t => {

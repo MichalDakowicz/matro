@@ -106,6 +106,33 @@ test('show fallback preserves known numbers and fills unused numbers separately 
   assert.deepEqual(selected.skip, [0]);
 });
 
+test('anime batches preserve absolute numbers and pair alternate-version subtitle filenames', () => {
+  const files = [
+    file(0, 'Batch/[Group] Example - 14 [1080p].mkv'),
+    file(1, 'Batch/[Group] Example - 13v2 [1080p].mkv'),
+    file(2, 'Batch/Subs/[Other] Example - 13.en.srt'),
+    file(3, 'Batch/Subs/[Other] Example - 14.pl.srt'),
+    file(4, 'Batch/[Group] Example - 1120 [1080p].mkv'),
+    file(5, 'Batch/[Group] Example - 1080p.mkv'),
+    file(6, 'Batch/[Group] Example - 2024 [1080p].mkv'),
+    file(7, 'Batch/[Group] Example - 05.11.2024 [1080p].mkv'),
+    file(8, 'Batch/[Group] Example - 15 - 26 [Batch].mkv')
+  ];
+  const plan = planDownload(files, { title: 'Example', kind: 'show', anime: true, year: 2020, quality: '1080p' }, defaultStorage('server'));
+  assert.deepEqual(plan.files.map(item => [item.index, item.newPath.split('/').at(-1)]), [
+    [0, 'S01E14 Example (2020) [1080p].mkv'],
+    [3, 'S01E14 Example (2020) [1080p].pl.srt'],
+    [1, 'S01E13 Example (2020) [1080p].mkv'],
+    [2, 'S01E13 Example (2020) [1080p].en.srt'],
+    [4, 'S01E1120 Example (2020) [1080p].mkv'],
+    [5, 'S01E01 Example (2020) [1080p].mkv'],
+    [6, 'S01E02 Example (2020) [1080p].mkv'],
+    [7, 'S01E03 Example (2020) [1080p].mkv'],
+    [8, 'S01E04 Example (2020) [1080p].mkv']
+  ]);
+  assert.match(planDownload(files, { title: 'Example', kind: 'show' }, defaultStorage('server')).files[0].newPath, /S01E01 /);
+});
+
 test('unsafe paths and unsupported media leave downloads stopped', () => {
   assert.throws(() => planDownload([file(0, '../Movie.mkv')], { title: 'Movie' }, defaultStorage('server')), /unsafe/);
   assert.throws(() => planDownload([file(0, 'movie.exe')], { title: 'Movie' }, defaultStorage('server')), /No playable/);

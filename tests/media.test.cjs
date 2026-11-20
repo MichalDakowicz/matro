@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { fixtures, bitmapFixture } = require('./fixtures.cjs');
 const { describe, scan, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, probe, ffmpeg, run } = require('../packages/core/desktop/media.cjs');
+const { scan: scanServer } = require('../packages/core/server/scan.js');
 const { createStreamServer } = require('../packages/core/desktop/stream.cjs');
 const { createPreviews } = require('../packages/core/desktop/previews.cjs');
 const os = require('node:os');
@@ -53,7 +54,7 @@ test('any picked file becomes a show prelude, inside or outside its folder, and 
   } finally { await fs.rm(temp, { recursive: true, force: true }); }
 });
 
-test('title folders classify single videos as movies and multiple videos as shows across seasons', async () => {
+test('title folders group features and episodic files consistently across seasons', async () => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-folders-'));
   const media = path.join(temp, 'Media');
   const files = [
@@ -88,15 +89,34 @@ test('title folders classify single videos as movies and multiple videos as show
         assert.equal(item.group, original.group); assert.equal(item.groupId, original.groupId); assert.equal(item.kind, original.kind);
       }
     }
-    // Folder cardinality overrides episode-looking filenames, including after a rescan.
-    await fs.mkdir(path.join(media, 'Shows', 'Single Episode'), { recursive: true });
-    await fs.writeFile(path.join(media, 'Shows', 'Single Episode', 'S01E01.mkv'), '');
-    assert.equal((await scan(path.join(media, 'Shows', 'Single Episode')))[0].kind, 'movie');
-    await fs.writeFile(path.join(media, 'Shows', 'Single Episode', 'second.mkv'), '');
-    assert.ok((await scan(path.join(media, 'Shows', 'Single Episode'))).every(i => i.kind === 'show'));
-    await fs.unlink(path.join(media, 'Shows', 'Single Episode', 'second.mkv'));
-    assert.equal((await scan(path.join(media, 'Shows', 'Single Episode')))[0].kind, 'movie');
   } finally { await fs.rm(temp, { recursive: true, force: true }); }
+});
+
+test('desktop and server keep an explicitly numbered lone episode grouped without truncating its number', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-single-episode-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const show = path.join(root, 'Shows', 'Single Episode'), season = path.join(show, 'S02');
+  const movies = path.join(root, 'Movies', 'Plain Feature');
+  await fs.mkdir(season, { recursive: true });
+  await fs.mkdir(movies, { recursive: true });
+  const episodePath = path.join(season, 'S02E1120 Single Episode (2024) [1080p].mkv');
+  const featurePath = path.join(movies, 'Plain Feature (2024) [1920x1080].mkv');
+  await fs.writeFile(episodePath, '');
+  await fs.writeFile(featurePath, '');
+  for (const scanLibrary of [scan, scanServer]) {
+    const group = item => item.groupTitle ?? item.group;
+    const rows = await scanLibrary(root);
+    const episode = rows.find(item => item.path === episodePath), feature = rows.find(item => item.path === featurePath);
+    assert.deepEqual([episode.kind, group(episode), episode.season, episode.episode], ['show', 'Single Episode', 2, 1120]);
+    assert.deepEqual([feature.kind, group(feature), feature.season, feature.episode], ['movie', 'Plain Feature', null, null]);
+    assert.equal((await scanLibrary(show))[0].groupId, episode.groupId);
+    assert.equal((await scanLibrary(season))[0].groupId, episode.groupId);
+    const second = path.join(season, 'S02E1121.mkv');
+    await fs.writeFile(second, '');
+    assert.deepEqual((await scanLibrary(show)).map(item => item.episode), [1120, 1121]);
+    await fs.unlink(second);
+    assert.equal((await scanLibrary(show))[0].kind, 'show');
+  }
 });
 
 test('filename parsing identifies seasons and cleans release tags', () => {

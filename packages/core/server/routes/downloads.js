@@ -15,12 +15,16 @@ function register({ router, downloads, tmdb }) {
     }));
   }));
   router.add('GET', `${prefix}/jobs`, { auth: 'admin' }, () => run(async () => tmdb.downloadArtwork(await downloads.jobs('server'))));
-  const actions = { configure: 'configure', search: 'search', 'series-search': 'seriesSearch', 'series-releases': 'seriesReleases', add: 'add', remove: 'remove' };
+  const actions = { configure: 'configure', search: 'search', discover: 'discovery', 'series-search': 'seriesSearch', 'series-releases': 'seriesReleases', add: 'add', remove: 'remove' };
   for (const [route, method] of Object.entries(actions)) router.add('POST', `${prefix}/${route}`, { auth: 'admin' }, async ctx => {
     const body = await readJson(ctx.req);
     if (['add', 'remove', 'configure'].includes(route) && body.target && body.target !== 'server') throw new HttpError(400, 'Downloads run on the Matro host.');
     if (['add', 'remove'].includes(route)) body.target = 'server';
     return run(() => downloads[method](body));
+  });
+  router.add('POST', `${prefix}/preview`, { auth: 'admin' }, async ctx => {
+    const body = await readJson(ctx.req);
+    return run(() => tmdb.preview(body));
   });
   router.add('POST', `${prefix}/retry`, { auth: 'admin' }, async ctx => { const { id } = await readJson(ctx.req); return run(() => downloads.retry(id)); });
 }

@@ -13,10 +13,11 @@ import { usePlayback } from '../player/usePlayback';
 import { Icon, IconButton, MediaArt, Pill, SkipIcon, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
 import { colors, fonts } from '../theme';
+import type { SavedMedia } from '../lib/offline';
 
-type Props = ArtProps & { item: Item; data: Library; initialPosition?: number; queue: Item[]; onBack: () => void; onSelect: (item: Item) => void; onNext: () => void };
-export default function NativePlayer({ base, headers, item, data, initialPosition, queue, onBack, onSelect, onNext }: Props) {
-  const p = usePlayback({ base, data, item, initialPosition, onEnd: onNext });
+type Props = ArtProps & { item: Item; data: Library; initialPosition?: number; saved?: SavedMedia; offline?: boolean; queue: Item[]; onBack: () => void; onSelect: (item: Item) => void; onNext: () => void };
+export default function NativePlayer({ base, headers, item, data, initialPosition, saved, offline, queue, onBack, onSelect, onNext }: Props) {
+  const p = usePlayback({ base, data, item, initialPosition, saved, offline, onEnd: onNext });
   const [controls, setControls] = useState(true), [sheet, setSheet] = useState<'tracks' | 'queue' | null>(null), [scrub, setScrub] = useState<number | null>(null);
   const insets = useSafeAreaInsets(), { width, height } = useWindowDimensions(), landscape = width > height, opacity = useRef(new Animated.Value(1)).current;
   const dragging = useRef(false);

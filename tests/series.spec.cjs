@@ -33,7 +33,7 @@ test('Movies and Series have separate searches and series filters send episode f
     await page.evaluate(async ({ base, movieRoot, showRoot }) => window.matro.downloadConfigure({ target: 'local', url: base, seeding: 'no', storage: { movieRoot, showRoot } }), { base, movieRoot, showRoot });
     await page.getByRole('button', { name: 'Downloads', exact: true }).click();
     await page.getByRole('searchbox', { name: 'Search movie torrents', exact: true }).fill('A movie query');
-    await page.locator('#download-kind').click();
+    await page.getByRole('button', { name: 'Series', exact: true }).click();
     await expect(page.locator('.download-destination .mono')).toContainText(showRoot);
     await page.getByRole('searchbox', { name: 'Search series torrents', exact: true }).fill('Sample Show');
     expect(metadataRequests).toBe(0); expect(releaseRequests).toBe(0); expect(movieRequests).toBe(0);
@@ -60,7 +60,7 @@ test('Movies and Series have separate searches and series filters send episode f
     expect(files.slice(2).every(file => file.priority === 0)).toBe(true);
     await page.screenshot({ path: 'test-results/series-downloader.png' });
     await page.keyboard.press('Escape');
-    await page.locator('#download-kind').click();
+    await page.getByRole('button', { name: 'Movies', exact: true }).click();
     await expect(page.getByRole('searchbox', { name: 'Search movie torrents', exact: true })).toHaveValue('A movie query');
     await expect(page.locator('.download-destination .mono')).toContainText(movieRoot);
     expect(metadataRequests).toBe(1); expect(movieRequests).toBe(0); expect(releaseRequests).toBe(2);

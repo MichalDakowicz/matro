@@ -12,7 +12,7 @@ const seasonNumber = folder => folder.match(/^(?:s|season[ ._-]*)(\d+)$/i)?.[1];
 const isContainer = folder => /^(?:media|movies?|shows?|tv|tv[ ._-]*shows?|videos?|library|collection)$/i.test(folder);
 function describe(file, root = '') {
   const name = path.basename(file, path.extname(file));
-  const episode = name.match(/S(\d{1,2})[ ._-]*E(\d{1,3})/i) || name.match(/(\d{1,2})x(\d{2,3})/i);
+  const episode = name.match(/S(\d{1,2})[ ._-]*E(\d{1,4})(?!\d)/i) || name.match(/(?<!\d)(\d{1,2})x(\d{2,4})(?!\d)/i);
   const clean = value => value.replace(/[._]/g, ' ').replace(/\s+/g, ' ').trim();
   const title = clean(name.replace(/\b(480p|720p|1080p|2160p|BluRay|WEB-DL|x264|x265|HEVC)\b.*$/i, ''));
   return { id: idFor(file), path: file, root, title, group: episode ? clean(name.slice(0, episode.index)) || path.basename(path.dirname(file)) : title,
@@ -68,7 +68,7 @@ function groupFolders(items) {
       const parsed = describe(item.path, item.root);
       item.groupId = groupId;
       item.group = path.basename(item.titlePath);
-      item.kind = entries.length === 1 ? 'movie' : 'show';
+      item.kind = entries.length > 1 || parsed.episode !== null ? 'show' : 'movie';
       if (item.kind === 'movie') { item.season = null; item.episode = null; continue; }
       const folders = path.relative(item.titlePath, path.dirname(item.path)).split(path.sep);
       item.season = parsed.season ?? Number(folders.map(seasonNumber).find(value => value !== undefined) ?? 1);

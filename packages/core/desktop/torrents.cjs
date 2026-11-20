@@ -3,6 +3,9 @@ const path = require('node:path');
 const { storageOptions } = require('./download-layout.cjs');
 const { createDownloadJobs } = require('./download-jobs.cjs');
 const { createSeriesCatalog } = require('./series-catalog.cjs');
+const { createAnimeCatalog } = require('./anime-catalog.cjs');
+const { createProwlarrCatalog } = require('./prowlarr-catalog.cjs');
+const { canonicalHash, createReleaseDiscovery, normalizeImdbId, normalizeTmdbId } = require('./release-discovery.cjs');
 const { connectionError } = require('./torrent-connection.cjs');
 
 const targets = ['local', 'server'];
@@ -20,10 +23,10 @@ function endpoint(value, target) {
 // Why a request failed, without the address: shown after "Could not reach the service".
 const reason = error => error?.name === 'TimeoutError' ? 'timed out' : String(error?.cause?.code || error?.cause?.message || error?.message || '').replace(/https?:\/\/\S+/gi, '').trim().slice(0, 80);
 
-// catalogFetch reaches the public catalogs (YTS, TVmaze, EZTV). In the app it is the
+// catalogFetch reaches the public catalogs (YTS, TVmaze, EZTV, Nyaa). In the app it is the
 // Chromium network stack, which honours the system proxy and certificate store; the
 // qBittorrent Web UI calls keep using fetch.
-function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = fetch, catalog = 'https://yts.gg/api/v2/', videos, checkPaths, validateUpgrade, onPrepared, onComplete, seriesShowsURL, seriesReleasesURL }) {
+function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = fetch, catalog = 'https://yts.pw/api/v2/', videos, checkPaths, validateUpgrade, onPrepared, onComplete, seriesShowsURL, seriesReleasesURL, animeCatalogURL, prowlarr }) {
   const file = path.join(dir, 'downloads.json');
   let settings = { local: null, server: null, seeding: null }, writing = Promise.resolve();
   const sessions = new Map(), releases = new Map(), inFlight = new Set();
@@ -51,21 +54,22 @@ function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = 
     return response;
   }
   const catalogRequest = (url, options) => request(url, options, catalogFetch);
-  async function body(response) {
+  async function readBytes(response, maximum = 4 * 1024 * 1024) {
     // Read a bounded body, including chunked responses with no Content-Length.
     const reader = response.body?.getReader();
-    if (!reader) return '';
+    if (!reader) return Buffer.alloc(0);
     let length = 0; const chunks = [];
     try {
       while (true) {
         const { value, done } = await reader.read(); if (done) break;
         length += value.length;
-        if (length > 4 * 1024 * 1024) throw new Error('Service response is too large.');
+        if (length > maximum) throw new Error('Service response is too large.');
         chunks.push(Buffer.from(value));
       }
-      return Buffer.concat(chunks).toString('utf8');
+      return Buffer.concat(chunks, length);
     } finally { await reader.cancel().catch(() => {}); }
   }
+  const body = async response => (await readBytes(response)).toString('utf8');
   async function json(response) {
     if (!response.ok) throw new Error(`Service returned HTTP ${response.status}. Try again later.`);
     try { return JSON.parse(await body(response)); } catch { throw new Error('Service returned an invalid response. Try again later.'); }
@@ -94,7 +98,7 @@ function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = 
     if (!cookie) { cookie = await login(config); sessions.set(config, cookie); }
     const response = await request(new URL(`api/v2/${route}`, config.url), {
       method: data ? 'POST' : 'GET', headers: { Cookie: cookie, Origin: new URL(config.url).origin, Referer: config.url },
-      ...(data ? { body: new URLSearchParams(data) } : {})
+      ...(data ? { body: data instanceof FormData ? data : new URLSearchParams(data) } : {})
     });
     if (response.status === 403 && retry) { sessions.delete(config); return qb(target, route, data, false, config); }
     if (!response.ok) throw connectionError(response.status);
@@ -104,6 +108,37 @@ function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = 
     releases.delete(hash); releases.set(hash, release);
     while (releases.size > 1000) releases.delete(releases.keys().next().value);
   } });
+  async function ytsPage(query, page) {
+    const url = new URL('list_movies.json', catalog);
+    url.search = new URLSearchParams({ page, limit: 20, sort_by: 'seeds', order_by: 'desc' });
+    if (query) url.searchParams.set('query_term', query);
+    const payload = await json(await catalogRequest(url));
+    if (payload?.status !== 'ok' || !payload.data || (payload.data.movies !== undefined && !Array.isArray(payload.data.movies))) throw new Error('Movie catalog is unavailable. Try again later.');
+    return payload.data;
+  }
+  const yts = {
+    name: 'YTS', kinds: ['movie'], search: true,
+    async list(kind, query) {
+      const data = await ytsPage(query, 1);
+      return (data.movies || []).slice(0, 20).flatMap(movie => {
+        if (!text(movie?.title) || !Array.isArray(movie.torrents)) return [];
+        return movie.torrents.slice(0, 30).flatMap(item => {
+          const hash = canonicalHash(item?.hash);
+          if (!hash) return [];
+          const year = /^\d{4}$/.test(String(movie.year)) ? ` (${movie.year})` : '';
+          const tags = [item.quality, item.type].map(value => text(value, 30)).filter(Boolean).map(value => `[${value}]`).join(' ');
+          return [{ hash, title: movie.title, releaseTitle: [movie.title + year, tags].filter(Boolean).join(' '), year: movie.year, imdbId: movie.imdb_code, tmdbId: movie.tmdb_id, provider: 'YTS', seeds: item.seeds, peers: item.peers, quality: item.quality, size: item.size, sizeBytes: item.size_bytes }];
+        });
+      });
+    }
+  };
+  const extra = createProwlarrCatalog({ config: prowlarr, fetch, json, readBytes });
+  const discovery = createReleaseDiscovery([
+    yts,
+    { name: 'EZTV', kinds: ['show'], search: false, list: () => series.recent() },
+    createAnimeCatalog({ request: catalogRequest, body, url: animeCatalogURL }),
+    ...extra ? [extra] : []
+  ], { prowlarrEnabled: !!extra });
   const jobs = createDownloadJobs({ dir, checkPaths, onPrepared, onComplete, configFor: async target => { await loaded; return settings[target]; }, call: async (target, route, data, config) => {
     const response = await qb(target, route, data, true, config);
     return /^torrents\/(info|files)\?/.test(route) ? json(response) : body(response);
@@ -120,6 +155,7 @@ function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = 
     seriesSearch: options => series.search(options),
     seriesReleases: options => series.releases(options),
     seriesSource: id => series.source(id),
+    discovery: options => discovery.list(options),
     async config() { await loaded; return snapshot(); },
     async configure(options) {
       // Serialize saves so a failed connection never replaces a working profile.
@@ -152,27 +188,34 @@ function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = 
       const query = text(options?.query, 200), page = options?.page ?? 1;
       if (!query) throw new Error('Enter a movie title to search.');
       if (!Number.isInteger(page) || page < 1 || page > 10000) throw new Error('Invalid results page.');
-      const url = new URL('list_movies.json', catalog);
-      url.search = new URLSearchParams({ query_term: query, page, limit: 20, sort_by: 'seeds' }).toString();
-      const payload = await json(await catalogRequest(url));
-      if (payload?.status !== 'ok' || !payload.data || (payload.data.movies !== undefined && !Array.isArray(payload.data.movies))) throw new Error('Movie catalog is unavailable. Try again later.');
-      const movies = (payload.data.movies || []).slice(0, 20).map(movie => {
+      const payload = await ytsPage(query, page);
+      const movies = (payload.movies || []).slice(0, 20).filter(movie => movie && typeof movie === 'object').map(movie => {
         const title = text(movie.title, 300), variants = [];
         for (const item of (Array.isArray(movie.torrents) ? movie.torrents : []).slice(0, 30)) {
-          if (!hashPattern.test(item.hash)) continue;
+          if (typeof item?.hash !== 'string' || !hashPattern.test(item.hash)) continue;
           const hash = item.hash.toLowerCase();
           releases.delete(hash); releases.set(hash, { title, year: movie.year, kind: 'movie', hash, quality: text(item.quality, 30), expires: Date.now() + 60 * 60 * 1000 });
           variants.push({ hash, quality: text(item.quality, 30), type: text(item.type, 30), codec: text(item.video_codec, 30), size: text(item.size, 30), seeds: Math.max(0, Number(item.seeds) || 0), peers: Math.max(0, Number(item.peers) || 0) });
         }
-        return { id: String(movie.id), title, year: text(String(movie.year), 10), language: text(movie.language, 30), overview: text(movie.summary || movie.description_full, 2000), torrents: variants };
+        return { id: String(movie.id), title, year: text(String(movie.year), 10), language: text(movie.language, 30), overview: text(movie.summary || movie.description_full, 2000), imdbId: normalizeImdbId(movie.imdb_code), tmdbId: normalizeTmdbId(movie.tmdb_id), torrents: variants };
       });
       while (releases.size > 1000) releases.delete(releases.keys().next().value);
-      return { movies, page, total: Math.max(0, Number(payload.data.movie_count) || 0) };
+      return { movies, page, total: Math.max(0, Number(payload.movie_count) || 0) };
     },
     async add(options) {
       const target = checkTarget(options?.target);
       let hash = options?.hash, release = releases.get(hash);
-      if (options?.magnet) {
+      let selected;
+      if (options?.selectionId !== undefined) {
+        selected = discovery.select(options.selectionId);
+        const item = selected.release;
+        if (hash != null && hash !== item.hash) throw new Error('Search again to refresh this release before downloading.');
+        if (options.downloadKind !== undefined && (!['movie', 'show'].includes(options.downloadKind) || !item.canChooseDownloadKind && options.downloadKind !== item.downloadKind)) throw new Error('This release cannot be downloaded as the selected type.');
+        hash = item.hash;
+        const kind = options.downloadKind || item.downloadKind;
+        release = { hash, title: item.title, year: item.year, kind, season: item.season ?? 1, episode: item.episode ?? item.absoluteEpisode ?? 0, quality: item.quality === 'Unknown' ? '' : item.quality, expires: selected.expires };
+        if (item.kind === 'anime' && kind === 'show') release.anime = true;
+      } else if (options?.magnet) {
         let magnet;
         try { magnet = new URL(options.magnet); } catch { throw new Error('Enter a valid magnet link.'); }
         hash = magnet.searchParams.get('xt')?.match(/^urn:btih:([a-f0-9]{40})$/i)?.[1]?.toLowerCase();
@@ -183,17 +226,29 @@ function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = 
         release.magnet = cleanMagnet.href;
       }
       if (!release || release.expires < Date.now()) throw new Error('Search again to refresh this release before downloading.');
-      const key = `${target}:${hash}`;
+      if (selected && options.upgradeId && release.kind !== 'movie') throw new Error('Series releases cannot be submitted as a movie upgrade.');
+      const key = `${target}:${hash || options.selectionId}`;
       if (inFlight.has(key)) throw new Error('This release is already being sent.');
       inFlight.add(key);
+      let resolvedKey;
       try {
         await loaded; const config = settings[target];
         if (!config) throw new Error('Configure this download destination first.');
         const seed = typeof options.seed === 'boolean' ? options.seed : settings.seeding;
         if (typeof seed !== 'boolean') throw new Error('Choose whether to seed after downloading before starting.');
+        let resolved;
+        if (!hash) {
+          resolved = await selected.resolve();
+          hash = resolved.hash;
+          const canonicalKey = `${target}:${hash}`;
+          if (inFlight.has(canonicalKey)) throw new Error('This release is already being sent.');
+          inFlight.add(canonicalKey);
+          resolvedKey = canonicalKey;
+          release.hash = hash;
+        }
         const existing = await json(await qb(target, `torrents/info?hashes=${hash}`, undefined, true, config));
         if (!Array.isArray(existing)) throw new Error('qBittorrent returned an invalid torrent list.');
-        if (existing.length) return { duplicate: true };
+        if (existing.length) return { duplicate: true, ...(selected ? { hash } : {}) };
         const version = (await body(await qb(target, 'app/version', undefined, true, config))).trim().match(/^v?(\d+)\.(\d+)/);
         if (!version || +version[1] < 5 || +version[1] === 5 && +version[2] < 1) throw new Error('Organized downloads require qBittorrent 5.1 or newer.');
         if (options.upgradeId) {
@@ -201,15 +256,28 @@ function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = 
           if (!validateUpgrade) throw new Error('Movie upgrades are unavailable.');
           release = await validateUpgrade(options.upgradeId, release);
         }
+        if (!resolved && selected?.resolve) resolved = await selected.resolve();
         if (options.rememberSeed) await rememberSeeding(seed);
         const job = await jobs.create(target, config, release, seed);
-        const data = { urls: release.magnet || `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(release.title)}`, savepath: job.stage, autoTMM: 'false', useDownloadPath: 'false', stopped: 'false', stopCondition: 'MetadataReceived', tags: job.tag, contentLayout: 'Original', shareLimitAction: 'Stop', ratioLimit: seed ? '-1' : '0', seedingTimeLimit: seed ? '-1' : '0', inactiveSeedingTimeLimit: '-1' };
+        const addFields = { savepath: job.stage, autoTMM: 'false', useDownloadPath: 'false', stopped: resolved?.torrent ? 'true' : 'false', stopCondition: 'MetadataReceived', tags: job.tag, contentLayout: 'Original', shareLimitAction: 'Stop', ratioLimit: seed ? '-1' : '0', seedingTimeLimit: seed ? '-1' : '0', inactiveSeedingTimeLimit: '-1' };
+        let data;
+        if (resolved?.torrent) {
+          // Loaded metadata starts stopped until the same file-selection job prepares it.
+          data = new FormData();
+          for (const [key, value] of Object.entries(addFields)) data.set(key, value);
+          data.set('torrents', new Blob([resolved.torrent], { type: 'application/x-bittorrent' }), 'release.torrent');
+        } else {
+          data = { ...addFields, urls: resolved?.magnet || selected?.magnet || release.magnet || `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(release.title)}` };
+        }
         try {
           const response = await qb(target, 'torrents/add', data, true, config);
           if ((await body(response)).trim() !== 'Ok.') throw new Error('qBittorrent did not accept this release.');
         } catch (error) { await jobs.fail(job, error); throw error; }
-        return { duplicate: false, preparing: true, jobId: job.id };
-      } finally { inFlight.delete(key); }
+        return { duplicate: false, preparing: true, jobId: job.id, ...(selected ? { hash } : {}) };
+      } finally {
+        inFlight.delete(key);
+        if (resolvedKey) inFlight.delete(resolvedKey);
+      }
     },
     async list(target) {
       const items = await json(await qb(target, 'torrents/info?sort=added_on&reverse=true&limit=100'));
