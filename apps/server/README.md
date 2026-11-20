@@ -146,6 +146,17 @@ Run npm run build:web before a Docker build to include the shared download backe
 
 Build Docker from the repository root: `docker build -f apps/server/Dockerfile .`. Compose uses that same root context. GPU access must be passed through to the container by the operator; the default image includes system FFmpeg and falls back to software if a usable encoder/device is unavailable.
 
+## Movie requests
+
+Viewers use **Request a movie** to submit a title and an optional release year and see their own requests. The head account opens **Movie requests**, selects **Search releases** to open Downloads with the title filled in, and chooses a release to start a transfer. Use **Mark handled** when the request is resolved.
+Viewers can remove their own requests. The head account can remove any request. Removal clears the request and its queued alerts.
+
+In desktop server mode, requests are in the dock. From the local desktop library, select **Movie requests** to open your server in a separate Matro window. Enter your Matro server address if prompted, then sign in with your server account.
+
+Android alerts use Firebase Cloud Messaging. Register the Android package in a Firebase project and place its `google-services.json` in `apps/mobile/` before generating the native Android project. Create a separate service account with the Firebase Cloud Messaging API Admin role. Set `MATRO_REQUEST_FCM_CREDENTIALS` to the path of that account’s private JSON key on the server. With Docker, mount the key read-only and use its path inside the container. Keep the private key out of the repository and Android build. [Firebase Android setup](https://firebase.google.com/docs/cloud-messaging/android/get-started) · [FCM server authorization](https://firebase.google.com/docs/cloud-messaging/send/v1-api)
+
+On Android, sign in as the head account and use **Movie requests → Enable phone alerts**. **Send test alert** shows sample request details. New request notifications include the movie title, release year when supplied, and requester’s username. Tapping a notification opens the inbox. Signing out revokes this phone’s registration.
+
 ## NVIDIA streaming on the server
 
 Receiver apps request media from the Matro API. Compatibility encoding, prerendering and the prepared-file cache run on the server; the receiving app plays the resulting stream. Compatible media still uses direct play or remuxing to avoid unnecessary encoding.

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, FlatList, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { request } from '../lib/server';
+import { request, type MovieRequest } from '../lib/server';
 import { Icon, IconButton, MediaArt, Pill, ProgressBar, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
 import { colors, fonts } from '../theme';
@@ -12,10 +12,10 @@ type Transfer = { hash: string; name: string; progress: number; state: string; s
 type Release = { hash: string; title?: string; quality: string; size: string; seeds?: number; codec?: string; season?: number; episode?: number };
 type Title = { id: string; title: string; year: string; overview?: string; status?: string; torrents?: Release[]; indexed?: boolean };
 type Config = { server?: { username: string; passwordSaved?: boolean; storage?: { movieRoot?: string; showRoot?: string } } };
-export default function DownloadsScreen({ base, headers }: ArtProps) {
+export default function DownloadsScreen({ base, headers, initialRequest }: ArtProps & { initialRequest?: MovieRequest | null }) {
   const insets = useSafeAreaInsets(), { width } = useWindowDimensions(), columns = Math.max(3, Math.floor((width - 24) / 108)), cardWidth = (width - 36 - (columns - 1) * 12) / columns;
   const [jobs, setJobs] = useState<Job[]>([]), [transfers, setTransfers] = useState<Transfer[]>([]), [titles, setTitles] = useState<Title[] | null>(null), [selected, setSelected] = useState<Title | null>(null), [releases, setReleases] = useState<Release[]>([]);
-  const [kind, setKind] = useState('movie'), [query, setQuery] = useState(''), [username, setUsername] = useState(''), [password, setPassword] = useState(''), [config, setConfig] = useState<Config>({});
+  const [kind, setKind] = useState('movie'), [query, setQuery] = useState(initialRequest?.title || ''), [username, setUsername] = useState(''), [password, setPassword] = useState(''), [config, setConfig] = useState<Config>({});
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false), [settings, setSettings] = useState(false), [page, setPage] = useState(1), [total, setTotal] = useState(0), [nextPage, setNextPage] = useState<number | null>(null);
   const [season, setSeason] = useState(''), [episode, setEpisode] = useState(''), [quality, setQuality] = useState(''), [magnetOpen, setMagnetOpen] = useState(false), [magnet, setMagnet] = useState(''), [magnetTitle, setMagnetTitle] = useState('');
   const searchRun = useRef(0), mounted = useRef(true);
@@ -27,6 +27,7 @@ export default function DownloadsScreen({ base, headers }: ArtProps) {
     void call('config').then((value: Config) => { if (mounted.current) { setConfig(value); setUsername(value.server?.username || ''); } }).catch(e => setError(e.message));
     const poll = async () => { if (running) return; running = true; try { await refresh(); } catch (e) { if (mounted.current) setError(e instanceof Error ? e.message : 'Could not load downloads.'); } finally { running = false; } };
     void poll(); const timer = setInterval(() => void poll(), 5000);
+    if (initialRequest) search();
     return () => { mounted.current = false; searchRun.current++; clearInterval(timer); };
   }, [base]);
   const search = (at = 1) => void run(async () => {
@@ -56,6 +57,7 @@ export default function DownloadsScreen({ base, headers }: ArtProps) {
     {error ? <Text accessibilityRole="alert" style={[t.muted, { color: colors.warn, marginBottom: 16 }]}>{error}</Text> : null}{notice ? <Pressable onPress={() => setNotice('')}><Text style={[t.muted, { marginBottom: 16 }]}>{notice}</Text></Pressable> : null}
     <View style={[t.row, { marginTop: 6, marginBottom: 18 }]}>{[['movie', 'Movies'], ['show', 'Series']].map(([value, label]) => <Pill key={value} compact label={label} icon={value === 'movie' ? 'movies' : 'shows'} style={kind === value ? { backgroundColor: '#ffffff18' } : undefined} onPress={() => { searchRun.current++; setKind(value); setTitles(null); setSelected(null); setReleases([]); }} />)}</View>
     <View style={s.search}><Icon name="search" /><TextInput accessibilityLabel={kind === 'movie' ? 'Search movies' : 'Search series'} placeholder={kind === 'movie' ? 'Search movies' : 'Search a series'} placeholderTextColor={colors.dim} value={query} onChangeText={setQuery} onSubmitEditing={() => search()} returnKeyType="search" style={s.input} /><IconButton name="chevron" label="Search releases" disabled={busy || !query.trim()} onPress={() => search()} /></View>
+    {kind === 'movie' && initialRequest?.year ? <Text style={[t.dim, { marginTop: 12 }]}>Requested movie · {initialRequest.title} ({initialRequest.year})</Text> : null}
     {!config.server && <Pressable onPress={() => setSettings(true)}><Text style={[t.dim, { lineHeight: 19, marginTop: 12 }]}>Connect your download client in Download settings before sending a release.</Text></Pressable>}
     <View style={[t.sectionHeading, { marginTop: 30 }]}><Text style={t.sectionTitle}>{kind === 'movie' ? 'Movies' : 'Series'}</Text><Text style={t.dim}>{titles ? `${total} results${kind === 'movie' ? ' · YTS' : ' · TVmaze'}` : ''}</Text></View>
     {!titles ? <View style={s.empty}><Text style={t.sectionTitle}>Find your next {kind === 'movie' ? 'movie' : 'series'}.</Text><Text style={[t.muted, { textAlign: 'center', marginTop: 10 }]}>Search the catalog, choose a release, and send it to Matro host.</Text></View> : !titles.length ? <View style={s.empty}><Text style={t.sectionTitle}>No results found.</Text><Text style={t.muted}>Try another title or spelling.</Text></View> : null}

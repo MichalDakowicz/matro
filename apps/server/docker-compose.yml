@@ -9,6 +9,7 @@ services:
     environment:
       # Set when the server sits behind an HTTPS reverse proxy.
       MATRO_TRUST_PROXY: "1"
+      MATRO_REQUEST_FCM_CREDENTIALS: ${MATRO_REQUEST_FCM_CREDENTIALS:-}
     volumes:
       - matro-data:/data
       # Your library. Uploads from the head account are written here too, so keep it writable to use them

@@ -2,6 +2,8 @@ const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const http = require('node:http');
+const os = require('node:os');
+const { createApp } = require('../packages/core/server');
 
 async function launch(profile) {
   const env = { ...process.env, MATRO_USER_DATA: profile, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE; delete env.MATRO_SERVER_URL;
@@ -18,6 +20,71 @@ async function close(app) {
   await app.evaluate(({ app }) => { if (global.sourceTest) { app.quit = global.sourceTest.quit; app.relaunch = global.sourceTest.relaunch; } });
   await app.close();
 }
+
+test('the local desktop opens server movie requests without changing playback source', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-desktop-requests-'));
+  const profile = path.join(root, 'profile');
+  const { app: matro, server, db } = createApp({ dataDir: path.join(root, 'server'), movieRequests: { env: {} }, tmdb: { env: {} } });
+  let app;
+  try {
+    await matro.createUser('head', 'local-recovery-test', 'admin');
+    await matro.createUser('viewer', 'local-recovery-test', 'viewer');
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = `http://127.0.0.1:${server.address().port}`;
+    app = await launch(profile);
+    const local = await app.firstWindow();
+    const shortcut = local.getByRole('button', { name: 'Movie requests', exact: true });
+    const settingsOpened = app.waitForEvent('window');
+    await shortcut.press('Enter');
+    const settings = await settingsOpened;
+    await expect(settings.getByRole('heading', { name: 'Movie requests' })).toBeVisible();
+    await settings.getByLabel('Matro server address').fill(address + '/wrong-path');
+    await settings.getByRole('button', { name: 'Open movie requests' }).click();
+    await expect(settings.getByRole('status')).toContainText('without a path');
+    await settings.getByLabel('Matro server address').fill(address);
+    const requestsOpened = app.waitForEvent('window');
+    await settings.getByRole('button', { name: 'Open movie requests' }).click();
+    let requests = await requestsOpened;
+    await expect(requests).toHaveURL(address + '/?view=movie-requests');
+    await expect.poll(async () => JSON.parse(await fs.readFile(path.join(profile, 'server.json'), 'utf8').catch(() => 'null'))).toEqual({ url: address, enabled: false });
+    expect(local.url()).toBe('matro://app/');
+    expect(await requests.evaluate(() => [typeof window.matroSource, typeof window.matroDesktop, typeof require])).toEqual(['undefined', 'undefined', 'undefined']);
+
+    async function signIn(username) {
+      await requests.getByLabel('Username', { exact: true }).fill(username);
+      await requests.getByLabel('Password', { exact: true }).fill('local-recovery-test');
+      await requests.getByRole('button', { name: 'Sign in', exact: true }).click();
+    }
+    await signIn('viewer');
+    await expect(requests.getByRole('heading', { name: 'Request a movie' })).toBeVisible();
+    await expect(requests.getByRole('button', { name: 'Downloads', exact: true })).toHaveCount(0);
+    await requests.getByLabel('Movie title').fill('Desktop Example');
+    await requests.getByRole('button', { name: 'Send request' }).click();
+    await expect(requests.getByText('Request sent.', { exact: true })).toBeVisible();
+    await requests.getByRole('button', { name: 'Profile: viewer' }).click();
+    await requests.getByRole('button', { name: 'Sign out', exact: true }).click();
+    await expect(requests.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+    await signIn('head');
+    await expect(requests.getByRole('heading', { name: 'Movie requests', exact: true })).toBeVisible();
+    await expect(requests.getByRole('button', { name: 'Search releases for Desktop Example' })).toBeVisible();
+    await expect(requests.getByRole('button', { name: 'Send request' })).toHaveCount(0);
+
+    const closed = requests.waitForEvent('close');
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(win => win.webContents.getURL().includes('?view=movie-requests')).close());
+    await closed;
+    const reopened = app.waitForEvent('window');
+    await shortcut.click();
+    requests = await reopened;
+    await expect(requests.getByRole('heading', { name: 'Movie requests', exact: true })).toBeVisible();
+    await expect(local.getByRole('button', { name: 'Playback source', exact: true })).toBeVisible();
+  } finally {
+    await close(app);
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+    db.close();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  }
+});
 
 test('the visible switch connects, remembers receiver mode, preserves remote isolation and returns to the local library', async () => {
   const root = path.resolve(__dirname, '../.test-media', `source-switch-${Date.now()}`); await fs.mkdir(root, { recursive: true });

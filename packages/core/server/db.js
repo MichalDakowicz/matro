@@ -32,6 +32,31 @@ CREATE TABLE IF NOT EXISTS subtitles (
   kind TEXT NOT NULL DEFAULT 'full' CHECK (kind IN ('full', 'forced', 'sdh')), vtt TEXT NOT NULL, created INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS subtitles_item ON subtitles(item_id);
+CREATE TABLE IF NOT EXISTS movie_requests (
+  id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  title TEXT NOT NULL, title_key TEXT NOT NULL, year INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'handled')),
+  created INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS movie_requests_pending ON movie_requests(user_id, title_key, year) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS movie_requests_user ON movie_requests(user_id, status, id DESC);
+-- Keep request IDs distinct after removal so stale links cannot act on a new request.
+CREATE TABLE IF NOT EXISTS movie_request_sequence (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1), last_id INTEGER NOT NULL
+);
+INSERT INTO movie_request_sequence (singleton, last_id) VALUES (1, COALESCE((SELECT MAX(id) FROM movie_requests), 0))
+ON CONFLICT(singleton) DO UPDATE SET last_id = MAX(last_id, excluded.last_id);
+CREATE TABLE IF NOT EXISTS movie_request_devices (
+  id TEXT PRIMARY KEY, session_hash TEXT NOT NULL UNIQUE REFERENCES sessions(token_hash) ON DELETE CASCADE,
+  token TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS movie_request_push (
+  request_id INTEGER NOT NULL REFERENCES movie_requests(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL REFERENCES movie_request_devices(id) ON DELETE CASCADE,
+  notify_after INTEGER NOT NULL, PRIMARY KEY (request_id, device_id)
+);
+CREATE INDEX IF NOT EXISTS movie_request_push_due ON movie_request_push(notify_after);
+CREATE INDEX IF NOT EXISTS movie_request_push_device ON movie_request_push(device_id);
 `;
 
 function open(file) {

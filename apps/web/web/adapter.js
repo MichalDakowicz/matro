@@ -4,6 +4,7 @@ import { get, post, put, patch, del, api } from './http.js';
 import { h, say, dialog, languageSelect } from './dom.js';
 import { createOffline, networkLost } from './offline.js';
 import { toVtt } from './offline-store.js';
+import { mountMovieRequests } from './movie-requests.js';
 
 const SIDECAR = 10000; // uploaded subtitle tracks get indexes from here up, as sidecar files do on the desktop
 const KIND = { full: '', forced: ' (forced)', sdh: ' (SDH)' };
@@ -240,6 +241,15 @@ export function createAdapter(session) {
     },
     connectSSH: unsupported('SSH sources'), setPrelude: unsupported('Preludes'), 
     downloadHostOnly: true,
+    get movieRequests() {
+      if (session.offline) return null;
+      const admin = session.user.role === 'admin';
+      return {
+        label: admin ? 'Movie requests' : 'Request a movie',
+        openOnLoad: session.openMovieRequests,
+        mount: (node, search) => mountMovieRequests(node, { admin, search }),
+      };
+    },
     hiddenTabs: session.user.role === 'admin' && !session.offline ? [] : ['folders', 'downloads'],
     canCompareEditions: session.user.role === 'admin' && !session.offline,
     canEditMetadata: session.user.role === 'admin' && !session.offline,
