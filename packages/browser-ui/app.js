@@ -272,7 +272,8 @@ async function loadFrames() {
 }
 function dock() {
   const items = [['movie', 'Movies', 'movies'], ['show', 'Shows', 'shows'], ...(library.items.some(i => i.kind === 'audio') ? [['audio', 'Music', 'music']] : []), ['search', 'Search', 'search'], ['folders', 'Folders', 'folder'], ['downloads', 'Downloads', 'download']];
-  return `<div class="dock-wrap"><button class="dock-back" data-action="close-detail" aria-label="Close details" title="Back (Esc)">${icon('back')}</button><nav class="dock" aria-label="Library">${items.filter(([id]) => !api.hiddenTabs?.includes(id)).map(([id, label, glyph]) => `<button class="dock-item" data-tab="${id}" ${id === 'downloads' ? 'aria-label="Downloads"' : ''} ${tab === id && !folderFilter ? `aria-current="page" title="Back to the landing page"` : ''}>${icon(glyph)}<span class="dock-label">${label}</span>${['movie', 'show', 'audio'].includes(id) ? `<span class="sr-only"> ${groups(id).length}</span>` : ''}</button>`).join('')}</nav></div>`;
+  if (api.movieRequests || api.openMovieRequests) items.push(['movie-requests', api.movieRequests?.label || 'Movie requests', 'requests']);
+  return `<div class="dock-wrap"><button class="dock-back" data-action="close-detail" aria-label="Close details" title="Back (Esc)">${icon('back')}</button><nav class="dock" aria-label="Library">${items.filter(([id]) => !api.hiddenTabs?.includes(id)).map(([id, label, glyph]) => `<button class="dock-item" data-tab="${id}" ${['downloads', 'movie-requests'].includes(id) ? `aria-label="${esc(label)}"` : ''} ${tab === id && !folderFilter ? `aria-current="page" title="Back to the landing page"` : ''}>${icon(glyph)}<span class="dock-label">${esc(label)}</span>${['movie', 'show', 'audio'].includes(id) ? `<span class="sr-only"> ${groups(id).length}</span>` : ''}</button>`).join('')}</nav></div>`;
 }
 let footerOpen = false;
 function footer() {
@@ -317,15 +318,21 @@ function foldersPage() {
 function renderLibrary() {
   downloads.unmount();
   view = 'library'; document.body.classList.remove('in-player');
-  const page = tab === 'downloads' ? downloads.markup() : tab === 'search' ? searchPage() : tab === 'folders' ? foldersPage() : ['movie', 'show', 'audio'].includes(tab) ? browsePage(tab) : landingPage();
+  const movieRequests = api.movieRequests;
+  if (tab === 'movie-requests' && !movieRequests) tab = 'home';
+  const page = tab === 'movie-requests' ? '<div id="movie-requests"></div>' : tab === 'downloads' ? downloads.markup() : tab === 'search' ? searchPage() : tab === 'folders' ? foldersPage() : ['movie', 'show', 'audio'].includes(tab) ? browsePage(tab) : landingPage();
   root.innerHTML = `<div class="shell">${dock()}<main class="page">${page}</main>${footer()}</div>`;
   applyStyles(root);
   $('#search')?.addEventListener('input', event => { const caret = event.target.selectionStart; query = event.target.value; renderLibrary(); $('#search').focus(); $('#search').setSelectionRange(caret, caret); });
   if (tab === 'downloads') void downloads.mount($('#download-browser'));
+  if (tab === 'movie-requests') movieRequests.mount($('#movie-requests'), request => {
+    downloads.openMovieSearch(request.title, request.year);
+    goTab('downloads');
+  });
   setupReel(); renderScannerStatus(); void loadFrames();
 }
 function rerender() {
-  if (view !== 'library' || tab === 'downloads') return;
+  if (view !== 'library' || tab === 'downloads' || tab === 'movie-requests') return;
   const focused = document.activeElement?.id === 'search' ? $('#search').selectionStart : null, scroll = $('.shell')?.scrollTop || 0, open = selected?.id;
   renderLibrary(); if ($('.shell')) $('.shell').scrollTop = scroll;
   if (focused !== null && $('#search')) { $('#search').focus(); $('#search').setSelectionRange(focused, focused); }
@@ -1193,8 +1200,9 @@ function openDetail(id, source) {
   if (from) hero.animate([{ clipPath: insetFrom(from, hero.getBoundingClientRect()) }, { clipPath: 'inset(0px 0px 0px 0px round 0px)' }], { duration: 700, easing: EASE });
   overlay.querySelector('.detail-body').animate([{ opacity: 0, transform: 'translateY(24px)' }, { opacity: 1, transform: 'none' }], { duration: 520, delay: 140, easing: EASE, fill: 'backwards' });
 }
-const TAB_ORDER = ['home', 'movie', 'show', 'audio', 'search', 'folders', 'downloads'];
+const TAB_ORDER = ['home', 'movie', 'show', 'audio', 'search', 'folders', 'downloads', 'movie-requests'];
 function goTab(next) {
+  if (next === 'movie-requests' && api.openMovieRequests) return api.openMovieRequests();
   if (api.hiddenTabs?.includes(next)) return;
   // Clicking the selected dock item again deselects it, which is the landing page.
   if (next === tab && next !== 'home' && !folderFilter && !selected) next = 'home';
@@ -1349,4 +1357,5 @@ else void attempt(async () => { library = await api.load();
   metadata = library.metadata || {}; metadataEnabled = !!library.metadataEnabled;
   scannerSummary = library.scanner || await api.scannerStatus();
   library.markers ||= {};
+  if (api.movieRequests?.openOnLoad) tab = 'movie-requests';
   applyMotion(); renderLibrary(); if (restored.recovered) void attempt(save); });

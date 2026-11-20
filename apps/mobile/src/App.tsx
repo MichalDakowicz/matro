@@ -12,6 +12,7 @@ import { colors, fontAssets } from './theme';
 import * as SecureStore from 'expo-secure-store';
 import { configureTokenStorage } from './lib/server';
 import { forgetOfflineAccount, offlineLibrary } from './lib/offline';
+import { forgetMovieRequestAlerts } from './lib/movie-request-alerts';
 
 const tokenKey = (base: string) => 'matro.session.' + Array.from(base).map(c => c.charCodeAt(0).toString(16)).join('');
 configureTokenStorage({
@@ -64,8 +65,8 @@ export default function App() {
         screen = (
           <ViewerScreen
             base={route.base}
-            onSignedOut={() => { void forgetOfflineAccount(route.base).catch(() => {}); logout(route.base).catch(() => {}); setRoute({ name: 'login', base: route.base, setup: false }); }}
-            onChangeServer={changeServer}
+            onSignedOut={() => { void forgetOfflineAccount(route.base).catch(() => {}); void forgetMovieRequestAlerts(route.base).catch(() => {}); logout(route.base).catch(() => {}); setRoute({ name: 'login', base: route.base, setup: false }); }}
+            onChangeServer={() => { void forgetMovieRequestAlerts(route.base, true).catch(() => {}); changeServer(); }}
           />
         );
         break;

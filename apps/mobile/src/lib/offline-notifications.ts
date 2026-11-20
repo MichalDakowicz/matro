@@ -1,10 +1,14 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
+import { requestAlertKind } from './movie-request-alerts';
 
 const channelId = 'offline-downloads';
 let permission: Promise<boolean> | undefined;
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({ shouldShowBanner: false, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: false }),
+  handleNotification: async notification => {
+    const request = notification.request.content.data?.kind === requestAlertKind;
+    return { shouldShowBanner: request, shouldShowList: true, shouldPlaySound: request, shouldSetBadge: false };
+  },
 });
 function allowed() {
   permission ??= (async () => {

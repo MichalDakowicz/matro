@@ -5,6 +5,101 @@ const { fixtures } = require('./fixtures.cjs');
 const { createApp } = require('../packages/core/server');
 const { ffmpeg, run } = require('../packages/core/desktop/media.cjs');
 
+test('viewers request a movie and the owner searches for a release without starting a transfer', async () => {
+  const root = await fs.mkdtemp(path.join(require('node:os').tmpdir(), 'matro-request-ui-'));
+  const queries = [], hash = 'a'.repeat(40);
+  const { app, server, db } = createApp({
+    dataDir: path.join(root, 'data'), tmdb: { env: {} }, movieRequests: { env: {} },
+    downloads: { catalog: 'https://catalog.example/', fetch: async url => {
+      const parsed = new URL(url);
+      expect(parsed.pathname).toBe('/list_movies.json');
+      queries.push(parsed.searchParams.get('query_term'));
+      return Response.json({ status: 'ok', data: { movie_count: 1, movies: [
+        { id: 1, title: 'The Example', year: 2024, torrents: [{ hash, quality: '1080p', seeds: 23 }] },
+      ] } });
+    } },
+  });
+  let browser;
+  try {
+    await app.createUser('head', 'local-recovery-test', 'admin');
+    await app.createUser('viewer', 'local-recovery-test', 'viewer');
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: base };
+    delete env.ELECTRON_RUN_AS_NODE;
+    browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
+    const page = await browser.firstWindow();
+    async function signIn(name) {
+      await page.getByRole('textbox', { name: 'Username', exact: true }).fill(name);
+      await page.getByLabel('Password', { exact: true }).fill('local-recovery-test');
+      await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    }
+    await page.setViewportSize({ width: 375, height: 800 });
+    await signIn('viewer');
+    await page.evaluate(() => window.matroTheme.set('light'));
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    await expect(page.getByRole('button', { name: 'Downloads', exact: true })).toHaveCount(0);
+    const requestTab = page.getByRole('button', { name: 'Request a movie', exact: true });
+    await requestTab.focus();
+    await page.keyboard.press('Enter');
+    await page.getByLabel('Movie title').fill('The Example');
+    await page.getByLabel('Release year (optional)').fill('2024');
+    await page.getByLabel('Release year (optional)').press('Enter');
+    await expect(page.getByText('Request sent.', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The Example (2024)' })).toBeVisible();
+    expect(await page.locator('#movie-requests').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    expect(queries).toEqual([]);
+
+    await page.getByLabel('Movie title').fill('Withdraw this request');
+    await page.getByRole('button', { name: 'Send request', exact: true }).click();
+    await page.getByRole('button', { name: 'Remove request for Withdraw this request' }).press('Enter');
+    const confirmation = page.getByRole('dialog', { name: 'Remove movie request?' });
+    await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
+    await confirmation.getByRole('button', { name: 'Remove request', exact: true }).press('Enter');
+    await expect(page.getByText('Request removed.', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Withdraw this request' })).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Profile: viewer' }).click();
+    await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 1200, height: 850 });
+    await page.goto(base + '/?view=movie-requests');
+    await expect(page).toHaveURL(base + '/?view=movie-requests');
+    await signIn('head');
+    await expect(page.getByRole('heading', { name: 'Movie requests', exact: true })).toBeVisible();
+    await page.evaluate(() => window.matroTheme.set('dark'));
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await expect(page.getByRole('button', { name: 'Send request' })).toHaveCount(0);
+    await expect(page.getByText(/^viewer · /)).toBeVisible();
+    await page.getByRole('button', { name: 'Search releases for The Example (2024)' }).click();
+    await expect(page.getByRole('searchbox', { name: 'Search movie torrents' })).toHaveValue('The Example');
+    await expect(page.getByText('Requested movie · The Example (2024)', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: /The Example/ }).first()).toBeVisible();
+    expect(queries).toContain('The Example');
+    expect((await app.downloads.jobs('server')).length).toBe(0);
+
+    await page.getByRole('button', { name: 'Movie requests', exact: true }).click();
+    await page.getByRole('button', { name: 'Mark The Example (2024) handled' }).click();
+    await expect(page.getByText('No pending movie requests.')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'The Example (2024)' })).toBeVisible();
+    const removeHandled = page.getByRole('button', { name: 'Remove request for The Example (2024)' });
+    await removeHandled.click();
+    await confirmation.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByRole('heading', { name: 'The Example (2024)' })).toBeVisible();
+    await removeHandled.click();
+    await confirmation.getByRole('button', { name: 'Remove request', exact: true }).click();
+    await expect(page.getByText('No handled movie requests yet.')).toBeVisible();
+    await page.getByRole('button', { name: 'Refresh requests' }).click();
+    await expect(page.getByRole('heading', { name: 'The Example (2024)' })).toHaveCount(0);
+  } finally {
+    await browser?.close();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+    db.close();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  }
+});
+
 async function resumeAfterCrash(page) {
   const username = page.getByRole('textbox', { name: 'Username', exact: true });
   const resume = page.getByRole('button', { name: 'Resume watching', exact: true });

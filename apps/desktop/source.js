@@ -9,5 +9,10 @@ local.addEventListener('click', () => { void run(() => window.matroSource.local(
 void window.matroSource.state().then(state => {
   address.value = state.url || ''; status.textContent = state.message || '';
   document.querySelector('#current').textContent = state.active ? `Using server: ${state.url}` : 'Using the local library on this PC.';
-  local.hidden = !state.active; address.focus();
+  if (state.requests) {
+    document.querySelector('h1').textContent = 'Movie requests';
+    document.querySelector('#hint').textContent = 'Open your server’s movie requests in a separate Matro window.';
+    connect.textContent = 'Open movie requests';
+  }
+  local.hidden = state.requests || !state.active; address.focus();
 });

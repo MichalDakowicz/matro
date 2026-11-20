@@ -125,6 +125,7 @@ function createServer({ router, publicDir, authenticate, config }) {
       const { route, params } = found;
       if (route.auth !== 'none' && !user) throw new HttpError(401, 'Sign in first.');
       if (route.auth === 'admin' && user.role !== 'admin') throw new HttpError(403, 'Only the head account can do that.');
+      if (route.auth === 'viewer' && user.role !== 'viewer') throw new HttpError(403, 'Only viewer accounts can request movies.');
       const forwarded = config.trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
       const ctx = { req, res, params, query: url.searchParams, user, token, ip: forwarded || req.socket.remoteAddress,
         // Secure only when this request really arrived over HTTPS; a Secure cookie set over plain HTTP (the LAN address) is dropped by the browser.

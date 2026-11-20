@@ -12,8 +12,9 @@ installDesktopChrome();
 if (!document.fullscreenEnabled && !window.matroDesktop) document.body.classList.add('no-fullscreen');
 const root = document.getElementById('app');
 let offline = false;
+const openMovieRequests = new URLSearchParams(location.search).get('view') === 'movie-requests';
 const user = await signIn(root, () => { offline = true; });
-const session = { user, offline };
+const session = { user, offline, openMovieRequests };
 root.replaceChildren();
 document.body.classList.add(user.role === 'admin' ? 'role-admin' : 'role-viewer');
 

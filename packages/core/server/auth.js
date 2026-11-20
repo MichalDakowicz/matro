@@ -67,4 +67,4 @@ function createAuth(db) {
     destroyAll(userId) { q.dropUser.run(userId); }
   };
 }
-module.exports = { createAuth, hashPassword, verifyPassword };
+module.exports = { createAuth, hashPassword, verifyPassword, sessionHash: sha };

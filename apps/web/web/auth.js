@@ -44,7 +44,7 @@ export async function signIn(root, onOffline) {
       e.preventDefault(); error.textContent = ''; submit.disabled = true;
       try {
         const { user } = joining ? await post('/api/signup', { code: code.value, username: username.value, password: password.value }) : await post('/api/login', { username: username.value, password: password.value });
-        document.removeEventListener('keydown', wake); history.replaceState(null, '', location.pathname); resolve(user);
+        document.removeEventListener('keydown', wake); history.replaceState(null, '', location.pathname + location.search); resolve(user);
       } catch (err) { error.textContent = err.message; submit.disabled = false; (joining && /code/i.test(err.message) ? code : password).select(); }
     } }, codeRow, h('label', { class: 'search-field' }, username), h('label', { class: 'search-field' }, password), error, submit, hint, toggle);
     function paint() {

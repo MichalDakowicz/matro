@@ -40,7 +40,7 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
   const defaults = hostOnly ? { server: 'http://127.0.0.1:8080' } : { local: 'http://127.0.0.1:8080', server: '' };
   let config = { local: null, server: null }, target = localStorage.getItem('download-destination') === 'server' ? 'server' : 'local';
   if (hostOnly) target = 'server';
-  let results = null, query = '', searchText = '', message = '', searching = false;
+  let results = null, query = '', searchText = '', message = '', searching = false, requestedMovie = null;
   let container, detail, settings, timer, mountId = 0, searchId = 0, listId = 0, open = null;
   let list = [], jobs = [], listError = '', loaded = false, refreshing = false, upgrade = null, searchOnMount = false;
   let listRetryable = false, connectionFailures = 0, nextRefreshAt = 0;
@@ -298,6 +298,7 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
       <section class="section" id="download-activity" hidden><div class="section-heading"><h2>On ${labels[target]}</h2><span><button class="text-button" id="refresh-downloads">Refresh downloads</button></span></div><div class="cw-row" id="download-transfers" aria-live="off"></div></section>
       <div class="download-catalog-controls"><div class="chip-row" role="group" aria-label="Media type">${Object.entries(kinds).map(([key, [label]]) => `<button type="button" class="chip" data-download-kind="${key}" aria-pressed="${kind === key}">${label}</button>`).join('')}</div><button type="button" class="pill small" id="download-browse" aria-pressed="${catalogs[kind].mode === 'browse'}">Most seeded</button></div>
       <form id="torrent-search-form" class="search-hero" role="search"><label for="torrent-query" class="sr-only">Search ${titleKind} torrents</label><div class="search-field">${icons.search}<input id="torrent-query" type="search" maxlength="200" placeholder="Search ${kind === 'anime' ? 'an' : 'a'} ${titleKind} title" value="${esc(kind === 'show' ? seriesQuery : kind === 'anime' ? animeQuery : query)}" required autocomplete="off"><button class="pill small" type="submit">Search</button></div></form>
+      ${kind === 'movie' && requestedMovie?.year ? `<p class="note">Requested movie · ${esc(requestedMovie.title)} (${esc(requestedMovie.year)})</p>` : ''}
       <p class="note">${kind === 'show' ? 'Series titles from TVmaze · releases from EZTV and configured sources.' : kind === 'anime' ? 'Releases from Nyaa and configured sources.' : 'Movies from YTS and configured sources.'}</p>
       <section class="section"><div class="section-heading"><h2>Results</h2><span id="download-count"></span></div><div id="download-results"></div></section>
       <details class="download-magnet"><summary>Add ${kind === 'anime' ? 'an' : 'a'} ${titleKind} magnet</summary><form id="download-magnet-form" class="download-fields">${kind === 'anime' ? '<label>Save as<select name="kind"><option value="show">Series</option><option value="movie">Movie</option></select></label>' : `<input type="hidden" name="kind" value="${magnetKind}">`}<label>Title<input name="title" required maxlength="200"></label><label>Year (optional)<input name="year" pattern="[0-9]{4}" maxlength="4"></label>${magnetKind === 'show' ? '<label>Fallback season<input name="season" type="number" min="0" max="99" value="1"></label>' : ''}<label class="download-wide">Magnet link<input name="magnet" required maxlength="20000" placeholder="magnet:?xt=urn:btih:…"></label><button class="pill primary" ${!config[target] ? 'disabled' : ''}>Add selected download</button></form></details>`;
@@ -458,11 +459,21 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
     if (episodeSeason !== '') void loadDetailPreview(Number(episodeSeason));
     else if (detailMetadata) { detailId++; detailMetadata = { ...detailMetadata, episodes: undefined }; applyDetailPreview(); }
   };
+  function prepareMovieSearch(title) {
+    kind = 'movie'; localStorage.setItem('download-kind', kind);
+    Object.assign(catalogs.movie, { mode: 'search', value: '', response: null, pending: false, error: '', aliases: [] });
+    query = title; results = null; message = ''; searchOnMount = true;
+  }
   return {
+    openMovieSearch(title, year) {
+      upgrade = null;
+      requestedMovie = { title, year };
+      prepareMovieSearch(title);
+    },
     async openUpgrade(id) {
-      upgrade = await api.downloadUpgrade(id); kind = 'movie'; localStorage.setItem('download-kind', kind);
-      Object.assign(catalogs.movie, { mode: 'search', value: '', response: null, pending: false, error: '', aliases: [] });
-      query = upgrade.title; results = null; searchOnMount = true;
+      upgrade = await api.downloadUpgrade(id);
+      requestedMovie = null;
+      prepareMovieSearch(upgrade.title);
     },
     markup: () => '<div id="download-browser" aria-label="Movie, series, and anime downloads"></div>',
     async mount(node) {
@@ -484,8 +495,10 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
         const initialConfig = await api.downloadConfig();
         if (mount !== mountId || !current()) return;
         config = initialConfig;
-        if (!loaded) { if (!config[target]) target = config.local ? 'local' : config.server ? 'server' : target; loaded = true; if (!config[target]) settings.open(target); }
-        draw(); await refresh(); if (mount === mountId && current() && searchOnMount) { searchOnMount = false; await search(); }
+        if (!loaded) { if (!config[target]) target = config.local ? 'local' : config.server ? 'server' : target; loaded = true; if (!config[target] && !requestedMovie) settings.open(target); }
+        draw();
+        if (searchOnMount) { searchOnMount = false; void search(); }
+        await refresh();
       } catch (error) { if (mount === mountId && current()) announce(error.message); }
       if (mount !== mountId || !current()) return;
       timer = setInterval(async () => { if (!current()) { clearInterval(timer); return; } if (!document.hidden && (!listError || listRetryable)) await refresh(); }, 5000);

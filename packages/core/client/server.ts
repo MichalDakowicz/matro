@@ -86,6 +86,26 @@ export const logout = async (base: string): Promise<unknown> => {
   finally { await tokenStorage?.set(base, null); }
 };
 
+export type MovieRequest = {
+  id: number; title: string; year: number | null; status: 'pending' | 'handled'; created: number; requester: string | null;
+};
+export type MovieRequests = { pending: MovieRequest[]; handled: MovieRequest[]; alertsConfigured?: boolean; canRemove?: boolean };
+export const movieRequests = (base: string, owner: boolean): Promise<MovieRequests> =>
+  request(base, owner ? '/api/admin/movie-requests' : '/api/movie-requests');
+export const sendMovieRequest = (base: string, title: string, year: string): Promise<{ request: MovieRequest; duplicate: boolean }> =>
+  request(base, '/api/movie-requests', { method: 'POST', body: { title, year } });
+export const markMovieRequestHandled = (base: string, id: number): Promise<{ request: MovieRequest }> =>
+  request(base, `/api/admin/movie-requests/${id}`, { method: 'PATCH' });
+export const removeMovieRequest = (base: string, id: number): Promise<unknown> =>
+  request(base, `/api/movie-requests/${id}`, { method: 'DELETE' });
+const movieRequestDevicePath = '/api/admin/movie-requests/device';
+export const registerMovieRequestDevice = (base: string, token: string): Promise<{ registration: string }> =>
+  request(base, movieRequestDevicePath, { method: 'PUT', body: { token } });
+export const unregisterMovieRequestDevice = (base: string): Promise<unknown> =>
+  request(base, movieRequestDevicePath, { method: 'DELETE' });
+export const testMovieRequestAlert = (base: string): Promise<unknown> =>
+  request(base, movieRequestDevicePath + '/test', { method: 'POST' });
+
 export type Item = { id: string; groupId: string; title: string; group: string; kind: string; season: number | null; episode: number | null; format: string; root?: string; path?: string; added?: number };
 export type Progress = { position: number; duration: number; completed?: boolean; hidden?: boolean; updated: number };
 export type Metadata = { title?: string; poster?: string; backdrop?: string; overview?: string; tagline?: string; year?: string | number; genres?: string[]; runtime?: number; rating?: number; votes?: number; people?: string[]; peopleLabel?: string; cast?: { name: string; role?: string; photo?: string }[]; episodes?: Record<string, Record<string, { name?: string; overview?: string; still?: string; runtime?: number }>> };
@@ -94,7 +114,7 @@ export type TrackPreference = { audio?: TrackChoice | null; subtitle?: TrackChoi
 export type Preferences = { autoplay?: boolean; volume?: number; tracks?: Record<string, TrackPreference>; [key: string]: unknown };
 export type Segment = { type: 'intro' | 'outro' | 'recap'; start: number; end: number; source: 'manual' | 'automatic' };
 export type ScannerStatus = { ready: number; total: number; message: string; complete?: boolean };
-export type Library = { markers?: Record<string, Segment[]>; scanner?: ScannerStatus; user: MatroUser; items: Item[]; folders?: string[]; progress: Record<string, Progress>; queue: string[]; preferences: Preferences; metadata: Record<string, Metadata> };
+export type Library = { markers?: Record<string, Segment[]>; scanner?: ScannerStatus; user: MatroUser; items: Item[]; folders?: string[]; progress: Record<string, Progress>; queue: string[]; preferences: Preferences; metadata: Record<string, Metadata>; movieRequestsEnabled?: boolean; movieRequestPushEnabled?: boolean };
 export type Track = { index: number; language: string; title: string; bitmap?: boolean; text?: boolean; codec?: string; channels?: number; default?: boolean };
 export type Info = { duration: number; directPlay: boolean; video?: { codec: string; height: number; width: number } | null; chapters?: { start: number; title: string }[]; audio: Track[]; embedded: Track[]; uploaded: { id: number; language: string; name: string }[] };
 export const library = async (base: string): Promise<Library> => { await ensureNativeSession(base); return request(base, '/api/library'); };
