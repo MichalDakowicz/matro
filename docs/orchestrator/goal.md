@@ -1,6 +1,6 @@
 # Downloads discovery and series progress
 
-Approved 2026-11-18. Blocked on authorization to publish the feature branch.
+Approved 2026-11-18. The 0.7.9 release includes this work and the ports of the desktop receiver and offline playback.
 
 Find movies, shows, and anime in Matro Downloads, preview the title with TMDB, compare available releases, and continue shows across episodes and seasons.
 
@@ -12,8 +12,4 @@ Downloads applies to standalone desktop and admin web, including desktop receive
 - [x] **Looks.** Downloads follows the existing poster grid and release dialog at desktop and narrow widths in both themes. Loading, empty, error, and missing-art states are legible. The independent Downloads fixture captured and checked dark desktop and 375 px light previews without horizontal overflow.
 - [x] **Feels.** Search, previews, filters, and release selection are keyboard usable. Loading and provider errors preserve context and give the user a way to retry. The independent Downloads run checked keyboard focus, provider failures, and reload. The progress run verified keyboard activation of continuation and detail controls.
 - [x] **Holds up.** Deduplicate mirrored releases and keep credentials host-side. Preserve access checks, download confirmation, managed-file preparation, watch history, and dismissals. Verified using mock download services, an authenticated admin and viewer run in the receiver UI, cross-device progress fixtures, and independent re-audits.
-- [ ] **Shipped.** All applicable checks pass. Commit verified work, push the feature branch, open a PR for review, and update the task list, Brief, and handoff with evidence.
-
-## Blocked on
-
-Automatic approval review requires explicit authorization to push `feat/discovery-and-series-progress` to the configured Matro GitHub repository. The implementation is committed locally at `d903cef` and the feature worktree is ready for publication.
+- [x] **Shipped.** The discovery and progress changes are installed and deployed in 0.7.8. The combined source, including the per-movie language setting and offline playback, is in the [0.7.9 release pull request](https://github.com/MichalDakowicz/matro/pull/19).
