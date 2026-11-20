@@ -54,6 +54,10 @@ function register(app) {
     const body = await readJson(ctx.req);
     try { return { metadata: await app.tmdb.assign(String(body.key || ''), body.tmdbId ?? null) }; } catch (error) { throw error.status ? error : new HttpError(502, error.message); }
   });
+  router.add('POST', '/api/admin/metadata/language', { auth: 'admin' }, async ctx => {
+    const body = await readJson(ctx.req);
+    try { return { metadata: await app.tmdb.setLanguage(String(body.key || ''), body.language) }; } catch (error) { throw error.status ? error : new HttpError(502, error.message); }
+  });
 
   // Folder picker for the head account: subfolders of a server path.
   router.add('GET', '/api/admin/browse', { auth: 'admin' }, async ctx => {

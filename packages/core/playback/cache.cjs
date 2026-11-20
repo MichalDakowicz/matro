@@ -42,7 +42,7 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
   async function get(options, owner) {
     if (closed) throw Error('Playback service is closed.');
     const source = await stat(options.file);
-    const key = createHash('sha256').update(JSON.stringify([2, options.file, source.size, source.mtimeMs, options.offset, options.audio, options.burn, options.delay, options.info.video])).digest('hex');
+    const key = createHash('sha256').update(JSON.stringify([3, options.file, source.size, source.mtimeMs, options.offset, options.audio, options.burn, options.delay, options.info.video])).digest('hex');
     if (entries.has(key)) {
       const existing = entries.get(key);
       if (!existing.error) return assign(owner, existing);

@@ -6,7 +6,7 @@ const { createDownloadPreview } = require('./download-preview.cjs');
 
 const API = 'https://api.themoviedb.org/3', IMAGES = 'https://image.tmdb.org/t/p/';
 const RECHECK_MISSING = 7 * 24 * 3600 * 1000;
-const artworkName = /^(?:(?:movie|tv)-\d+-(?:poster|backdrop|thumb)|tv-\d+-s\d+e\d+|person-\d+)\.jpg$/;
+const artworkName = /^(?:(?:movie|tv)-\d+-(?:poster|backdrop|thumb)|movie-\d+-[a-z]{2}(?:-[A-Z]{2})?-(?:poster|backdrop)|tv-\d+-s\d+e\d+|person-\d+)\.jpg$/;
 
 // Minimal KEY=VALUE reader for the git-ignored .env (packed into local builds, see package.json "files").
 function readEnv(files) {
@@ -47,7 +47,7 @@ const names = (credits, jobs) => [...new Set((credits?.crew || []).filter(c => j
 const productionOf = (title, credits) => ({ companies: (title.production_companies || []).map(c => c.name), countries: (title.production_countries || []).map(c => c.name),
   producers: names(credits, ['Executive Producer']), writers: names(credits, ['Writer', 'Screenplay', 'Story', 'Creator']), directors: names(credits, ['Director']),
   music: names(credits, ['Original Music Composer', 'Music', 'Composer']), cinematography: names(credits, ['Director of Photography']), budget: title.budget || 0, revenue: title.revenue || 0 });
-const norm = text => String(text || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/^(?:the|a|an) /, '');
+const norm = text => String(text || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/ł/g, 'l').replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/^(?:the|a|an) /, '');
 // Accept a result only when its title really is the file's title; a nearby release year helps, a distant one counts against it.
 function pick(results, query, year, dateKey, titleKeys) {
   const q = norm(query), words = new Set(q.split(' '));
@@ -67,12 +67,27 @@ function pick(results, query, year, dateKey, titleKeys) {
 function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase = IMAGES }) {
   const file = path.join(dir, 'metadata.json'), artwork = path.join(dir, 'artwork');
   let entries = {}, queue = [], running = 0, saveTimer, updateTimer;
-  const pending = new Set(), failed = new Set();
+  let writes = Promise.resolve();
+  const pending = new Set(), failed = new Set(), edits = new Map();
   const loaded = (async () => {
     try { entries = JSON.parse(await fsp.readFile(file, 'utf8')).entries || {}; } catch { entries = {}; }
     await fsp.mkdir(artwork, { recursive: true });
   })();
-  function save() { clearTimeout(saveTimer); saveTimer = setTimeout(() => { const contents = JSON.stringify({ version: 1, entries }); void fsp.writeFile(file + '.tmp', contents).then(() => fsp.rename(file + '.tmp', file)).catch(() => {}); }, 500); }
+  function persist() {
+    clearTimeout(saveTimer);
+    const write = writes.then(async () => {
+      await fsp.writeFile(file + '.tmp', JSON.stringify({ version: 1, entries }));
+      await fsp.rename(file + '.tmp', file);
+    });
+    writes = write.catch(() => {});
+    return write;
+  }
+  function save() { clearTimeout(saveTimer); saveTimer = setTimeout(() => { void persist().catch(() => {}); }, 500); }
+  function edit(key, apply) {
+    const task = (edits.get(key) || Promise.resolve()).catch(() => {}).then(apply);
+    edits.set(key, task);
+    return task.finally(() => { if (edits.get(key) === task) edits.delete(key); });
+  }
   function changed() { clearTimeout(updateTimer); updateTimer = setTimeout(() => onUpdate?.(snapshot()), 300); }
   function snapshot() { return Object.fromEntries(Object.entries(entries).filter(([, e]) => e.status === 'matched' && e.matcher === MATCHER).map(([key, { status, query, checked, matcher, ...rest }]) => [key, rest])); }
   async function api(route, params = {}, options) {
@@ -102,14 +117,33 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     return `artwork/${name}`;
   }
   const castOf = credits => Promise.all((credits?.cast || []).slice(0, CAST_SHOWN).map(async c => ({ name: c.name, role: c.character || '', photo: await image(c.profile_path, 'w185', `person-${c.id}.jpg`).catch(() => null) })));
-  async function movieDetails(id) {
-    const movie = await api(`/movie/${id}`, { append_to_response: 'credits' });
+  async function movieDetails(id, preference) {
+    const route = `/movie/${id}`;
+    let language = preference;
+    if (preference === 'original') {
+      const original = await api(route);
+      if (!original) return null;
+      language = /^[a-z]{2}$/.test(original.original_language) ? original.original_language : null;
+    }
+    const code = language?.split('-')[0];
+    const movie = await api(route, language
+      ? { language, append_to_response: 'credits,images', include_image_language: `${code},null` }
+      : { append_to_response: 'credits' });
     if (!movie) return null;
-    return { tmdbId: movie.id, type: 'movie', title: movie.title, year: movie.release_date?.slice(0, 4) || null, genres: (movie.genres || []).map(g => g.name),
+    const localizedImage = (images, fallback) => {
+      if (!code) return fallback;
+      return images?.find(image => image.iso_639_1 === code)?.file_path
+        || images?.find(image => image.iso_639_1 === null)?.file_path || fallback;
+    };
+    const useOriginalTitle = preference === 'original' || (code && code === movie.original_language);
+    const title = useOriginalTitle ? movie.original_title || movie.title : movie.title;
+    const prefix = `movie-${movie.id}${language ? '-' + language : ''}`;
+    return { tmdbId: movie.id, type: 'movie', title, year: movie.release_date?.slice(0, 4) || null, genres: (movie.genres || []).map(g => g.name),
       people: [...new Set((movie.credits?.crew || []).filter(c => c.job === 'Director').map(c => c.name))], peopleLabel: 'Directed by',
       cast: await castOf(movie.credits), imdbId: movie.imdb_id || null, ...productionOf(movie, movie.credits), overview: movie.overview || '', tagline: movie.tagline || '', runtime: movie.runtime || null,
       rating: movie.vote_count ? Math.round(movie.vote_average * 10) / 10 : null, votes: movie.vote_count || 0,
-      poster: await image(movie.poster_path, 'w500', `movie-${movie.id}-poster.jpg`), backdrop: await image(movie.backdrop_path, 'w1280', `movie-${movie.id}-backdrop.jpg`) };
+      poster: await image(localizedImage(movie.images?.posters, movie.poster_path), 'w500', `${prefix}-poster.jpg`),
+      backdrop: await image(localizedImage(movie.images?.backdrops, movie.backdrop_path), 'w1280', `${prefix}-backdrop.jpg`) };
   }
   async function tvDetails(id, seasons) {
     const show = await api(`/tv/${id}`, { append_to_response: 'credits,external_ids' });
@@ -126,26 +160,30 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
       rating: show.vote_count ? Math.round(show.vote_average * 10) / 10 : null, votes: show.vote_count || 0, episodes,
       poster: await image(show.poster_path, 'w500', `tv-${show.id}-poster.jpg`), backdrop: await image(show.backdrop_path, 'w1280', `tv-${show.id}-backdrop.jpg`) };
   }
-  async function lookup({ kind, query, year, seasons, tmdbId }) {
+  async function lookup({ kind, query, year, seasons, tmdbId, language }) {
     // A manual match only refreshes its own TMDB entry (for newly added seasons); it is never searched again.
-    if (tmdbId) return kind === 'movie' ? movieDetails(tmdbId) : tvDetails(tmdbId, seasons);
+    if (tmdbId) return kind === 'movie' ? movieDetails(tmdbId, language) : tvDetails(tmdbId, seasons);
     if (kind === 'movie') {
       const choose = async params => pick((await api('/search/movie', params))?.results, query, year, 'release_date', ['title', 'original_title']);
       const found = await choose({ query, year }) || (year ? await choose({ query }) : null);
-      return found ? movieDetails(found.id) : null;
+      return found ? movieDetails(found.id, language) : null;
     }
     const choose = async params => pick((await api('/search/tv', params))?.results, query, year, 'first_air_date', ['name', 'original_name']);
     const found = await choose({ query, first_air_date_year: year }) || (year ? await choose({ query }) : null);
     return found ? tvDetails(found.id, seasons) : null;
   }
   function record(job, result, manual) {
-    entries[job.key] = { status: result ? 'matched' : 'missing', query: job.query, checked: Date.now(), matcher: MATCHER, details: DETAILS, ...(manual ? { manual: true } : {}), ...(result || {}) };
+    entries[job.key] = { status: result ? 'matched' : 'missing', query: job.query, checked: Date.now(), matcher: MATCHER, details: DETAILS, ...(manual ? { manual: true } : {}), ...(job.language ? { language: job.language } : {}), ...(result || {}) };
     save();
   }
   async function work() {
     while (queue.length && running < 4) {
       const job = queue.shift(); running++;
-      void lookup(job).then(result => { if (job.tmdbId && !result) return; record(job, result, job.manual); if (result) changed(); })
+      void lookup(job).then(result => {
+        if (entries[job.key] !== job.previous || (job.tmdbId && !result)) return;
+        record(job, result, job.manual);
+        if (result) changed();
+      })
         .catch(() => failed.add(job.key)).finally(() => { running--; pending.delete(job.key); void work(); });
     }
   }
@@ -167,10 +205,10 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
       const missingSeason = entry?.status === 'matched' && entry.type === 'tv' && job.seasons.some(s => !entry.episodes?.[s]);
       // Matched titles with a new season or older stored details are refreshed by id, keeping the match (and whether it was manual).
       const stale = entry?.status === 'matched' && entry.matcher === MATCHER && (missingSeason || entry.details !== DETAILS);
-      if (stale || entry?.manual) { if ((stale || missingSeason) && entry.status === 'matched' && !pending.has(job.key) && !failed.has(job.key)) { pending.add(job.key); queue.push({ ...job, query: entry.query, tmdbId: entry.tmdbId, manual: !!entry.manual }); } continue; }
+      if (stale || entry?.manual) { if ((stale || missingSeason) && entry.status === 'matched' && !pending.has(job.key) && !failed.has(job.key)) { pending.add(job.key); queue.push({ ...job, query: entry.query, tmdbId: entry.tmdbId, manual: !!entry.manual, language: entry.language, previous: entry }); } continue; }
       const fresh = entry && entry.matcher === MATCHER && entry.query === job.query && (entry.status === 'matched' || Date.now() - entry.checked < RECHECK_MISSING);
       if (!job.query || pending.has(job.key) || failed.has(job.key) || (fresh && !missingSeason)) continue;
-      pending.add(job.key); queue.push(job);
+      pending.add(job.key); queue.push({ ...job, language: entry?.language, previous: entry });
     }
     void work();
   }
@@ -189,16 +227,39 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     const [job] = titlesOf(items); if (!job) throw new Error('Only movies and shows can be matched.');
     const id = tmdbId === null ? null : Number(tmdbId);
     if (id !== null && !(Number.isInteger(id) && id > 0)) throw new Error('Invalid TMDB id');
-    const result = id === null ? null : await lookup({ ...job, tmdbId: id });
-    if (id !== null && !result) throw new Error('That TMDB entry could not be loaded.');
-    record(job, result, true); failed.delete(job.key);
-    return snapshot();
+    return edit(job.key, async () => {
+      job.language = entries[job.key]?.language;
+      const result = id === null ? null : await lookup({ ...job, tmdbId: id });
+      if (id !== null && !result) throw new Error('That TMDB entry could not be loaded.');
+      record(job, result, true); failed.delete(job.key);
+      return snapshot();
+    });
+  }
+  async function setLanguage(items, language) {
+    if (!auth) throw new Error('TMDB is not configured.');
+    await loaded;
+    const [job] = titlesOf(items);
+    const badRequest = message => Object.assign(new Error(message), { status: 400 });
+    if (job?.kind !== 'movie') throw badRequest('Choose a movie to change its metadata language.');
+    if (language !== null && language !== 'original' && !(typeof language === 'string' && /^[a-z]{2}-[A-Z]{2}$/.test(language))) {
+      throw badRequest('Choose a valid metadata language.');
+    }
+    return edit(job.key, async () => {
+      const entry = entries[job.key];
+      if (entry?.status !== 'matched') throw badRequest('Match this movie on TMDB first.');
+      const result = await movieDetails(entry.tmdbId, language);
+      if (!result) throw new Error('That TMDB entry could not be loaded.');
+      record({ ...job, query: entry.query, language }, result, entry.manual);
+      try { await persist(); } catch (error) { entries[job.key] = entry; throw error; }
+      failed.delete(job.key);
+      return snapshot();
+    });
   }
   const previewOptions = () => ({ redirect: 'error', signal: AbortSignal.timeout(10000) });
   const preview = createDownloadPreview({ enabled: !!auth, loaded,
     api: (route, params) => api(route, params, previewOptions()),
     image: (pathname, size, name) => image(pathname, size, name, previewOptions()),
   });
-  return { enabled: !!auth, sync, search, assign, preview, snapshot: () => snapshot(), loaded, artworkFile: name => artworkName.test(name) ? path.join(artwork, name) : null };
+  return { enabled: !!auth, sync, search, assign, setLanguage, preview, snapshot: () => snapshot(), loaded, artworkFile: name => artworkName.test(name) ? path.join(artwork, name) : null };
 }
 module.exports = { readEnv, credentials, createMetadata, cleanQuery, yearOf, keyFor };

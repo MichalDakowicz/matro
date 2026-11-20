@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('matro', {
   openTitlePage: options => ipcRenderer.invoke('metadata:open', options),
   searchMetadata: options => ipcRenderer.invoke('metadata:search', options),
   assignMetadata: options => ipcRenderer.invoke('metadata:assign', options),
+  setMetadataLanguage: options => ipcRenderer.invoke('metadata:language', options),
   removeFolder: root => ipcRenderer.invoke('library:remove-folder', root),
   inspect: id => ipcRenderer.invoke('media:inspect', id),
   segments: id => ipcRenderer.invoke('media:segments', id),

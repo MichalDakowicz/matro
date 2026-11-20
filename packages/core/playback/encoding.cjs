@@ -42,7 +42,10 @@ function argumentsFor({ input, offset = 0, audio = null, burn = null, delay = 0,
       args.push(...encoder, '-threads', '2', '-pix_fmt', 'yuv420p', '-g', '48');
     }
   } else args.push('-vn');
-  args.push('-map', audio === null ? '0:a:0?' : `0:${audio}`, '-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-sn', '-movflags', '+frag_keyframe+empty_moov+default_base_moof', '-frag_duration', '500000', '-f', 'mp4', 'pipe:1');
+  // Wait for the first fragment before writing track timing. An empty moov
+  // cannot describe AAC priming / reordered video starts, so the muxer resets
+  // their first timestamps independently and stretches the first audio gap.
+  args.push('-map', audio === null ? '0:a:0?' : `0:${audio}`, '-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-sn', '-movflags', '+frag_keyframe+delay_moov+default_base_moof', '-frag_duration', '500000', '-f', 'mp4', 'pipe:1');
   return args;
 }
 module.exports = { selectEncoder, argumentsFor, canCopyVideo, SOFTWARE };

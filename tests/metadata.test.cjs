@@ -203,19 +203,23 @@ test('the server prefixes only artwork and respects explicitly disabled metadata
 test('titles are matched once, cached, and artwork is stored locally', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-meta-'));
   const calls = [];
+  const polishMovie = { id: 222, title: "Boys Don't Cry", original_title: 'Chłopaki nie płaczą', original_language: 'pl', release_date: '2000-02-25' };
   const fetch = async url => {
     calls.push(url);
     const json = body => ({ ok: true, status: 200, json: async () => body, arrayBuffer: async () => new ArrayBuffer(4) });
     if (url.startsWith('https://image.tmdb.org/')) return json(null);
     if (url.includes('/search/movie') && url.includes('query=home')) return json({ results: [{ id: 5, title: 'Video Home System', release_date: '2018-01-01' }] });
+    if (url.includes('/search/movie') && url.includes('query=Chlopaki+nie+placza')) return json({ results: [polishMovie] });
     if (url.includes('/search/movie')) return json({ results: [{ id: 7, title: 'Akira Kurosawa’s Dreams', release_date: '1990-05-10' }, { id: 149, title: 'Akira', release_date: '1988-07-16' }] });
     if (url.includes('/movie/149')) return json({ id: 149, title: 'Akira', release_date: '1988-07-16', genres: [{ name: 'Animation' }], credits: { crew: [{ job: 'Director', name: 'Katsuhiro Otomo' }], cast: [] }, vote_average: 7.94, vote_count: 4000, poster_path: '/p.jpg', backdrop_path: null });
+    if (url.includes('/movie/222')) return json(polishMovie);
     if (url.includes('/search/tv')) return json({ results: [] });
     return { ok: false, status: 500 };
   };
   let updates = 0;
   const metadata = createMetadata({ dir, fetch, auth: { token: 't', key: '' }, onUpdate: () => updates++ });
   const items = [{ id: 'a', kind: 'movie', group: 'Akira (1988)', path: 'D:/Movies/Akira (1988).mkv', season: null }, { id: 'b', kind: 'show', group: 'Nowhere Show', groupId: 'g', path: 'D:/Shows/x.mkv', season: 1 }, { id: 'h', kind: 'movie', group: 'home_video_2019_final', path: 'D:/Movies/home_video_2019_final.mkv', season: null }];
+  items.push({ id: 'polish', kind: 'movie', group: 'Chlopaki nie placza (2000)', path: 'D:/Movies/Chlopaki.nie.placza.2000.mkv' });
   await metadata.sync(items);
   await new Promise(resolve => setTimeout(resolve, 900));
   const snapshot = metadata.snapshot();
@@ -226,10 +230,54 @@ test('titles are matched once, cached, and artwork is stored locally', async () 
   assert.equal(snapshot.a.poster, 'artwork/movie-149-poster.jpg');
   assert.equal(snapshot.g, undefined);
   assert.equal(snapshot.h, undefined, 'a loosely similar title is not accepted');
+  assert.equal(snapshot.polish.tmdbId, 222, 'a Polish title in an unaccented filename is matched by its original title');
   assert.ok(calls.some(url => url.includes('year=1988')));
   assert.ok(updates >= 1);
   await fs.access(path.join(dir, 'artwork', 'movie-149-poster.jpg'));
   assert.equal(metadata.artworkFile('../library.json'), null);
   const before = calls.length; await metadata.sync(items); await new Promise(resolve => setTimeout(resolve, 50));
   assert.equal(calls.length, before, 'matched and missing titles are not looked up again');
+});
+
+test('a movie keeps its own metadata language across rematches and restarts', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-language-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const downloads = [];
+  const options = { dir, auth: { key: 'fixture' }, fetch: async raw => {
+    const url = new URL(raw), language = url.searchParams.get('language');
+    if (url.hostname === 'image.tmdb.org') { downloads.push(url.pathname); return image(); }
+    if (language === 'de-DE') return new Response('', { status: 503 });
+    const movie = { id: Number(url.pathname.split('/').at(-1)), title: 'Day of the Wacko',
+      original_title: 'Dzień świra', original_language: 'pl', release_date: '2002-06-07', poster_path: '/english.jpg' };
+    if (!language || language === 'en-US') return json(movie);
+    assert.match(language, /^pl(?:-PL)?$/);
+    assert.equal(url.searchParams.get('include_image_language'), 'pl,null');
+    assert.equal(url.searchParams.get('append_to_response'), 'credits,images');
+    return json({ ...movie, overview: 'Polski opis',
+      images: { posters: [{ iso_639_1: null, file_path: '/neutral.jpg' }, { iso_639_1: 'pl', file_path: '/polish.jpg' }],
+        backdrops: [{ iso_639_1: null, file_path: '/neutral-backdrop.jpg' }] } });
+  } };
+  const metadata = createMetadata(options);
+  const first = { id: 'first', kind: 'movie', group: 'Day of the Wacko', path: 'Day.of.the.Wacko.2002.mkv' };
+  const second = { ...first, id: 'second' };
+  await metadata.assign([first], 42);
+  await metadata.assign([second], 42);
+  const { first: localized, second: defaultMovie } = await metadata.setLanguage([first], 'pl-PL');
+  assert.deepEqual([localized.tmdbId, localized.manual, localized.language, localized.title, localized.overview],
+    [42, true, 'pl-PL', 'Dzień świra', 'Polski opis']);
+  assert.equal(localized.poster, 'artwork/movie-42-pl-PL-poster.jpg');
+  assert.equal(defaultMovie.poster, 'artwork/movie-42-poster.jpg');
+  assert.equal(defaultMovie.title, 'Day of the Wacko');
+  assert.deepEqual(downloads, ['/t/p/w500/english.jpg', '/t/p/w500/polish.jpg', '/t/p/w1280/neutral-backdrop.jpg']);
+  await fs.access(metadata.artworkFile('movie-42-pl-PL-poster.jpg'));
+  await assert.rejects(metadata.setLanguage([first], 'de-DE'), /TMDB 503/);
+  assert.deepEqual(metadata.snapshot().first, localized);
+  assert.equal((await metadata.assign([first], 43)).first.poster, 'artwork/movie-43-pl-PL-poster.jpg');
+  assert.equal((await metadata.setLanguage([first], 'original')).first.title, 'Dzień świra');
+  const restarted = createMetadata(options);
+  await restarted.loaded;
+  assert.equal(restarted.snapshot().first.language, 'original');
+  assert.equal(restarted.snapshot().first.poster, 'artwork/movie-43-pl-poster.jpg');
+  assert.equal((await restarted.setLanguage([first], null)).first.title, 'Day of the Wacko');
+  assert.equal(restarted.snapshot().first.language, undefined);
 });

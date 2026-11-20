@@ -181,6 +181,12 @@ app.whenReady().then(async () => {
     if (!win.isDestroyed()) win.webContents.send('library:metadata', snapshot);
     return snapshot;
   });
+  handle('metadata:language', async options => {
+    const items = state.items.filter(item => item.kind === 'movie' && item.id === options?.key);
+    const snapshot = await metadata.setLanguage(items, options?.language);
+    if (!win.isDestroyed()) win.webContents.send('library:metadata', snapshot);
+    return snapshot;
+  });
   handle('library:remove-folder', async root => { state.folders = state.folders.filter(f => f !== root); state.items = state.items.filter(i => i.root !== root); state.sshConnections = (state.sshConnections || []).filter(config => remote.register(config) !== root); remote.remove(root); await persist(); scanner.invalidate(); return state; });
   handle('library:save', async data => {
     const ids = new Set(state.items.map(i => i.id));

@@ -33,13 +33,13 @@ export function createAdapter(session) {
   }
   // TMDB matching runs on the server in the background; keep asking for a short while so posters appear as they arrive.
   function follow() {
-    const run = ++polling; let quiet = 0, last = JSON.stringify(Object.keys(latest.metadata).length);
+    const run = ++polling; let quiet = 0, last = JSON.stringify(latest.metadata);
     (async () => {
       while (run === polling && quiet < 12) {
         await new Promise(resolve => setTimeout(resolve, 5000));
         if (run !== polling) return;
         try {
-          const { metadata } = await get('/api/metadata'), fixed = artwork(metadata), signature = JSON.stringify(Object.keys(fixed).length);
+          const { metadata } = await get('/api/metadata'), fixed = artwork(metadata), signature = JSON.stringify(fixed);
           if (signature !== last) { last = signature; quiet = 0; latest.metadata = fixed; for (const cb of watchers) cb(fixed); } else quiet++;
         } catch { quiet++; }
       }
@@ -179,6 +179,7 @@ export function createAdapter(session) {
     onMetadata: callback => { watchers.add(callback); return () => watchers.delete(callback); },
     searchMetadata: async ({ kind, query, year }) => { headOnly('Only the head account can change TMDB matches.'); const q = new URLSearchParams({ kind, query }); if (year) q.set('year', year); return artwork((await get(`/api/admin/metadata/search?${q}`)).results); },
     assignMetadata: async ({ key, tmdbId }) => { headOnly('Only the head account can change TMDB matches.'); const { metadata } = await post('/api/admin/metadata/assign', { key, tmdbId }); latest.metadata = artwork(metadata); return latest.metadata; },
+    setMetadataLanguage: async ({ key, language }) => { headOnly('Only the head account can change TMDB metadata.'); const { metadata } = await post('/api/admin/metadata/language', { key, language }); latest.metadata = artwork(metadata); return latest.metadata; },
     openTitlePage: async ({ site, type, tmdbId, imdbId }) => {
       const url = site === 'imdb' && /^ttd{5,12}$/.test(imdbId || '') ? `https://www.imdb.com/title/${imdbId}/` : site === 'tmdb' && Number.isInteger(Number(tmdbId)) ? `https://www.themoviedb.org/${type === 'tv' ? 'tv' : 'movie'}/${Number(tmdbId)}` : null;
       if (url) window.open(url, '_blank', 'noopener');
@@ -187,6 +188,7 @@ export function createAdapter(session) {
     downloadHostOnly: true,
     hiddenTabs: session.user.role === 'admin' ? [] : ['folders', 'downloads'],
     canCompareEditions: session.user.role === 'admin',
+    canEditMetadata: session.user.role === 'admin',
     downloadSeriesSearch: value => download('series-search', value), downloadSeriesReleases: value => download('series-releases', value),
     downloadSeriesSource: async () => { say('Release information is provided by EZTV.'); },
     downloadUpgrade: unsupported('Edition upgrades'), downloadFavorite: unsupported('Edition favorites'),

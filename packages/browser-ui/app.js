@@ -599,7 +599,7 @@ function detail(id, focus = true) {
   const facts = [[m?.year, m?.genres?.slice(0, 3).join(' · ')], [selected.kind === 'show' ? `${seasons} ${seasons === 1 ? 'season' : 'seasons'} · ${items.length} episodes` : m?.runtime ? `${Math.floor(m.runtime / 60) ? `${Math.floor(m.runtime / 60)}h ` : ''}${m.runtime % 60}m` : null]].flat().filter(Boolean);
   const overlay = document.createElement('div'); overlay.className = 'detail'; overlay.id = 'detail-overlay'; overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-labelledby', 'detail-title');
   overlay.innerHTML = `<div class="detail-hero"><span class="detail-hero-art ${artFor(selected)}">${m?.backdrop ? `<img src="${esc(m.backdrop)}" alt="" draggable="false">` : `<span class="cover-title">${esc(name)}</span>`}</span><span class="detail-hero-fade"></span></div>
-    <div class="detail-body"><div class="detail-head">${m?.poster && !m.backdrop ? `<span class="detail-poster"><img src="${esc(m.poster)}" alt=""></span>` : ''}<div class="detail-title-row"><h2 id="detail-title">${esc(name)}</h2>${metadataEnabled && selected.kind !== 'audio' ? `<button class="fix-match" data-action="fix-match" title="${esc(m ? `Matched on TMDB as ${m.title}${m.year ? ` (${m.year})` : ''}. Wrong title? Fix match` : 'Not matched on TMDB yet. Find on TMDB')}">${m ? 'on' : 'Find on'} <strong>TMDB</strong>${icon('wrench')}</button>` : ''}</div>
+    <div class="detail-body"><div class="detail-head">${m?.poster && !m.backdrop ? `<span class="detail-poster"><img src="${esc(m.poster)}" alt=""></span>` : ''}<div class="detail-title-row"><h2 id="detail-title">${esc(name)}</h2>${metadataEnabled && api.canEditMetadata !== false && selected.kind !== 'audio' ? `<button class="fix-match" data-action="fix-match">${m ? '<strong>TMDB</strong> settings' : 'Find on <strong>TMDB</strong>'}${icon('wrench')}</button>` : ''}</div>
       ${m?.tagline ? `<p class="detail-tagline">${esc(m.tagline)}</p>` : ''}
       ${m?.people?.length ? `<p class="detail-sub">${esc(m.peopleLabel)} <strong>${esc(m.people.slice(0, 3).join(', '))}</strong></p>` : ''}
       <p class="detail-sub">${[...facts, selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie', selected.format].map(esc).join(' <span aria-hidden="true">·</span> ')}</p>
@@ -658,17 +658,53 @@ function showSeason(season) {
 // Manual TMDB matching: search, then pin a result (or none) to the title.
 let matchItem = null, matchTimer, matchRun = 0;
 const cleanName = text => String(text).replace(/[._]+/g, ' ').replace(/\s*[[(]?\b(?:19|20)\d{2}\b[\])]?.*$/, '').trim() || String(text);
+const movieLanguages = [
+  ['', 'Default'], ['original', 'Original language'], ['pl-PL', 'Polski'], ['en-US', 'English'],
+  ['de-DE', 'Deutsch'], ['es-ES', 'Español'], ['fr-FR', 'Français'], ['it-IT', 'Italiano'],
+  ['ja-JP', '日本語'], ['ko-KR', '한국어'], ['pt-BR', 'Português (Brasil)'], ['uk-UA', 'Українська'], ['zh-CN', '简体中文'],
+];
+function matchLanguage(preference = '') {
+  return `<form id="match-language-form" class="match-language"><label for="match-language">Metadata language</label>
+    <div><select id="match-language">${movieLanguages.map(([value, label]) =>
+      `<option value="${value}"${value === preference ? ' selected' : ''}>${label}</option>`).join('')}</select>
+      <button class="pill small" type="submit" disabled>Apply</button></div><p class="scan-note" aria-live="polite"></p></form>`;
+}
 function openMatch(item) {
   if (!item) return;
   matchItem = item; let dialog = $('#match-dialog');
   if (!dialog) { dialog = document.createElement('dialog'); dialog.id = 'match-dialog'; dialog.className = 'match-dialog'; dialog.setAttribute('aria-labelledby', 'match-title'); document.body.append(dialog); }
   const m = meta(item);
-  dialog.innerHTML = `<div class="section-heading"><h2 id="match-title">Match with TMDB</h2><button class="icon-button" data-action="close-match" aria-label="Close">×</button></div><p class="match-note">Pick the right ${item.kind === 'show' ? 'series' : 'movie'} for <span class="mono">${esc(item.kind === 'show' ? item.group : base(item.path))}</span>. Your files are not changed.</p><div class="search-field small">${icon('search')}<input id="match-query" type="search" aria-label="Search TMDB" autocomplete="off" value="${esc(m?.title || cleanName(item.group))}"></div><div id="match-results" class="match-results" aria-live="polite"></div><div class="match-footer"><button class="text-button" data-match-none>${m ? 'Remove match and use the file name' : 'Keep using the file name'}</button><button class="pill small" data-action="close-match">Cancel</button></div>`;
+  dialog.innerHTML = `<div class="section-heading"><h2 id="match-title">${m ? 'TMDB settings' : 'Match with TMDB'}</h2><button class="icon-button" data-action="close-match" aria-label="Close">×</button></div>
+    ${m && item.kind === 'movie' && api.setMetadataLanguage ? matchLanguage(m.language) : ''}
+    <p class="match-note">Pick the right ${item.kind === 'show' ? 'series' : 'movie'} for <span class="mono">${esc(item.kind === 'show' ? item.group : base(item.path))}</span>.</p>
+    <div class="search-field small">${icon('search')}<input id="match-query" type="search" aria-label="Search TMDB" autocomplete="off" value="${esc(m?.title || cleanName(item.group))}"></div><div id="match-results" class="match-results" aria-live="polite"></div><div class="match-footer"><button class="text-button" data-match-none>${m ? 'Remove match and use the file name' : 'Keep using the file name'}</button><button class="pill small" data-action="close-match">Cancel</button></div>`;
   dialog.showModal();
+  const form = $('#match-language-form');
   const input = $('#match-query');
   input.addEventListener('input', () => { clearTimeout(matchTimer); matchTimer = setTimeout(() => void runMatchSearch(), 300); });
   input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); clearTimeout(matchTimer); void runMatchSearch(); } });
-  input.focus(); input.select(); void runMatchSearch();
+  if (form) {
+    const select = form.querySelector('select'), button = form.querySelector('button'), status = form.querySelector('p');
+    const current = select.value;
+    select.addEventListener('change', () => { button.disabled = select.value === current; status.textContent = ''; });
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (button.disabled) return;
+      button.disabled = select.disabled = true;
+      status.textContent = 'Updating title and artwork…';
+      try {
+        metadata = await api.setMetadataLanguage({ key: metaKey(item), language: select.value || null });
+        if (form.isConnected && dialog.open) { dialog.close(); matchItem = null; }
+        toast('Metadata language saved.');
+        rerender();
+      } catch (error) {
+        status.textContent = error.message;
+        button.disabled = select.disabled = false;
+      }
+    });
+    select.focus();
+  } else { input.focus(); input.select(); }
+  void runMatchSearch();
 }
 async function runMatchSearch() {
   const run = ++matchRun, list = $('#match-results'); if (!list || !matchItem) return;

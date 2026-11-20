@@ -1,5 +1,6 @@
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('node:fs/promises');
+const http = require('node:http');
 const path = require('node:path');
 const { fixtures, bitmapFixture } = require('./fixtures.cjs');
 const { describe } = require('../packages/core/desktop/media.cjs');
@@ -8,6 +9,53 @@ function launchOptions(profile) {
   const env = { ...process.env, MATRO_USER_DATA: profile, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
   return process.env.MATRO_EXECUTABLE ? { executablePath: process.env.MATRO_EXECUTABLE, args: [`--user-data-dir=${profile}`], env } : { args: [path.resolve(__dirname, '..')], env };
 }
+
+test('the selected movie metadata language updates the grid title and poster', async ({}, testInfo) => {
+  test.skip(!!process.env.MATRO_EXECUTABLE, 'Packaged builds do not accept fixture TMDB endpoints');
+  const profile = testInfo.outputPath('profile');
+  await fs.mkdir(profile, { recursive: true });
+  const file = path.join(profile, 'Day of the Wacko (2002).mkv');
+  await fs.writeFile(file, '');
+  const item = describe(file);
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items: [item], folders: [] }));
+  const pixels = await fs.readFile(path.join(__dirname, '../assets/icon.png'));
+  const movie = { id: 42, title: 'Day of the Wacko', original_title: 'Dzień świra', original_language: 'pl',
+    release_date: '2002-06-07', poster_path: '/en.png' };
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    if (url.pathname.startsWith('/images/')) { res.setHeader('Content-Type', 'image/png'); res.end(pixels); return; }
+    res.setHeader('Content-Type', 'application/json');
+    if (url.pathname === '/tmdb/search/movie') { res.end(JSON.stringify({ results: [movie] })); return; }
+    const polish = url.searchParams.get('language') === 'pl-PL';
+    res.end(JSON.stringify(polish ? { ...movie, overview: 'Polski opis', images: { posters: [{ iso_639_1: 'pl', file_path: '/pl.png' }] } } : movie));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = 'http://127.0.0.1:' + server.address().port;
+  const launch = launchOptions(profile);
+  Object.assign(launch.env, { MATRO_METADATA: '', TMDB_ACCESS_TOKEN: 'fixture', MATRO_TMDB_API: base + '/tmdb', MATRO_TMDB_IMAGES: base + '/images' });
+  let app;
+  try {
+    app = await electron.launch(launch);
+    const page = await app.firstWindow();
+    await page.getByRole('button', { name: 'Movies 1', exact: true }).click();
+    const card = name => page.locator('.card').getByText(name, { exact: true });
+    await card('Day of the Wacko').click();
+    await page.getByRole('button', { name: 'TMDB settings' }).click();
+    const dialog = page.getByRole('dialog', { name: 'TMDB settings' });
+    await dialog.getByLabel('Metadata language').selectOption({ label: 'Polski' });
+    await dialog.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Dzień świra', exact: true })).toBeVisible();
+    await expect(page.getByText('Polski opis')).toBeVisible();
+    await page.getByRole('button', { name: 'Close details', exact: true }).click();
+    await expect(card('Dzień świra')).toBeVisible();
+    const poster = page.getByRole('button', { name: 'Open Dzień świra', exact: true }).locator('.cover img');
+    await expect(poster).toHaveAttribute('src', 'artwork/movie-42-pl-PL-poster.jpg');
+    await expect.poll(() => poster.evaluate(image => image.naturalWidth)).toBeGreaterThan(0);
+  } finally {
+    await app?.close();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
 
 test('existing automatic skip markers are corrected when the desktop library opens', async () => {
   const f = await fixtures(), profile = path.join(f.dir, `legacy-markers-${Date.now()}`);

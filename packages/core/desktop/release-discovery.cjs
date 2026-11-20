@@ -104,6 +104,7 @@ function normalizeRelease(kind, item) {
 }
 
 const score = release => release.seeds ?? -1;
+const withoutAccents = query => query.normalize('NFD').replace(/(\p{Script=Latin})\p{M}+/gu, '$1').normalize('NFC').replace(/ł/g, 'l').replace(/Ł/g, 'L');
 
 function acquisitionFor({ release, magnet, proxies, bareHash }) {
   if (magnet || !proxies.size) return { magnet };
@@ -123,8 +124,13 @@ function createReleaseDiscovery(providers, { prowlarrEnabled }) {
   const selections = new Map(), recent = new Map(), pending = new Map();
 
   async function discover(kind, terms, additionalOnly) {
+    const query = terms[0];
+    const alternative = kind === 'movie' ? withoutAccents(query) : query;
     const requests = providers.filter(provider => provider.kinds.includes(kind) && (!terms[0] || provider.search) && (!additionalOnly || provider.additional))
-      .flatMap(provider => terms.map(query => ({ provider, query })));
+      .flatMap(provider => {
+        const queries = provider.additional && alternative !== query ? [...terms, alternative] : terms;
+        return queries.map(query => ({ provider, query }));
+      });
     const data = await Promise.allSettled(requests.map(({ provider, query }) => provider.list(kind, query)));
     const warnings = new Set(), found = new Map();
     for (const [index, response] of data.entries()) {

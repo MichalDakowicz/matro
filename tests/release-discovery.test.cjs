@@ -144,6 +144,21 @@ test('browse uses YTS seed sort and unfiltered EZTV while the additional movie c
   assert.equal(f.calls[4].url.searchParams.getAll('categories')[0], '2000');
 });
 
+test('Prowlarr searches Polish movie titles with and without accents and merges identical releases', async t => {
+  const f = await fixture(t, { prowlarr: config, handle(url) {
+    if (url.hostname !== 'indexers.fixture') return;
+    const accented = url.searchParams.get('query') === 'Chłopaki nie płaczą';
+    return Response.json([
+      torrent({ title: 'Chlopaki.nie.placza.2000.1080p', magnetUrl: `magnet:?xt=urn:btih:${hash}`, seeders: accented ? 2 : 7 }),
+      ...(!accented ? [torrent({ title: 'Chlopaki.nie.placza.2000.720p', magnetUrl: `magnet:?xt=urn:btih:${otherHash}`, seeders: 3 })] : []),
+    ]);
+  } });
+  const { results, warnings } = await f.service.discovery({ kind: 'movie', query: 'Chłopaki nie płaczą', additionalOnly: true });
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(f.calls.map(({ url }) => url.searchParams.get('query')), ['Chłopaki nie płaczą', 'Chlopaki nie placza']);
+  assert.deepEqual(results.map(release => [release.hash, release.seeds]), [[hash, 7], [otherHash, 3]]);
+});
+
 test('anime film selections use the movie root and absolute episodes use the show root', async t => {
   const f = await fixture(t, { handle(url) {
     if (url.hostname === 'nyaa.si') return nyaa([

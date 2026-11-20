@@ -44,6 +44,8 @@ async function fakeTmdb(url) {
   if (u.hostname === 'image.tmdb.org') return new Response(Buffer.from([0xff, 0xd8, 0xff, 0xd9]), { status: 200 });
   const route = u.pathname.replace('/3', '');
   if (route === '/search/movie') return json({ results: [{ id: 1, title: 'Heat', release_date: '1995-12-15', overview: 'A crew and a cop.', poster_path: '/p.jpg' }, { id: 9, title: 'Heat Wave', release_date: '2001-01-01', poster_path: '/q.jpg' }] });
+  if (route === '/movie/1' && u.searchParams.get('language') === 'pl-PL') return json({ id: 1, title: 'Gorączka', original_language: 'en',
+    release_date: '1995-12-15', images: { posters: [{ iso_639_1: 'pl', file_path: '/pl.jpg' }] } });
   if (route === '/movie/1') return json({ id: 1, title: 'Heat', release_date: '1995-12-15', genres: [{ name: 'Crime' }], overview: 'A crew and a cop.', tagline: 'A Los Angeles crime saga', runtime: 170, imdb_id: 'tt0113277',
     vote_count: 100, vote_average: 8.3, poster_path: '/p.jpg', backdrop_path: '/b.jpg', credits: { cast: [{ id: 5, name: 'Al Pacino', character: 'Vincent', profile_path: '/a.jpg' }], crew: [{ job: 'Director', name: 'Michael Mann' }] } });
   if (route === '/search/tv') return json({ results: [{ id: 2, name: 'Show', first_air_date: '2020-01-01' }] });
@@ -166,6 +168,15 @@ test('TMDB metadata is matched on the server and artwork is served to signed-in 
   assert.deepEqual(found.map(r => r.id), [1, 9]);
   assert.equal((await call('sam', 'POST', '/api/admin/metadata/assign', { key: film.id, tmdbId: 9 })).status, 403);
   assert.equal((await call('admin', 'POST', '/api/admin/metadata/assign', { key: 'nope', tmdbId: 1 })).status, 404);
+  const language = { key: film.id, language: 'pl-PL' };
+  assert.equal((await call('sam', 'POST', '/api/admin/metadata/language', language)).status, 403);
+  assert.equal((await call('admin', 'POST', '/api/admin/metadata/language', { ...language, language: '../pl-PL' })).status, 400);
+  const changed = await call('admin', 'POST', '/api/admin/metadata/language', language);
+  assert.equal(changed.status, 200);
+  const localized = (await catalog('sam')).metadata[film.id];
+  assert.equal(localized.title, 'Gorączka');
+  assert.equal(localized.poster, 'artwork/movie-1-pl-PL-poster.jpg');
+  assert.equal((await call('sam', 'GET', '/api/' + localized.poster)).status, 200);
   const none = await call('admin', 'POST', '/api/admin/metadata/assign', { key: film.id, tmdbId: null });
   assert.equal(none.data.metadata[film.id], undefined, 'pinning "no match" falls back to the file name');
 });

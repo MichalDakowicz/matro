@@ -25,6 +25,11 @@ function createTmdb(db, { fetchImpl = fetch, env = loadEnv([path.join(config.dat
   const auth = vendor && vendor.credentials(env);
   const rows = db.prepare('SELECT id, kind, group_id, group_title, year, path, season FROM items');
   const items = () => rows.all().map(asItem);
+  function matchingItems(key) {
+    const matching = items().filter(item => keyOf(item) === key);
+    if (!matching.length) throw Object.assign(new Error('That title is no longer in the library.'), { status: 404 });
+    return matching;
+  }
   const dir = path.join(config.dataDir, 'tmdb');
   fs.mkdirSync(dir, { recursive: true });
   const meta = auth ? vendor.createMetadata({ dir, auth, fetch: (url, options) => fetchImpl(url, { signal: AbortSignal.timeout(20000), ...options }) }) : null;
@@ -63,9 +68,12 @@ function createTmdb(db, { fetchImpl = fetch, env = loadEnv([path.join(config.dat
     search: (kind, query, year) => meta ? meta.search(kind, query, year) : Promise.reject(new Error('TMDB is not configured on this server.')),
     async assign(key, tmdbId) {
       if (!meta) throw new Error('TMDB is not configured on this server.');
-      const matching = items().filter(item => keyOf(item) === key);
-      if (!matching.length) throw Object.assign(new Error('That title is no longer in the library.'), { status: 404 });
-      await meta.assign(matching, tmdbId ?? null);
+      await meta.assign(matchingItems(key), tmdbId ?? null);
+      return snapshot();
+    },
+    async setLanguage(key, language) {
+      if (!meta) throw new Error('TMDB is not configured on this server.');
+      await meta.setLanguage(matchingItems(key), language);
       return snapshot();
     }
   };
