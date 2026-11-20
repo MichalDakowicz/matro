@@ -5,6 +5,8 @@ const { toVtt, createEmbedded, MAX_UPLOAD } = require('../subtitles');
 const { createFrames } = require('../previews');
 const { createStreams } = require('../stream');
 const path = require('node:path');
+const fs = require('node:fs/promises');
+const { createHash } = require('node:crypto');
 
 const KINDS = ['full', 'forced', 'sdh'];
 const MAX_SUBS_PER_ITEM = 60;
@@ -18,6 +20,7 @@ function register(app) {
       LEFT JOIN users u ON u.id = s.user_id WHERE s.item_id = ? ORDER BY s.language, s.name`),
     sub: db.prepare('SELECT * FROM subtitles WHERE id = ?'),
     count: db.prepare('SELECT COUNT(*) AS n FROM subtitles WHERE item_id = ?'),
+    sameSubtitle: db.prepare('SELECT id, created FROM subtitles WHERE item_id = ? AND user_id = ? AND name = ? AND language = ? AND kind = ? AND vtt = ? LIMIT 1'),
     insert: db.prepare('INSERT INTO subtitles (item_id, user_id, name, language, kind, vtt, created) VALUES (?, ?, ?, ?, ?, ?, ?)'),
     update: db.prepare('UPDATE subtitles SET name = ?, language = ?, kind = ? WHERE id = ?'),
     remove: db.prepare('DELETE FROM subtitles WHERE id = ?')
@@ -52,6 +55,38 @@ function register(app) {
     const item = find(ctx.params.id);
     if (ctx.query.get('preload') !== '1') transcode.releaseMain(ctx.user.id);
     await sendFile(ctx.req, ctx.res, item.path, MIME[path.extname(item.path).toLowerCase()] || 'video/mp4', { 'Cache-Control': 'private, no-store' });
+  });
+
+  async function offline(ctx) {
+    const item = find(ctx.params.id), info = await library.info(item);
+    if (info.broken) throw new HttpError(422, 'This file could not be prepared for offline playback.');
+    const audio = ctx.query.has('audio') ? Number(ctx.query.get('audio')) : null;
+    if (audio !== null && !info.audio.some(track => track.index === audio)) throw new HttpError(400, 'Unknown audio track.');
+    const original = await fs.stat(item.path);
+    const direct = canDirectPlay(item.path, info) && (audio === null || audio === info.audio[0]?.index);
+    const result = direct ? { done: true, file: item.path, size: original.size } : await transcode.offline(item.path, info, audio);
+    if (result.error) throw new HttpError(422, 'This file could not be prepared for offline playback.');
+    if (!result.done) return { state: 'preparing' };
+    const version = createHash('sha256').update(JSON.stringify([1, item.id, original.size, original.mtimeMs, audio, result.size])).digest('hex');
+    const type = direct ? MIME[path.extname(item.path).toLowerCase()] || 'video/mp4' : 'video/mp4';
+    return { state: 'ready', file: result.file, size: result.size, version, type, entry: direct ? undefined : result };
+  }
+  router.add('GET', '/api/items/:id/offline', async ctx => {
+    const { file: _file, entry: _entry, ...status } = await offline(ctx);
+    return status;
+  });
+  router.add('GET', '/api/items/:id/offline/file', async ctx => {
+    const info = await offline(ctx);
+    if (info.state !== 'ready' || ctx.query.get('version') !== info.version) throw new HttpError(409, 'The offline file changed. Retry the download.');
+    let held = Boolean(info.entry);
+    const release = () => { if (held) { held = false; info.entry.readers--; } };
+    if (held) {
+      info.entry.readers++;
+      ctx.res.once('finish', release);
+      ctx.res.once('close', release);
+    }
+    try { await sendFile(ctx.req, ctx.res, info.file, info.type, { 'Cache-Control': 'private, no-store' }); }
+    catch (error) { release(); throw error; }
   });
 
   router.add('POST', '/api/playback/stop', async ctx => {
@@ -97,11 +132,19 @@ function register(app) {
   // Every signed-in account may add subtitles; the file body is the raw subtitle file, labelled through the query string.
   router.add('POST', '/api/items/:id/subtitles', async ctx => {
     const item = find(ctx.params.id), meta = label(ctx);
-    if (q.count.get(item.id).n >= MAX_SUBS_PER_ITEM) throw new HttpError(409, 'This title already has the maximum number of subtitle tracks.');
+    const queued = ctx.query.get('queued') === '1';
+    const limited = () => q.count.get(item.id).n >= MAX_SUBS_PER_ITEM;
+    const overLimit = () => new HttpError(409, 'This title already has the maximum number of subtitle tracks.');
+    if (!queued && limited()) throw overLimit();
     const body = await readBody(ctx.req, MAX_UPLOAD + 1024);
     const vtt = await toVtt(body, { filename: ctx.query.get('filename'), language: meta.language, charset: ctx.query.get('charset') });
-    const { lastInsertRowid } = q.insert.run(item.id, ctx.user.id, meta.name, meta.language, meta.kind, vtt, Date.now());
-    return { subtitle: subtitleOut({ id: Number(lastInsertRowid), ...meta, created: Date.now(), userId: ctx.user.id, addedBy: ctx.user.username }, ctx.user) };
+    let row = queued ? q.sameSubtitle.get(item.id, ctx.user.id, meta.name, meta.language, meta.kind, vtt) : null;
+    if (!row) {
+      if (limited()) throw overLimit();
+      const created = Date.now(), { lastInsertRowid } = q.insert.run(item.id, ctx.user.id, meta.name, meta.language, meta.kind, vtt, created);
+      row = { id: Number(lastInsertRowid), created };
+    }
+    return { subtitle: subtitleOut({ ...row, ...meta, userId: ctx.user.id, addedBy: ctx.user.username }, ctx.user) };
   });
 
   const own = (ctx) => {

@@ -52,6 +52,8 @@ TMDB_ACCESS_TOKEN=your-read-access-token   # or TMDB_API_KEY=...; VITE_-prefixed
 
 ## What works
 
+- Save a movie or episode for offline playback in the web app, desktop receiver, or native app. **Profile → Saved for offline** shows progress, lets you resume or remove saves, and opens saved titles. Use HTTPS to reopen the web app while offline. The desktop receiver also supports offline startup for its configured LAN server. Offline saves require a Matro 0.7.9 or later server.
+
 - Recursive folder import and rescan, file import, drag/drop, search, and shows/movies/audio filters. Title folders with one video become movies; multiple videos become shows. Season folders stay under their parent show. Episode numbers come from `S01E02`, `1x02`, or chapter/episode filenames, with natural filename order as a fallback.
 - Playback through bundled FFmpeg, including MKV, MP4, AVI, MOV, WebM, MPEG/TS and common audio inputs supported by that build.
 - Seeking with hover thumbnails and precise timestamps, 5-second skip buttons and arrow keys, pause, volume/mute with a percentage readout, speed, fullscreen, chapters, queue (a drawer over the video), autoplay, and resume saved between launches. Skip markers show as faint ranges on the seeker. Fullscreen expands video to the display, removes window chrome, and hides the queue until requested; Esc exits fullscreen.

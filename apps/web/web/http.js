@@ -1,7 +1,7 @@
 export class ApiError extends Error { constructor(status, message) { super(message); this.status = status; } }
-export async function api(method, url, body, { keepalive = false } = {}) {
+export async function api(method, url, body, { keepalive = false, signal } = {}) {
   const raw = body instanceof Blob;
-  const res = await fetch(url, { method, keepalive, credentials: 'same-origin', headers: { 'x-matro': '1', ...(body !== undefined && !raw ? { 'content-type': 'application/json' } : {}) },
+  const res = await fetch(url, { method, keepalive, signal, credentials: 'same-origin', headers: { 'x-matro': '1', ...(body !== undefined && !raw ? { 'content-type': 'application/json' } : {}) },
     body: body === undefined ? undefined : raw ? body : JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {

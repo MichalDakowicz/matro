@@ -12,6 +12,8 @@ function launchReceiver(address, { show = true, onUnavailable, onChooseSource } 
   } catch (error) {
     app.whenReady().then(() => { dialog.showErrorBox('Matro server address', error.message); app.quit(); }); return;
   }
+  // Scope the receiver's service worker permission to the selected Matro origin.
+  if (base.protocol === 'http:') app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', base.origin);
   app.whenReady().then(async () => {
     const win = new BrowserWindow({ width: 1440, height: 940, minWidth: 900, minHeight: 640, backgroundColor: '#0a0a0b', title: 'Matro', show: false, frame: false,
       webPreferences: { preload: path.resolve(__dirname, '../../../apps/desktop/receiver-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false } });

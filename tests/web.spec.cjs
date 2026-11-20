@@ -272,6 +272,64 @@ test('Vite production UI signs in, plays through the HTTP adapter and saves prog
   }
 });
 
+test('a receiver plays a saved title after restarting with the server unreachable', async () => {
+  const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'offline-ui-'));
+  const media = path.join(root, 'media'); await fs.mkdir(media);
+  await fs.copyFile(f.mkv, path.join(media, 'Northbound.mkv'));
+  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} } });
+  const respond = server.listeners('request')[0];
+  let disconnected = false, browser;
+  server.removeListener('request', respond);
+  server.on('request', (req, res) => { if (disconnected) req.socket.destroy(); else void respond(req, res); });
+  try {
+    await app.createUser('head', 'offline-receiver-test', 'admin'); await library.addFolder(media);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_METADATA: 'off',
+      MATRO_SERVER_URL: `http://127.0.0.1:${server.address().port}` }; delete env.ELECTRON_RUN_AS_NODE;
+    const options = { args: [path.resolve(__dirname, '..')], env };
+    browser = await electron.launch(options);
+    let page = await browser.firstWindow();
+    await page.getByRole('textbox', { name: 'Username', exact: true }).fill('head');
+    await page.getByLabel('Password', { exact: true }).fill('offline-receiver-test');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await expect(page.locator('.receiver-account-name')).toHaveText('head');
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: 'Save offline', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Saved for offline playback.' })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
+    await browser.close(); browser = null;
+
+    disconnected = true;
+    browser = await electron.launch(options);
+    page = await browser.firstWindow();
+    await expect(page.getByRole('button', { name: 'Offline · Reconnect' })).toBeVisible();
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: 'Play now', exact: true }).click();
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.2);
+    expect(await page.locator('video').evaluate(v => v.src.startsWith('blob:'))).toBe(true);
+    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    const queued = page.evaluate(async () => window.matro.loadSubtitle((await window.matro.load()).items[0].id));
+    const subtitle = page.getByRole('dialog', { name: 'Add subtitles' });
+    await subtitle.locator('input[type=file]').setInputFiles({ name: 'offline.srt', mimeType: 'text/plain',
+      buffer: Buffer.from('1\n00:00:00,100 --> 00:00:02,000\nOffline line\n') });
+    await subtitle.getByRole('button', { name: 'Add subtitles' }).click();
+    expect((await queued).text).toContain('Offline line');
+    await page.getByRole('button', { name: 'Profile: head' }).click();
+    await page.getByRole('button', { name: 'View offline downloads' }).click();
+    const saved = page.getByRole('dialog', { name: 'Saved for offline' });
+    await expect(saved.getByText('Northbound', { exact: true })).toBeVisible();
+    await expect(saved.getByRole('status')).toContainText('1 subtitle upload');
+    await saved.getByRole('button', { name: 'Close', exact: true }).click();
+    disconnected = false;
+    await page.getByRole('button', { name: 'Offline · Reconnect' }).click();
+    await expect(page.getByRole('button', { name: 'Open Northbound', exact: true })).toBeVisible();
+    await expect.poll(() => db.prepare('SELECT count(*) AS total FROM subtitles').get().total).toBe(1);
+  } finally {
+    await browser?.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('direct-play resume survives leaving before metadata arrives and resumes at the saved position', async () => {
   const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'resume-ui-'));
   const media = path.join(root, 'media'); await fs.mkdir(media);

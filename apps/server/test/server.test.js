@@ -239,6 +239,34 @@ test('track info, direct play ranges, transcode and embedded subtitles', async (
   assert.match(vtt.data, /Hello there/);
 });
 
+test('offline media preparation is authenticated and serves versioned, seekable files', async () => {
+  const { groups } = await catalog('sam');
+  const movie = `/api/items/${groups[0][0].id}/offline`;
+  assert.equal((await call(null, 'GET', movie)).status, 401);
+  const direct = (await call('sam', 'GET', movie)).data;
+  assert.equal(direct.state, 'ready');
+  assert.equal(direct.file, undefined);
+  assert.equal((await call('sam', 'GET', movie + '/file?version=old')).status, 409);
+  const headers = { cookie: jar.sam, range: 'bytes=0-31' };
+  const first = await fetch(base + movie + '/file?version=' + direct.version, { headers });
+  assert.equal(first.status, 206);
+  assert.equal(first.headers.get('content-range'), `bytes 0-31/${direct.size}`);
+  assert.equal((await first.arrayBuffer()).byteLength, 32);
+
+  const episode = `/api/items/${groups[1][0].id}/offline`, info = (await call('sam', 'GET', episode.replace('/offline', '/info'))).data;
+  const audio = info.audio[1].index;
+  let ready;
+  for (let i = 0; i < 100; i++) {
+    ready = (await call('sam', 'GET', episode + '?audio=' + audio)).data;
+    if (ready.state === 'ready') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(ready.state, 'ready');
+  const second = await fetch(base + episode + '/file?audio=' + audio + '&version=' + ready.version, { headers });
+  assert.equal(second.status, 206);
+  assert.match(Buffer.from(await second.arrayBuffer()).toString('latin1'), /ftyp/);
+});
+
 test('any viewer can add labelled subtitles; only owner or head account can edit them', async () => {
   const { groups } = await catalog('sam');
   const movie = groups[0][0];

@@ -7,7 +7,7 @@ export function releaseBuffer(video) { sessions.get(video)?.(); sessions.delete(
 
 export function bufferPlayback(video, source, duration, hasVideo) {
   releaseBuffer(video);
-  if (!supportsFullBuffer(hasVideo)) return source;
+  if (source.startsWith('blob:') || !supportsFullBuffer(hasVideo)) return source;
   const media = new MediaSource(), url = URL.createObjectURL(media), controller = new AbortController();
   const name = `matro-buffer-${crypto.randomUUID()}`;
   let db, stopped = false, fetched = 0, appended = 0, complete = false, pumping = false, buffer, bytes = 0;

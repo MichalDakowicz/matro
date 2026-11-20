@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 const sharedAssets = fileURLToPath(new URL('../../packages/browser-ui/assets/', import.meta.url));
 export default defineConfig({
@@ -18,6 +19,12 @@ export default defineConfig({
         fs.createReadStream(file).pipe(res);
       });
     },
-    writeBundle(options) { fs.cpSync(sharedAssets, path.join(options.dir, 'assets'), { recursive: true }); }
+    writeBundle(options, bundle) {
+      fs.cpSync(sharedAssets, path.join(options.dir, 'assets'), { recursive: true });
+      const files = ['/', '/icon.svg', '/logo.svg', ...Object.keys(bundle).filter(file => file.startsWith('assets/')).map(file => '/' + file)].sort();
+      const worker = path.join(options.dir, 'sw.js'), source = fs.readFileSync(worker, 'utf8');
+      const name = 'matro-shell-' + createHash('sha256').update(JSON.stringify(files)).update(source).digest('hex').slice(0, 16);
+      fs.writeFileSync(worker, `const shell = ${JSON.stringify({ name, files })};\n${source}`);
+    }
   }]
 });

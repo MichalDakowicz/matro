@@ -7,8 +7,9 @@ import { isContinueDismissed } from '../../../../packages/core/client/watch-prog
 import { parseVtt, type Cue } from '../../../../packages/core/client/subtitles';
 import { downloadPlayback } from './diskBuffer';
 import { progressRecovery, recoveryScope } from '../lib/storage';
+import type { SavedMedia } from '../lib/offline';
 
-export function usePlayback({ base, data, item, initialPosition, onEnd }: { base: string; data: Library; item: Item; initialPosition?: number; onEnd: () => void }) {
+export function usePlayback({ base, data, item, initialPosition, saved, offline = false, onEnd }: { base: string; data: Library; item: Item; initialPosition?: number; saved?: SavedMedia; offline?: boolean; onEnd: () => void }) {
   const initial = initialPosition ?? (data.progress[item.id]?.completed ? 0 : data.progress[item.id]?.position || 0);
   const pref = data.preferences.tracks?.[trackKey(item)];
   const [info, setInfo] = useState<Info | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState(''), [position, setPosition] = useState(initial), [buffered, setBuffered] = useState(initial), [playing, setPlaying] = useState(false), [caption, setCaption] = useState('');
@@ -30,13 +31,14 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
   const lastLocal = useRef(0), rewatching = useRef(!!data.progress[item.id]?.completed);
   const [markers, setMarkers] = useState(data.markers?.[item.id] || []);
   useEffect(() => {
+    if (offline) return;
     let active = true;
     const poll = async () => { try { const update = await request(base, '/api/segments'); if (active) setMarkers(update.markers[item.id] || []); } catch { /* Keep the last known markers offline. */ } };
     void poll();
     if (item.kind === 'show') void request(base, `/api/items/${item.id}/segments`, { method: 'POST', body: {} }, 600000).catch(() => {});
     const timer = setInterval(poll, 5000);
     return () => { active = false; clearInterval(timer); };
-  }, [base, item.id, item.kind]);
+  }, [base, item.id, item.kind, offline]);
   const savedEntry = useRef<Progress | null>(null);
   const persist = useCallback(async (sync = true) => {
     const { items, progress } = dataRef.current;
@@ -54,8 +56,8 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
     savedEntry.current = entry;
     try { await progressRecovery.write(recoveryScope(base, dataRef.current.user), item.id, entry); }
     catch { if (mounted.current) setError('Could not save playback recovery on this device. Check available storage.'); }
-    if (sync) await saveProgress(base, item.id, entry);
-  }, [base, item]);
+    if (sync && !offline) await saveProgress(base, item.id, entry);
+  }, [base, item, offline]);
   const remember = useCallback(() => {
     const details = infoRef.current; if (!details) return;
     const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true }))];
@@ -67,6 +69,7 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
   const loadText = useCallback(async (index: number | null) => {
     const run = ++subtitleRun.current; cues.current = []; setCaption('');
     if (index === null || infoRef.current?.embedded.find(t => t.index === index)?.bitmap) return;
+    if (saved) { cues.current = parseVtt(saved.text[index] || ''); return; }
     const headers = await mediaHeaders(base), route = index >= 10000 ? `u${index - 10000}` : `e${index}`;
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15000);
     try {
@@ -75,7 +78,7 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
       const parsed = parseVtt(await response.text());
       if (mounted.current && run === subtitleRun.current) cues.current = parsed;
     } finally { clearTimeout(timer); }
-  }, [base, item.id]);
+  }, [base, item.id, saved]);
   const load = useCallback(async (position: number, shouldPlay = intent.current) => {
     const details = infoRef.current; if (!details) return;
     playbackStart.current = null;
@@ -83,12 +86,12 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
     player.pause();
     if (!disk.current) { cancelDownload.current?.(); cancelDownload.current = null; }
     try {
-      const headers = await mediaHeaders(base), burn = details.embedded.find(t => t.index === choices.current.subtitle && t.bitmap)?.index ?? null;
+      const headers = saved ? undefined : await mediaHeaders(base), burn = details.embedded.find(t => t.index === choices.current.subtitle && t.bitmap)?.index ?? null;
       const compatible = forceTranscode.current || (Platform.OS === 'ios' && item.format === 'WEBM') ? { ...details, directPlay: false } : details;
-      const source = playbackPath(item.id, compatible, position, choices.current.audio, burn, choices.current.delay);
+      const source = saved ? { path: '', start: position, offset: 0 } : playbackPath(item.id, compatible, position, choices.current.audio, burn, choices.current.delay);
       if (!mounted.current || run !== generation.current) return;
-      const saved = disk.current;
-      const local = saved && position >= saved.offset && saved.audio === choices.current.audio && saved.burn === burn && saved.delay === choices.current.delay ? saved : null;
+      const diskCopy = disk.current;
+      const local = saved ? { uri: saved.uri, offset: 0 } : diskCopy && position >= diskCopy.offset && diskCopy.audio === choices.current.audio && diskCopy.burn === burn && diskCopy.delay === choices.current.delay ? diskCopy : null;
       const start = local ? position - local.offset : source.start;
       if (!local) { cancelDownload.current?.(); cancelDownload.current = null; disk.current = null; }
       // Native source replacements cannot be cancelled. Let an in-flight one
@@ -105,7 +108,7 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
       replacement.current = apply;
       await apply;
       if (!mounted.current || run !== generation.current) return;
-      if (!local) cancelDownload.current = downloadPlayback(base + source.path, headers, file => {
+      if (!local && headers) cancelDownload.current = downloadPlayback(base + source.path, headers, file => {
         if (!mounted.current || run !== generation.current) return;
         const saved = { uri: file, offset: source.offset, audio: choices.current.audio, burn, delay: choices.current.delay };
         disk.current = saved; setBuffered(details.duration);
@@ -113,7 +116,7 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
         // seek/retry instead of interrupting playback when a download finishes.
       });
     } catch (e) { if (mounted.current && run === generation.current) { replacing.current = false; setBusy(false); setError(e instanceof Error ? e.message : 'Could not play this file.'); } }
-  }, [base, item.id, player]);
+  }, [base, item.id, player, saved]);
   const recover = useCallback(() => {
     if (!mounted.current || !intent.current) return;
     if (retries.current++ >= 2) { setBusy(false); setError('The media service stopped responding. Check the connection, then try again.'); return; }
@@ -124,7 +127,7 @@ export function usePlayback({ base, data, item, initialPosition, onEnd }: { base
     mounted.current = true;
     void (async () => {
       try {
-        const details = await inspect(base, item.id); if (!mounted.current) return;
+        const details = saved?.info || await inspect(base, item.id); if (!mounted.current) return;
         infoRef.current = details; setInfo(details);
         const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true }))];
         const choice = prefs.current.tracks?.[trackKey(item)];

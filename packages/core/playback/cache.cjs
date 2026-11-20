@@ -31,7 +31,7 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
     const previous = owners.get(owner);
     if (previous && previous !== entry) {
       previous.owners?.delete(owner);
-      if (!previous.done && !previous.error && !previous.owners?.size) {
+      if (!previous.done && !previous.error && !previous.owners?.size && !previous.keepPreparing) {
         previous.error = Error('Playback preparation was replaced by a new position.'); previous.child?.kill();
       }
     }

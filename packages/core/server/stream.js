@@ -6,6 +6,11 @@ function createStreams({ dataDir = config.dataDir } = {}) {
   const transcode = async (req, res, { userId, preload = false, file, info, offset, audio, burn, delay = 0 }) => {
     await cache.serve(req, res, { file, input: file, info, offset, audio, burn, delay }, {}, `${userId}:${preload ? 'preload' : 'main'}`);
   };
+  transcode.offline = async (file, info, audio) => {
+    const entry = await cache.get({ file, input: file, info, offset: 0, audio, burn: null, delay: 0 });
+    entry.keepPreparing = true;
+    return entry;
+  };
   transcode.close = () => cache.close();
   transcode.releaseMain = userId => cache.release(`${userId}:main`);
   transcode.stop = (userId, keepPreload = false) => {
