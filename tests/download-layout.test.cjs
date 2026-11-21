@@ -260,6 +260,65 @@ test('metadata-only caches time out with peer guidance and retry restarts a stop
   assert.equal((await jobs.status('server'))[0].phase, 'metadata');
 });
 
+test('season jobs limit active transfers and rotate frozen metadata without losing the queue', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-season-queue-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const config = { url: 'http://localhost:8080/', username: 'host', storage: defaultStorage('server') };
+  const releases = Array.from({ length: 4 }, (_, index) => ({ hash: String(index + 1).repeat(40), title: 'Example Anime', kind: 'show', season: 2, episode: index + 1, seasonBatch: true }));
+  const [first, second, third, fourth] = releases.map(release => release.hash);
+  const torrents = new Map(), submitted = [], resumed = [];
+  let clock = 1000;
+  const options = {
+    dir, now: () => clock, configFor: async () => config,
+    submit: async (_target, _config, job) => {
+      submitted.push(job.hash);
+      const filename = `Example.Anime.S02E0${job.release.episode}.mkv`;
+      torrents.set(job.hash, { tags: job.tag, state: job.hash === first ? 'metaDL' : 'stoppedDL', progress: 0, save_path: job.stage, file: { name: filename, index: 0, priority: 1, size: 10000 } });
+    },
+    call: async (_target, route, data) => {
+      const hash = data?.hashes || data?.hash || route.split('=').at(-1);
+      const torrent = torrents.get(hash);
+      if (route.startsWith('torrents/info?')) return torrent ? [torrent] : [];
+      if (route.startsWith('torrents/files?')) return /metaDL/i.test(torrent.state) ? [] : [torrent.file];
+      if (route === 'torrents/stop') torrent.state = /metaDL/i.test(torrent.state) ? 'stoppedMetaDL' : 'stoppedDL';
+      if (route === 'torrents/start') {
+        if (torrent.state === 'stoppedMetaDL') { resumed.push(hash); torrent.state = 'metaDL'; }
+        else torrent.state = 'downloading';
+      }
+      if (route === 'torrents/renameFile') torrent.file.name = data.newPath;
+      if (route === 'torrents/setLocation') torrent.save_path = data.location;
+    }
+  };
+  let jobs = createDownloadJobs(options);
+  await jobs.enqueue('server', config, releases, false);
+  assert.deepEqual(submitted, []);
+  await jobs.process(); await jobs.process();
+  assert.deepEqual(submitted, [first]);
+  clock += 181000;
+  await jobs.process();
+  assert.deepEqual(submitted, [first, second]);
+  assert.equal(torrents.get(first).state, 'stoppedMetaDL');
+  assert.match((await jobs.status('server'))[0].error, /will retry when a slot opens/);
+  jobs.close();
+  jobs = createDownloadJobs(options);
+  t.after(() => jobs.close());
+  for (let tick = 0; tick < 6; tick++) await jobs.process();
+  assert.deepEqual(submitted, [first, second, third]);
+  assert.deepEqual((await jobs.status('server')).map(job => job.phase), ['queued', 'ready', 'ready', 'queued']);
+  clock += 31000;
+  await jobs.process();
+  assert.deepEqual(resumed, []);
+
+  torrents.get(second).progress = 1;
+  await jobs.process();
+  assert.deepEqual(submitted, [first, second, third, fourth]);
+  assert.deepEqual(resumed, []);
+  torrents.get(third).progress = 1;
+  for (let tick = 0; tick < 3; tick++) await jobs.process();
+  assert.deepEqual(resumed, [first]);
+  assert.equal(submitted.filter(hash => hash === first).length, 1);
+});
+
 test('a completed stopped torrent is accepted, while a refused start times out and can be retried', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-start-check-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const config = { url: 'http://localhost/', username: 'u', storage: defaultStorage('server') };

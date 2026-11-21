@@ -3,6 +3,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { createTorrents } = require('../desktop/torrents.cjs');
+const { join } = require('../desktop/download-layout.cjs');
 const config = require('./config');
 
 // The head account manages qBittorrent on this same host (including a shared Docker mount).
@@ -43,13 +44,15 @@ function createDownloads({ dataDir, library, tmdb, pathMap = JSON.parse(process.
       return path.join(await canonical(parent), path.basename(file));
     }
   }
+  const mappings = Object.entries(pathMap).sort((a, b) => b[0].length - a[0].length);
+  function mappedPath(file) {
+    const absolute = path.resolve(file);
+    const mapping = mappings.find(([source]) => within(source, absolute));
+    return mapping ? path.join(mapping[1], path.relative(mapping[0], absolute)) : absolute;
+  }
   async function validate(file) {
     if (typeof file !== 'string' || !path.isAbsolute(file) || /[\0\r\n]/.test(file)) throw new Error('Use an absolute folder on the Matro host.');
-    let mapped = path.resolve(file);
-    for (const [source, destination] of Object.entries(pathMap).sort((a, b) => b[0].length - a[0].length)) {
-      if (within(source, mapped)) { mapped = path.join(destination, path.relative(source, mapped)); break; }
-    }
-    const actual = await canonical(mapped);
+    const actual = await canonical(mappedPath(file));
     for (const folder of library.folders()) if (within(await canonical(folder.path), actual)) return actual;
     throw new Error('Add this destination under Folders first. Downloads must stay inside a shared library folder.');
   }
@@ -64,10 +67,34 @@ function createDownloads({ dataDir, library, tmdb, pathMap = JSON.parse(process.
       }
       return exists;
     },
-    onComplete: async () => { await library.rescanAll(); tmdb.sync(); }
+    onComplete: async job => {
+      const files = await Promise.all(job.plan.files.filter(file => file.type === 'video').map(file => validate(join(job.plan.root, file.newPath))));
+      for (const file of files) {
+        const stat = await fsp.stat(file);
+        if (!stat.isFile() || stat.size <= 0) throw new Error('The completed video file is unavailable.');
+      }
+      for (const folder of library.folders()) {
+        const root = await canonical(folder.path);
+        if (!files.some(file => within(root, file))) continue;
+        const result = await library.rescan(folder.id);
+        if (!result.ok) throw new Error(result.error);
+      }
+      tmdb.sync();
+    }
   });
   return {
     ...torrents,
+    async pendingLibraryFiles(root) {
+      const actualRoot = await canonical(root), excluded = new Set();
+      for (const job of await torrents.pendingVideos()) {
+        for (const file of job.paths) {
+          const mapped = mappedPath(file);
+          const actual = await canonical(mapped).catch(() => mapped);
+          if (within(actualRoot, actual)) excluded.add(path.join(root, path.relative(actualRoot, actual)));
+        }
+      }
+      return excluded;
+    },
     async configure(value) {
       if (value?.target && value.target !== 'server') throw new Error('Downloads run on the Matro host.');
       for (const field of ['movieRoot', 'showRoot']) await validate(host[field]);

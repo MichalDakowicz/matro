@@ -50,11 +50,19 @@ function planDownload(files, release, storage) {
   const videoCount = videos.length;
   const kind = release.kind === 'show' ? 'show' : 'movie';
   const parseEpisode = name => episodeOf(name, release.season ?? 1, { anime: release.anime === true });
+  if (release.seasonBatch && (videoCount !== 1 || typeof release.episode !== 'number' || release.episode < 1)) {
+    throw new Error('Expected one episode in this season download transfer; it was left stopped.');
+  }
   const episodes = new Map();
   if (kind === 'show') {
     const used = new Map();
     for (const video of videos) {
-      const episode = parseEpisode(video.name) || (videos.length === 1 && release.episode > 0 ? { season: release.season ?? 1, episode: release.episode } : null);
+      const parsed = release.seasonBatch ? episodeOf(video.name, release.season ?? 1) : parseEpisode(video.name);
+      const absoluteNumber = release.absoluteEpisode && animeAbsoluteEpisode(path.posix.basename(video.name))?.[1];
+      if (release.seasonBatch && (parsed && (parsed.season !== release.season || parsed.episode !== release.episode) || absoluteNumber && Number(absoluteNumber) !== release.absoluteEpisode)) {
+        throw new Error('The video does not match the selected season episode; it was left stopped.');
+      }
+      const episode = parsed || (videos.length === 1 && release.episode > 0 ? { season: release.season ?? 1, episode: release.episode } : null);
       if (!episode) continue;
       episodes.set(video.index, episode);
       if (!used.has(episode.season)) used.set(episode.season, new Set());

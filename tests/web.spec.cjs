@@ -100,6 +100,39 @@ test('viewers request a movie and the owner searches for a release without start
   }
 });
 
+test('an open web library picks up a catalog change without a reload', async () => {
+  const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'live-catalog-'));
+  const media = path.join(root, 'media'); await fs.mkdir(media);
+  await fs.copyFile(f.mkv, path.join(media, 'Northbound.mkv'));
+  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} } });
+  let browser;
+  try {
+    await app.createUser('head', 'local-catalog-test', 'admin'); await library.addFolder(media);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: `http://127.0.0.1:${server.address().port}` };
+    delete env.ELECTRON_RUN_AS_NODE;
+    browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
+    const page = await browser.firstWindow();
+    await browser.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].show(); });
+    await page.getByRole('textbox', { name: 'Username', exact: true }).fill('head');
+    await page.getByLabel('Password', { exact: true }).fill('local-catalog-test');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.locator('.dock [data-tab="movie"]').click();
+    await expect(page.getByRole('button', { name: 'Open Northbound', exact: true })).toBeVisible();
+    const newTitle = page.getByRole('button', { name: 'Open New Arrival', exact: true });
+    await expect(newTitle).toHaveCount(0);
+    const timeOrigin = await page.evaluate(() => performance.timeOrigin);
+    await fs.copyFile(f.mkv, path.join(media, 'New Arrival.mkv'));
+    await library.rescanAll();
+    await expect(newTitle).toBeVisible({ timeout: 12000 });
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
+  } finally {
+    await browser?.close();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  }
+});
+
 async function resumeAfterCrash(page) {
   const username = page.getByRole('textbox', { name: 'Username', exact: true });
   const resume = page.getByRole('button', { name: 'Resume watching', exact: true });

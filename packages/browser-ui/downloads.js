@@ -51,10 +51,11 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
   const posters = new Map();
   let previewsDisabled = false;
   const sending = new Set(), sent = new Set(), resolvedSelections = new Map();
+  let seasonDownload = null, seasonNotice = '', animeSeason = '1';
   const current = () => container?.isConnected;
   function announce(value) { message = value; const node = container?.querySelector('#download-message'); if (node) node.textContent = value; }
   const roots = () => config[target]?.storage;
-  const context = () => ({ target, label: labels[target], configured: !!config[target], sending, sent, upgrade: kind === 'movie' ? upgrade : null, qualityHeight, searching: loadingSeries, storage: roots() });
+  const context = () => ({ target, label: labels[target], configured: !!config[target], sending, sent, upgrade: kind === 'movie' ? upgrade : null, qualityHeight, searching: loadingSeries, seasonDownload, seasonNotice, animeSeason, storage: roots() });
   const addedMovie = movie => movie.torrents.some(item => sent.has(`${target}:${item.hash}`));
   const detailSource = () => open === 'movie' ? movieSelected : open === 'show' ? seriesSelected : open === 'discovery' ? groupSelected : null;
   const detailKind = () => open === 'discovery' ? groupSelected.kind : open;
@@ -67,9 +68,12 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
     const active = detail.contains(document.activeElement) ? document.activeElement : null;
     const form = preserveDrafts && detail.querySelector('#series-filter-form');
     const filters = form ? { ...seriesFilters, ...Object.fromEntries(new FormData(form)) } : seriesFilters;
+    const releaseFilters = open === 'discovery' && detail.open ? [...detail.querySelectorAll('[data-release-filter]')].map(input => [input.dataset.releaseFilter, input.value]) : [];
     const markup = open === 'movie' ? movieDetail(movieSelected, context()) : open === 'show' ? seriesDetail(seriesSelected, seriesData, filters, context()) : discoveryDetail(groupSelected, context());
     detail.innerHTML = `${markup}<p class="sr-only" data-detail-status role="status"></p>`;
     applyDetailPreview(); detail.setAttribute('aria-busy', String(loadingSeries));
+    for (const [key, value] of releaseFilters) detail.querySelector(`[data-release-filter="${key}"]`).value = value;
+    if (releaseFilters.length) filterDiscovery();
     if (!detail.open) detail.showModal();
     else if (active) {
       const replacement = [...detail.querySelectorAll('button, input, select')].find(node => node.tagName === active.tagName &&
@@ -84,6 +88,8 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
     const season = detail.querySelector('[data-preview-season]'); if (season) season.value = episodeSeason;
   }
   function resetDetail() {
+    if (seasonDownload?.batch) sent.delete(`${target}:${seasonDownload.batch.id}`);
+    seasonDownload = null; seasonNotice = ''; animeSeason = '1';
     open = null; movieSelected = seriesSelected = groupSelected = null; detailMetadata = detailOrigin = null; episodeSeason = '';
     detailId++; seriesId++; loadingSeries = false;
   }
@@ -259,6 +265,7 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
   }
   async function loadSeries(page = 1) {
     if (!seriesSelected) return;
+    if (page === 1) { seasonDownload = null; seasonNotice = ''; }
     loadingSeries = true; const id = ++seriesId, mount = mountId;
     announce('Loading releases for ' + seriesSelected.title + '…'); drawDetail();
     try {
@@ -267,6 +274,33 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
       seriesData = response; announce(`${response.releases.length} matching series releases. Nothing downloads until you select a release.`);
     } catch (error) { if (id === seriesId && mount === mountId && current() && detail?.open) announce(error.message); }
     finally { if (id === seriesId && mount === mountId && current() && detail?.open) { loadingSeries = false; drawDetail({ preserveDrafts: true }); } }
+  }
+  async function loadSeason(page = 1) {
+    const anime = open === 'discovery' && groupSelected?.kind === 'anime';
+    const form = detail.querySelector(anime ? '#anime-season-form' : '#series-filter-form');
+    if (!form?.reportValidity()) return;
+    let options;
+    if (anime) {
+      animeSeason = form.elements.season.value;
+      const animeSelections = [...detail.querySelectorAll('.discovery-release:not([hidden]) [data-selection]')].map(button => button.dataset.selection);
+      options = { animeSelections, aliases: alternateTitles(detailMetadata), season: animeSeason };
+    } else {
+      if (page === 1) seriesFilters = { ...seriesFilters, ...Object.fromEntries(new FormData(form)) };
+      if (seriesFilters.season === '' || seriesFilters.episode !== '') {
+        seasonDownload = null; seasonNotice = 'Enter a season and leave Episode blank to find a season download.'; drawDetail(); return;
+      }
+      options = { id: seriesSelected.id, season: seriesFilters.season, quality: seriesFilters.quality, page, seasonDownload: true };
+    }
+    if (page === 1) seasonDownload = null;
+    loadingSeries = true;
+    const id = ++seriesId, mount = mountId;
+    seasonNotice = 'Finding matching season releases…'; drawDetail();
+    const active = () => id === seriesId && mount === mountId && current() && detail?.open;
+    try {
+      const result = await api.downloadSeriesReleases(options);
+      if (active()) { seasonDownload = result; seasonNotice = ''; }
+    } catch (error) { if (active()) seasonNotice = error.message; }
+    finally { if (active()) { loadingSeries = false; drawDetail(); } }
   }
   async function search(page = 1) {
     const input = container.querySelector('#torrent-query'), nextQuery = page === 1 ? input.value.trim() : searchText;
@@ -306,25 +340,42 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
   }
   function chooseTarget(id) { target = id; localStorage.setItem('download-destination', target); listId++; refreshing = false; list = []; jobs = []; listError = ''; listRetryable = false; nextRefreshAt = 0; connectionFailures = 0; draw(); void refresh(); }
   async function sendRelease(button) {
-    const destination = target, { release: hash, selection: selectionId } = button.dataset, mount = mountId;
-    const key = `${destination}:${hash || selectionId}`, action = button.textContent;
+    const destination = target, { release: hash, selection: selectionId, seasonBatch: batchId, seasonPack } = button.dataset, mount = mountId;
+    const key = `${destination}:${batchId || hash || selectionId}`, action = button.textContent;
+    const source = detailSource();
+    const report = value => {
+      if (mount !== mountId || !current()) return;
+      if ((batchId || seasonPack) && detailSource() === source) {
+        seasonNotice = value;
+        const status = detail.querySelector('[data-season-notice]');
+        if (status) { status.textContent = value; status.hidden = false; }
+      }
+      announce(value);
+    };
     const downloadKind = button.closest('.download-release').querySelector('[data-release-kind]')?.value;
     const upgradeId = kind === 'movie' && upgrade ? upgrade.currentId : undefined;
     if (sending.has(key) || sent.has(key)) return;
     sending.add(key); button.disabled = true; button.textContent = 'Sending…';
     try {
       const choice = await seedChoice(config.seeding); if (!choice || mount !== mountId || !current()) return;
-      const result = await api.downloadAdd({ target: destination, ...(selectionId ? { selectionId, ...(downloadKind ? { downloadKind } : {}) } : { hash }), ...(upgradeId ? { upgradeId } : {}), ...choice }); sent.add(key);
+      const release = batchId ? { seasonDownloadId: batchId } : selectionId ? { selectionId, ...(downloadKind ? { downloadKind } : {}) } : { hash };
+      const result = await api.downloadAdd({ target: destination, ...release, ...(upgradeId ? { upgradeId } : {}), ...choice }); sent.add(key);
       if (selectionId && !hash && result.hash) {
         const canonical = `${destination}:${result.hash}`;
         resolvedSelections.set(key, canonical); sent.add(canonical);
       }
       if (choice.rememberSeed) config.seeding = choice.seed;
-      if (mount === mountId && current()) announce(result.duplicate ? `Already in qBittorrent on ${labels[destination]}.` : `Sent to qBittorrent on ${labels[destination]}. Preparing media files before starting.`);
-    } catch (error) { if (mount === mountId && current()) announce(error.message); }
+      if (batchId) {
+        for (const episodeHash of [...result.queued, ...result.duplicates]) sent.add(`${destination}:${episodeHash}`);
+        const duplicates = result.duplicates.length ? ` ${result.duplicates.length} already in Downloads.` : '';
+        report(`${plural(result.queued.length, 'episode')} queued on ${labels[destination]}.${duplicates}`);
+      } else {
+        report(result.queued ? `Already queued on ${labels[destination]}.` : result.duplicate ? `Already in qBittorrent on ${labels[destination]}.` : `Sent to qBittorrent on ${labels[destination]}. Preparing media files before starting.`);
+      }
+    } catch (error) { report(error.message); }
     finally {
       sending.delete(key);
-      if (button.isConnected) { button.disabled = sent.has(key); button.textContent = sent.has(key) ? 'Added' : action; if (!button.disabled && detail?.open) button.focus(); }
+      if (button.isConnected) { button.disabled = sent.has(key); button.textContent = sent.has(key) ? (batchId ? 'Queued' : 'Added') : action; if (!button.disabled && detail?.open) button.focus(); }
       if (mount === mountId && current() && sent.has(key) && kind === 'movie') {
         for (const card of container.querySelectorAll('[data-open-movie]')) {
           const movie = results?.movies.find(item => String(item.id) === card.dataset.openMovie);
@@ -403,6 +454,8 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
     if (data.seriesSource) { try { await api.downloadSeriesSource(data.seriesSource); } catch (error) { announce(error.message); } return; }
     if (data.seriesQuality !== undefined) { seriesFilters = { ...Object.fromEntries(new FormData(detail.querySelector('#series-filter-form'))), quality: data.seriesQuality }; await loadSeries(); return; }
     if (button.id === 'clear-series-filters') { seriesFilters = noFilters(); await loadSeries(); return; }
+    if (button.id === 'find-season-download') { await loadSeason(); return; }
+    if (button.id === 'season-more' && seasonDownload?.nextPage) { await loadSeason(seasonDownload.nextPage); return; }
     if (button.id === 'series-more' && seriesData?.nextPage) { await loadSeries(seriesData.nextPage); return; }
     if (button.id === 'open-download-settings') { settings.open(target); return; }
     if (button.id === 'refresh-downloads') { button.disabled = true; await refresh(true); if (button.isConnected) button.disabled = false; return; }
@@ -422,12 +475,13 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
     }
     if (data.retryJob) { try { await api.downloadRetry(data.retryJob); await refresh(); } catch (error) { announce(error.message); } return; }
     if (data.resultsPage) { await search(Number(data.resultsPage)); return; }
-    if (data.release || data.selection) await sendRelease(button);
+    if (data.release || data.selection || data.seasonBatch) await sendRelease(button);
   }
   async function submit(event) {
     event.preventDefault();
     if (event.target.id === 'torrent-search-form') { await search(); return; }
     if (event.target.id === 'series-filter-form') { seriesFilters = { ...seriesFilters, ...Object.fromEntries(new FormData(event.target)) }; await loadSeries(); return; }
+    if (event.target.id === 'anime-season-form') { await loadSeason(); return; }
     if (event.target.id === 'download-magnet-form') {
       const values = Object.fromEntries(new FormData(event.target)), destination = target, mount = mountId, button = event.target.querySelector('button');
       button.disabled = true;
@@ -442,18 +496,18 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
     else if (kind === 'anime') animeQuery = event.target.value;
     else query = event.target.value;
   };
-  const changeDetail = event => {
-    if (event.target.matches('[data-release-filter]')) {
-      const filters = [...detail.querySelectorAll('[data-release-filter]')];
-      let visible = 0;
-      for (const row of detail.querySelectorAll('.discovery-release')) {
-        row.hidden = filters.some(filter => filter.value && row.dataset[filter.dataset.releaseFilter] !== filter.value);
-        if (!row.hidden) visible++;
-      }
-      detail.querySelector('[data-filter-status]').textContent = `${plural(visible, 'matching release')}.`;
-      detail.querySelector('[data-no-release-matches]').hidden = visible > 0;
-      return;
+  function filterDiscovery() {
+    const filters = [...detail.querySelectorAll('[data-release-filter]')];
+    let visible = 0;
+    for (const row of detail.querySelectorAll('.discovery-release')) {
+      row.hidden = filters.some(filter => filter.value && row.dataset[filter.dataset.releaseFilter] !== filter.value);
+      if (!row.hidden) visible++;
     }
+    detail.querySelector('[data-filter-status]').textContent = `${plural(visible, 'matching release')}.`;
+    detail.querySelector('[data-no-release-matches]').hidden = visible > 0;
+  }
+  const changeDetail = event => {
+    if (event.target.matches('[data-release-filter]')) { filterDiscovery(); return; }
     if (!event.target.matches('[data-preview-season]')) return;
     episodeSeason = event.target.value;
     if (episodeSeason !== '') void loadDetailPreview(Number(episodeSeason));

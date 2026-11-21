@@ -58,7 +58,14 @@ export function transferCard(item, job, rate, seedLabel) {
     <div class="xfer-text"><div class="xfer-line"><span class="card-name">${esc(item.name)}</span><span class="card-meta mono">${percent}%</span></div><span class="progress-track" role="progressbar" aria-label="${esc(item.name)} download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><span class="progress-fill" data-p="${percent}"></span></span>
     <span class="xfer-path mono">Final: ${esc(job?.finalRoot || item.savePath)}</span>${item.temporaryPath && item.temporaryPath !== item.savePath ? `<span class="xfer-path mono">Temporary: ${esc(item.temporaryPath)}</span>` : ''}${job ? `<span class="xfer-path">${esc(seedLabel(job))}${done ? ` · ${job.selected} media/subtitle files · ${job.skipped} extras skipped` : ''}</span>` : ''}</div></div>`;
 }
-export const jobCard = job => `<div class="download-job xfer art" data-hue="${hueOf(job.title)}">${banner(job)}<div class="xfer-state"><b>${job.phase === 'error' ? 'Error' : job.phase === 'reconnecting' ? 'Reconnecting' : 'Preparing'}</b>${removeButton(job.hash, job.title)}</div><div class="xfer-text"><div class="xfer-line"><span class="card-name">${esc(job.title)}</span></div><span class="xfer-path">${job.phase === 'error' ? esc(job.error) : job.phase === 'reconnecting' ? 'Connection interrupted. Preparation will continue automatically when the server is available.' : 'Fetching metadata, selecting media and arranging files…'}</span>${job.phase === 'error' ? `<button class="pill small" data-retry-job="${esc(job.id)}">Retry preparation</button>` : ''}</div></div>`;
+export function jobCard(job) {
+  const code = job.kind === 'show' && job.episode > 0 ? ` · S${String(job.season).padStart(2, '0')}E${String(job.episode).padStart(2, '0')}` : '';
+  const title = job.title + code;
+  const state = { error: 'Error', reconnecting: 'Reconnecting', queued: 'Queued' }[job.phase] || 'Preparing';
+  const note = job.phase === 'reconnecting' ? 'Connection interrupted. Preparation will continue automatically when the server is available.'
+    : job.error || (job.phase === 'queued' ? 'Waiting for a season download slot.' : 'Fetching metadata, selecting media and arranging files…');
+  return `<div class="download-job xfer art" data-hue="${hueOf(job.title)}">${banner(job)}<div class="xfer-state"><b>${state}</b>${removeButton(job.hash, title)}</div><div class="xfer-text"><div class="xfer-line"><span class="card-name">${esc(title)}</span></div><span class="xfer-path">${esc(note)}</span>${job.phase === 'error' ? `<button class="pill small" data-retry-job="${esc(job.id)}">Retry preparation</button>` : ''}</div></div>`;
+}
 
 const dialogHead = (title, year) => `<div class="section-heading"><h2 id="download-detail-title"><span data-preview-title>${esc(title)}</span> <span class="dim year" data-preview-year>${esc(year)}</span></h2><button class="icon-button" data-close-detail aria-label="Close">×</button></div>`;
 const previewSlot = (details, overview = '') => `<div class="download-preview" data-preview-detail>${details ? `<p class="dlg-meta">${esc(details)}</p>` : ''}${overview ? `<p class="muted lede">${esc(overview)}</p>` : ''}</div>`;
@@ -86,8 +93,8 @@ export function setDetailPreview(dialog, metadata, source) {
     node.textContent = name ? ` · ${name}` : '';
   }
 }
-function releaseRow({ label, hash, selectionId, note, extra = '', disabled, text, cls = '', hints = {} }) {
-  return `<div class="download-release${cls}"${Object.entries(hints).map(([key, value]) => ` data-${key}="${esc(value)}"`).join('')}><span><strong>${label}${extra}</strong>${note}</span><button class="pill small" ${hash ? `data-release="${esc(hash)}"` : ''}${selectionId ? ` data-selection="${esc(selectionId)}"` : ''} ${disabled ? 'disabled' : ''}>${text}</button></div>`;
+function releaseRow({ label, hash, selectionId, batchId, seasonPack, note, extra = '', disabled, text, cls = '', hints = {} }) {
+  return `<div class="download-release${cls}"${Object.entries(hints).map(([key, value]) => ` data-${key}="${esc(value)}"`).join('')}><span><strong>${label}${extra}</strong>${note}</span><button class="pill small" ${hash ? `data-release="${esc(hash)}"` : ''}${selectionId ? ` data-selection="${esc(selectionId)}"` : ''}${batchId ? ` data-season-batch="${esc(batchId)}"` : ''}${seasonPack ? ' data-season-pack="true"' : ''} ${disabled ? 'disabled' : ''}>${text}</button></div>`;
 }
 export function movieDetail(movie, { target, label, configured, sending, sent, upgrade, qualityHeight }) {
   return `${dialogHead(movie.title, movie.year)}${previewSlot(movie.language || 'Language unavailable', movie.overview || 'No description available.')}
@@ -96,7 +103,22 @@ export function movieDetail(movie, { target, label, configured, sending, sent, u
       return releaseRow({ label: esc([item.quality, item.type, item.codec].filter(Boolean).join(' · ')), hash: item.hash, note: `<small>${esc(item.size)} · ${item.seeds} seeds · ${item.peers} peers</small>`, extra: upgrade ? `<span class="quality-badge">${higher ? 'Higher resolution' : 'Not higher resolution'}</span>` : '', disabled: !configured || pending || added || !higher, text: pending ? 'Sending…' : added ? 'Added' : upgrade ? `Upgrade on ${label}` : `Download to ${label}` });
     }).join('')}${configured ? '' : '<p class="dim detail-note">Connect this destination in Download settings first.</p>'}`;
 }
-export function seriesDetail(show, data, filters, { target, label, configured, sending, sent, searching }) {
+function seasonResult(data, { target, label, configured, sending, sent, searching }) {
+  const { season, pack, batch, expected, coverage, nextPage } = data;
+  const code = `Season ${season}`;
+  const item = pack || batch;
+  const key = `${target}:${pack?.hash || batch?.id}`;
+  const row = item ? releaseRow({
+    label: `${esc(code)} · ${esc(item.quality)}`, hash: pack?.hash, selectionId: pack?.selectionId, seasonPack: !!pack, batchId: batch?.id,
+    note: pack ? `<small>${esc(pack.title)} · ${esc(pack.size)} · ${pack.seeds} seeds</small>` : `<small>${batch.count} episodes from ${esc(batch.group)} · up to two transfers at a time</small>`,
+    disabled: !configured || searching || sending.has(key) || sent.has(key),
+    text: sending.has(key) ? 'Sending…' : sent.has(key) ? (batch ? 'Queued' : 'Added') : `Download season to ${label}`
+  }) : `<p class="dim detail-note">${expected ? `Found ${coverage} of ${expected} listed episodes from a matching release group for ${code}.` : `No numbered episodes are listed for ${code}.`}</p>`;
+  return `${row}${nextPage ? `<button type="button" class="text-button" id="season-more" ${searching ? 'disabled' : ''}>Search older releases for this season</button>` : ''}`;
+}
+const seasonSection = context => `<p class="detail-note" role="status" data-season-notice ${context.seasonNotice ? '' : 'hidden'}>${esc(context.seasonNotice)}</p>${context.seasonDownload ? seasonResult(context.seasonDownload, context) : ''}`;
+export function seriesDetail(show, data, filters, context) {
+  const { target, label, configured, sending, sent, searching } = context;
   const intro = `${dialogHead(show.title, show.year)}${previewSlot([show.language, show.status, ...(show.genres || [])].filter(Boolean).join(' · '), show.overview || show.summary)}`;
   const credit = `<p class="series-credit dim">Metadata from TVmaze · summaries shortened · <button class="text-button" data-series-source="${esc(show.id)}">TVmaze source</button> <button class="text-button" data-series-source="license">CC BY-SA 4.0</button></p>`;
   if (!show.indexed) return `${intro}<p class="muted detail-note">No release index is available for this series. You can add a series magnet on the Downloads page.</p>${credit}`;
@@ -108,7 +130,8 @@ export function seriesDetail(show, data, filters, { target, label, configured, s
   return `${intro}
     <form id="series-filter-form" class="series-filters"><div class="fields"><label class="field">Season<input name="season" type="number" min="0" max="99" placeholder="All" value="${esc(filters.season)}"></label><label class="field">Episode<input name="episode" type="number" min="0" max="999" placeholder="All" value="${esc(filters.episode)}"></label></div>
       <div class="chip-row" role="group" aria-label="Resolution"><button type="button" class="chip" data-series-quality="" aria-pressed="${!filters.quality}">All resolutions</button>${qualities.map(value => `<button type="button" class="chip" data-series-quality="${value}" aria-pressed="${filters.quality === value}">${value}</button>`).join('')}</div>
-      <div class="show-actions"><button class="pill primary small" ${searching ? 'disabled' : ''}>Apply series filters</button><button class="text-button" id="clear-series-filters" type="button" ${searching ? 'disabled' : ''}>Clear filters</button></div></form>
+      <div class="show-actions"><button class="pill primary small" ${searching ? 'disabled' : ''}>Apply series filters</button><button type="button" class="pill small" id="find-season-download" ${searching ? 'disabled' : ''}>Find season download</button><button class="text-button" id="clear-series-filters" type="button" ${searching ? 'disabled' : ''}>Clear filters</button></div></form>
+    ${seasonSection(context)}
     ${data ? `<p class="dim detail-note">${data.releases.length} matching releases from EZTV page${data.lastPage !== data.page ? `s ${data.page}–${data.lastPage}` : ` ${data.page}`} · ${data.total} releases indexed for this show. Use More releases for older results.</p>${seasonPicker(data.releases)}` : ''}${rows}
     <div class="show-actions"><button class="pill" id="series-more" ${data?.nextPage && !searching ? '' : 'disabled'}>More releases</button></div>
     ${credit}`;
@@ -122,7 +145,10 @@ function animeFilters(releases) {
   }).join('');
   return inputs ? `<div class="anime-release-filters" role="group" aria-label="Filter anime releases">${inputs}</div><p class="sr-only" data-filter-status role="status"></p>` : '';
 }
-export function discoveryDetail(group, { target, label, configured, sending, sent, upgrade, qualityHeight, storage }) {
+export function discoveryDetail(group, context) {
+  const { target, label, configured, sending, sent, upgrade, qualityHeight, storage } = context;
+  const animeSeason = group.kind === 'anime' && group.releases.some(item => item.downloadKind === 'show')
+    ? `<form id="anime-season-form" class="series-filters"><label>Season <input name="season" type="number" min="1" max="99" required value="${esc(context.animeSeason)}"></label><div class="show-actions"><button class="pill small" ${context.searching ? 'disabled' : ''}>Find season download</button></div></form>${seasonSection(context)}` : '';
   const rows = group.releases.map(item => {
     const key = `${target}:${item.hash || item.selectionId}`, pending = sending.has(key), added = sent.has(key);
     const higher = !upgrade || qualityHeight(item.quality) > upgrade.current.resolution;
@@ -137,7 +163,7 @@ export function discoveryDetail(group, { target, label, configured, sending, sen
     });
   }).join('');
   return `${dialogHead(group.title, group.year)}${previewSlot('')}${group.kind === 'anime' ? '<button class="text-button" data-preview-aliases hidden>Search with alternate titles</button>' : ''}
-    <p class="release-heading">${plural(group.releases.length, 'release')} · most seeded first</p>${group.kind === 'anime' ? animeFilters(group.releases) : ''}${seasonPicker(group.releases)}${rows}<p class="muted detail-note" data-no-release-matches hidden>No releases match these filters.</p>${configured ? '' : '<p class="dim detail-note">Connect this destination in Download settings first.</p>'}`;
+    <p class="release-heading">${plural(group.releases.length, 'release')} · most seeded first</p>${group.kind === 'anime' ? animeFilters(group.releases) : ''}${animeSeason}${seasonPicker(group.releases)}${rows}<p class="muted detail-note" data-no-release-matches hidden>No releases match these filters.</p>${configured ? '' : '<p class="dim detail-note">Connect this destination in Download settings first.</p>'}`;
 }
 export function upgradePanel(upgrade) {
   return `<section class="download-comparison"><div class="section-heading"><h2>${esc(upgrade.title)} · compare editions</h2><button id="close-upgrade" class="text-button">Browse all movies</button></div><p class="note">Your current edition is ${upgrade.current.width} × ${upgrade.current.height}. Only higher-resolution releases are enabled below. The previous file is kept; higher resolution alone does not guarantee a better encode.</p><div class="edition-grid">${upgrade.editions.map(item => `<article class="edition-card"><h3>${esc(item.name || 'Unavailable edition')}${item.favorite ? ' · Favorite' : ''}</h3>${item.error ? `<p class="download-error">${esc(item.error)}</p>` : `<dl><dt>Resolution</dt><dd>${item.width} × ${item.height}</dd><dt>Codec</dt><dd>${esc(item.codec)}</dd><dt>File size</dt><dd>${(item.size / 1073741824).toFixed(2)} GiB</dd><dt>Average data rate</dt><dd>${(item.size * 8 / item.duration / 1000000).toFixed(1)} Mb/s</dd></dl><div class="show-actions"><button class="pill small" data-edition-play="${item.id}">Play this edition</button><button class="pill small" data-edition-favorite="${item.id}" ${item.favorite ? 'disabled' : ''}>${item.favorite ? 'Saved favorite' : 'Make favorite'}</button></div>`}</article>`).join('')}</div><button class="text-button" id="refresh-editions">Refresh editions</button></section>`;

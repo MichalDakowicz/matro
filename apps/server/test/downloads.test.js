@@ -32,7 +32,12 @@ test('host downloads enforce roles, protect credentials and prepare without dele
   }
   const created = createApp({ dataDir, downloads: { fetch: mock, catalog: 'http://127.0.0.1/catalog/', prowlarr: { url: 'http://127.0.0.1/prowlarr/', key: 'fixture-prowlarr-key' }, hostConfig: { url: 'http://127.0.0.1:8080', movieRoot: path.join(media, 'Movies'), showRoot: path.join(media, 'Shows') } }, tmdb: { env: {} } });
   const { app, server, db, library } = created;
-  t.after(async () => { app.downloads.close(); await new Promise(resolve => server.close(resolve)); db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  t.after(async () => {
+    app.downloads.close();
+    await new Promise(resolve => server.close(resolve));
+    while (library.state.probing) await new Promise(resolve => setTimeout(resolve, 20));
+    db.close(); fs.rmSync(root, { recursive: true, force: true });
+  });
   await library.addFolder(media);
   await app.createUser('head', 'head password', 'admin');
   await app.createUser('viewer', 'viewer password', 'viewer');
@@ -81,6 +86,21 @@ test('host downloads enforce roles, protect credentials and prepare without dele
   for (let i = 0; i < 5; i++) await app.downloads.process();
   assert.equal((await request(head, api + 'jobs')).body.result[0].phase, 'ready');
   assert.ok(calls.some(c => c.route === 'torrents/start'));
+  assert.equal((await request('', '/api/library/revision')).status, 401);
+  const initial = (await request(viewer, '/api/library')).body;
+  const finished = path.join(storage.movieRoot, files[0].name);
+  fs.mkdirSync(path.dirname(finished), { recursive: true });
+  fs.writeFileSync(finished, 'mock transfer contents');
+  await library.rescanAll();
+  assert.equal((await request(viewer, '/api/library')).body.items.length, 0);
+  assert.equal((await request(viewer, '/api/library/revision')).body.catalogRevision, initial.catalogRevision);
+  torrent.progress = 1; torrent.state = 'stoppedUP';
+  await app.downloads.process();
+  const next = (await request(viewer, '/api/library')).body;
+  assert.deepEqual(next.items.map(item => item.group), ['Example']);
+  assert.notEqual(next.catalogRevision, initial.catalogRevision);
+  assert.equal((await request(viewer, '/api/library/revision')).body.catalogRevision, next.catalogRevision);
+  assert.equal((await request(head, api + 'jobs')).body.result[0].phase, 'complete');
   const kept = path.join(media, 'keep.txt'); fs.writeFileSync(kept, 'keep');
   assert.equal((await request(head, api + 'remove', { target: 'server', hash })).status, 200);
   assert.equal(fs.readFileSync(kept, 'utf8'), 'keep');
