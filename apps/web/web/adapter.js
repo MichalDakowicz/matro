@@ -42,12 +42,37 @@ export function createAdapter(session) {
     if (offlineSync) await offlineSync.catch(() => {});
     offlineSync = offline.flushSubtitles(({ id, query, body }) => api('POST', `/api/items/${id}/subtitles?${query}`, body)).catch(() => {});
     data.metadata = artwork(data.metadata);
-    session.user = data.user; latest = data;
     await offline.remember(data).catch(() => {});
-    if (data.metadataEnabled) follow();
+    acceptLibrary(data);
     return data;
   }
+  function acceptLibrary(data) {
+    session.user = data.user; latest = data;
+    if (data.metadataEnabled) follow();
+  }
   let offlineSync;
+  function watchDownloads(callback) {
+    let closed = false, checking = false;
+    const check = async () => {
+      const before = latest;
+      if (session.offline || closed || checking || document.hidden || !before?.catalogRevision) return;
+      checking = true;
+      try {
+        const { catalogRevision } = await get('/api/library/revision');
+        if (closed || latest !== before || catalogRevision === before.catalogRevision) return;
+        const data = await get('/api/library');
+        data.metadata = artwork(data.metadata);
+        if (closed || latest !== before) return;
+        acceptLibrary(data);
+        void offline.remember(data).catch(() => {});
+        callback({ items: data.items, folders: data.folders, metadata: data.metadata });
+      } catch { /* Check again after a temporary outage. */ }
+      finally { checking = false; }
+    };
+    const timer = setInterval(check, 5000);
+    document.addEventListener('visibilitychange', check);
+    return () => { closed = true; clearInterval(timer); document.removeEventListener('visibilitychange', check); };
+  }
   // TMDB matching runs on the server in the background; keep asking for a short while so posters appear as they arrive.
   function follow() {
     const run = ++polling; let quiet = 0, last = JSON.stringify(latest.metadata);
@@ -230,7 +255,7 @@ export function createAdapter(session) {
       };
       timer = setTimeout(poll, 1000);
       return () => { closed = true; clearTimeout(timer); };
-    }, onDownloads: noop, onClosing: noop,
+    }, onDownloads: watchDownloads, onClosing: noop,
     onMetadata: callback => { watchers.add(callback); return () => watchers.delete(callback); },
     searchMetadata: async ({ kind, query, year }) => { headOnly('Only the head account can change TMDB matches.'); const q = new URLSearchParams({ kind, query }); if (year) q.set('year', year); return artwork((await get(`/api/admin/metadata/search?${q}`)).results); },
     assignMetadata: async ({ key, tmdbId }) => { headOnly('Only the head account can change TMDB matches.'); const { metadata } = await post('/api/admin/metadata/assign', { key, tmdbId }); latest.metadata = artwork(metadata); return latest.metadata; },

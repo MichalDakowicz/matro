@@ -51,9 +51,11 @@ function titleFolder(root, rootIsTitle, file) {
 }
 
 // Returns catalog rows (without ids of the folder or timestamps) for every video under root.
-async function scan(root) {
+async function scan(root, exclude) {
   root = path.resolve(root);
-  const files = await walk(root);
+  const walked = await walk(root);
+  const excluded = await exclude?.(root);
+  const files = excluded ? walked.filter(file => !excluded.has(file)) : walked;
   const directVideo = files.some(file => path.dirname(file) === root);
   const seasonChildren = files.some(file => seasonNumber(path.relative(root, file).split(path.sep)[0]) !== undefined);
   const rootIsTitle = !isContainer(path.basename(root)) && (directVideo || seasonChildren);

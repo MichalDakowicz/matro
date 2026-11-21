@@ -139,7 +139,10 @@ function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = 
     createAnimeCatalog({ request: catalogRequest, body, url: animeCatalogURL }),
     ...extra ? [extra] : []
   ], { prowlarrEnabled: !!extra });
-  const jobs = createDownloadJobs({ dir, checkPaths, onPrepared, onComplete, configFor: async target => { await loaded; return settings[target]; }, call: async (target, route, data, config) => {
+  const jobs = createDownloadJobs({ dir, checkPaths, onPrepared, onComplete, submit: async (target, config, job) => {
+    await checkVersion(target, config);
+    await sendTorrent(target, config, job);
+  }, configFor: async target => { await loaded; return settings[target]; }, call: async (target, route, data, config) => {
     const response = await qb(target, route, data, true, config);
     return /^torrents\/(info|files)\?/.test(route) ? json(response) : body(response);
   } });
@@ -151,9 +154,48 @@ function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = 
     });
     writing = operation; return operation;
   }
+  async function submissionSettings(target, options) {
+    await loaded;
+    const config = settings[target];
+    if (!config) throw new Error('Configure this download destination first.');
+    const seed = typeof options.seed === 'boolean' ? options.seed : settings.seeding;
+    if (typeof seed !== 'boolean') throw new Error('Choose whether to seed after downloading before starting.');
+    return { config, seed };
+  }
+  async function checkVersion(target, config) {
+    const version = (await body(await qb(target, 'app/version', undefined, true, config))).trim().match(/^v?(\d+)\.(\d+)/);
+    if (!version || +version[1] < 5 || +version[1] === 5 && +version[2] < 1) throw new Error('Organized downloads require qBittorrent 5.1 or newer.');
+  }
+  async function sendTorrent(target, config, job) {
+    const { release, seed } = job;
+    const data = { urls: release.magnet || `magnet:?xt=urn:btih:${release.hash}&dn=${encodeURIComponent(release.title)}`, savepath: job.stage, autoTMM: 'false', useDownloadPath: 'false', stopped: 'false', stopCondition: 'MetadataReceived', tags: job.tag, contentLayout: 'Original', shareLimitAction: 'Stop', ratioLimit: seed ? '-1' : '0', seedingTimeLimit: seed ? '-1' : '0', inactiveSeedingTimeLimit: '-1' };
+    const response = await qb(target, 'torrents/add', data, true, config);
+    if ((await body(response)).trim() !== 'Ok.') throw new Error('qBittorrent did not accept this release.');
+  }
+  async function addSeason(target, options) {
+    if (options.hash || options.magnet || options.upgradeId) throw new Error('Choose a season download by itself.');
+    const batch = series.seasonBatch(options.seasonDownloadId);
+    const keys = batch.map(release => `${target}:${release.hash}`);
+    if (keys.some(key => inFlight.has(key))) throw new Error('An episode in this season is already being sent. Try again in a moment.');
+    for (const key of keys) inFlight.add(key);
+    try {
+      const { config, seed } = await submissionSettings(target, options);
+      if (options.rememberSeed) await rememberSeeding(seed);
+      return await jobs.enqueue(target, config, batch, seed);
+    } finally {
+      for (const key of keys) inFlight.delete(key);
+    }
+  }
   return {
     seriesSearch: options => series.search(options),
-    seriesReleases: options => series.releases(options),
+    seriesReleases: options => {
+      if (!Array.isArray(options?.animeSelections)) return series.releases(options);
+      const candidates = [...new Set(options.animeSelections.slice(0, 100))].flatMap(selectionId => {
+        const item = discovery.select(selectionId);
+        return item.release.kind === 'anime' && item.release.downloadKind === 'show' && item.release.hash && !item.resolve ? [{ ...item, selectionId }] : [];
+      });
+      return series.animeSeason(options, candidates);
+    },
     seriesSource: id => series.source(id),
     discovery: options => discovery.list(options),
     async config() { await loaded; return snapshot(); },
@@ -204,6 +246,7 @@ function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = 
     },
     async add(options) {
       const target = checkTarget(options?.target);
+      if (options.seasonDownloadId !== undefined) return addSeason(target, options);
       let hash = options?.hash, release = releases.get(hash);
       let selected;
       if (options?.selectionId !== undefined) {
@@ -232,10 +275,7 @@ function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = 
       inFlight.add(key);
       let resolvedKey;
       try {
-        await loaded; const config = settings[target];
-        if (!config) throw new Error('Configure this download destination first.');
-        const seed = typeof options.seed === 'boolean' ? options.seed : settings.seeding;
-        if (typeof seed !== 'boolean') throw new Error('Choose whether to seed after downloading before starting.');
+        const { config, seed } = await submissionSettings(target, options);
         let resolved;
         if (!hash) {
           resolved = await selected.resolve();
@@ -246,11 +286,11 @@ function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = 
           resolvedKey = canonicalKey;
           release.hash = hash;
         }
+        if (await jobs.hasSeasonJob(target, config, hash)) return { duplicate: true, queued: true, ...(selected ? { hash } : {}) };
         const existing = await json(await qb(target, `torrents/info?hashes=${hash}`, undefined, true, config));
         if (!Array.isArray(existing)) throw new Error('qBittorrent returned an invalid torrent list.');
         if (existing.length) return { duplicate: true, ...(selected ? { hash } : {}) };
-        const version = (await body(await qb(target, 'app/version', undefined, true, config))).trim().match(/^v?(\d+)\.(\d+)/);
-        if (!version || +version[1] < 5 || +version[1] === 5 && +version[2] < 1) throw new Error('Organized downloads require qBittorrent 5.1 or newer.');
+        await checkVersion(target, config);
         if (options.upgradeId) {
           if (release.kind !== 'movie') throw new Error('Series releases cannot be submitted as a movie upgrade.');
           if (!validateUpgrade) throw new Error('Movie upgrades are unavailable.');
@@ -285,6 +325,7 @@ function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = 
       return items.slice(0, 100).map(item => ({ hash: text(item.hash, 64), name: text(item.name), progress: Math.max(0, Math.min(1, Number(item.progress) || 0)), state: text(item.state, 80), speed: Math.max(0, Number(item.dlspeed) || 0), savePath: text(item.save_path, 2000), temporaryPath: text(item.download_path, 2000) }));
     },
     jobs: target => jobs.status(target),
+    pendingVideos: () => jobs.pendingVideos(),
     async remove(options) {
       const target = checkTarget(options?.target), hash = options?.hash;
       if (typeof hash !== 'string' || !hashPattern.test(hash)) throw new Error('Choose a valid download to remove.');
@@ -299,6 +340,7 @@ function createTorrents({ dir, secure, fetch = globalThis.fetch, catalogFetch = 
         if (matching.some(job => job.url !== config.url || job.username !== config.username)) throw new Error('Reconnect the original download client before removing this download.');
         const info = await json(await qb(target, `torrents/info?hashes=${hash}`, undefined, true, config));
         if (!Array.isArray(info)) throw new Error('qBittorrent returned an invalid torrent list.');
+        if (info.length && matching.some(job => job.release.seasonBatch) && !matching.some(job => String(info[0].tags || '').split(',').some(tag => tag.trim() === job.tag))) return;
         if (info.length) await qb(target, 'torrents/delete', { hashes: hash, deleteFiles: 'false' }, true, config);
       });
       return { removed: true, filesKept: true };

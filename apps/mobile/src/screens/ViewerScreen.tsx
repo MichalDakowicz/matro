@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, BackHandler, FlatList, Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Alert, AppState, BackHandler, FlatList, Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { changeProgress, library, mediaHeaders, request, ServerError, type Item, type Library, type MovieRequest, type ScannerStatus } from '../lib/server';
 import { progressRecovery, recoveryScope } from '../lib/storage';
@@ -27,6 +27,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const [selected, setSelected] = useState<string | null>(null), [playing, setPlaying] = useState<{ item: Item; start?: number; queue: Item[]; saved?: SavedMedia } | null>(null);
   const [offline, setOffline] = useState(false), playRun = useRef(0);
   const [refreshing, setRefreshing] = useState(false), [account, setAccount] = useState(false), [folder, setFolder] = useState<string | null>(null);
+  const revision = useRef<string | undefined>(undefined);
   const alerts = useMovieRequestAlerts(base, !offline && data?.user.role === 'admin' && data.movieRequestPushEnabled === true);
   const openedAlerts = useRef(0);
   const { width } = useWindowDimensions(), insets = useSafeAreaInsets(), columns = Math.max(3, Math.floor((width - 24) / 108)), cardWidth = (width - 36 - (columns - 1) * 12) / columns;
@@ -34,6 +35,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     setRefreshing(true); setError('');
     try {
       const next = await library(base), auth = await mediaHeaders(base);
+      revision.current = next.catalogRevision;
       setData({ ...next, progress: normalizeProgress(next.progress) }); setHeaders(auth); setOffline(false);
       void rememberLibrary(base, next).catch(() => {});
     }
@@ -45,7 +47,29 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     }
     finally { setRefreshing(false); }
   }, [base, onSignedOut]);
-  useEffect(() => { void load(); }, [base]);
+  useEffect(() => { revision.current = undefined; void load(); }, [base]);
+  useEffect(() => {
+    let closed = false, checking = false;
+    const check = async () => {
+      const before = revision.current;
+      if (offline || closed || checking || AppState.currentState === 'background' || !before) return;
+      checking = true;
+      try {
+        const { catalogRevision } = await request(base, '/api/library/revision');
+        if (closed || revision.current !== before || catalogRevision === before) return;
+        const next = await library(base);
+        if (closed || revision.current !== before) return;
+        revision.current = next.catalogRevision;
+        void rememberLibrary(base, next).catch(() => {});
+        setData(current => current && { ...current, items: next.items, folders: next.folders, metadata: next.metadata, scanner: next.scanner, catalogRevision: next.catalogRevision });
+      } catch (error) {
+        if (!closed && error instanceof ServerError && error.status === 401) onSignedOut();
+      } finally { checking = false; }
+    };
+    const timer = setInterval(check, 5000);
+    const subscription = AppState.addEventListener('change', state => { if (state === 'active') void check(); });
+    return () => { closed = true; clearInterval(timer); subscription.remove(); };
+  }, [base, offline, onSignedOut]);
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (playing) return false;

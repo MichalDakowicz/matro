@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const { createTorrents } = require('./torrents.cjs');
 const { createPathChecker, destinationFile } = require('./download-files.cjs');
 const { createMovieUpgrades } = require('./movie-upgrades.cjs');
+const { join } = require('./download-layout.cjs');
 const { mediaFS } = require('./ssh-media.cjs');
 const { createEmbeddedSubtitles } = require('./embedded-subtitles.cjs');
 const { remote } = require('./ssh-media.cjs');
@@ -20,6 +21,7 @@ let win, streams, storage, segments, scanner, metadata, torrents, upgrades, embe
 if (!app.isPackaged && process.env.MATRO_USER_DATA) app.setPath('userData', path.resolve(process.env.MATRO_USER_DATA));
 let state = { folders: [], items: [], progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 } };
 let writeQueue = Promise.resolve();
+let scanQueue = Promise.resolve();
 function persist() { const contents = JSON.stringify(state); writeQueue = writeQueue.catch(() => {}).then(async () => { await fs.writeFile(storage + '.tmp', contents); await fs.rename(storage + '.tmp', storage); }); return writeQueue; }
 const find = id => { const item = state.items.find(i => i.id === id); if (!item) throw new Error('Media is no longer in the library.'); return item; };
 function handle(channel, fn) { ipcMain.handle(channel, (event, ...args) => { if (event.sender !== win.webContents || !event.senderFrame?.url.startsWith('matro://app/')) throw new Error('Untrusted caller'); return fn(...args); }); }
@@ -47,25 +49,79 @@ const subtitleStyle = value => {
   return { size: Math.max(.5, Math.min(2, Number(style.size) || 1)), font: pick('font', ['sans', 'classic', 'serif', 'mono', 'casual'], 'sans'), background: pick('background', ['none', 'light', 'dark', 'solid'], 'light'), bold: !!style.bold, italic: !!style.italic, edge: pick('edge', ['none', 'outline', 'shadow'], 'none') };
 };
 const regroup = items => upgrades ? upgrades.restore(applyPreludes(groupFolders(items.filter(item => !state.pendingDownloadFiles?.[item.path])), state.preludes)) : applyPreludes(groupFolders(items), state.preludes);
-async function rescan() {
-  const results = await Promise.all(state.folders.map(async root => { try { return { root, items: await scan(root) }; } catch { return { root, error: 'Folder unavailable. Check the drive or network connection.' }; } }));
-  for (const result of results) if (result.items) state.items = state.items.filter(i => i.root !== result.root).concat(result.items);
+const contains = (root, file) => {
+  const relative = path.relative(root, file);
+  return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
+};
+const downloadFiles = { remote, connections: () => state.sshConnections || [] };
+async function pendingLibraryFiles() {
+  const excluded = new Set();
+  const jobs = await torrents.pendingVideos();
+  const settings = jobs.some(job => job.target === 'server' && job.sshHost === undefined) ? (await torrents.config()).server : null;
+  for (const job of jobs) {
+    const config = job.sshHost === undefined && settings?.url === job.url ? settings : job;
+    for (const file of job.paths) {
+      try { excluded.add(destinationFile(downloadFiles, job.target, config, file)); }
+      catch { /* A removed SSH source is unavailable to the library scan. */ }
+    }
+  }
+  return excluded;
+}
+const scanLibraryFolder = root => scan(root, pendingLibraryFiles);
+function rescan(roots = state.folders) {
+  scanQueue = scanQueue.catch(() => {}).then(() => scanFolders(roots.filter(root => state.folders.includes(root))));
+  return scanQueue;
+}
+async function scanFolders(roots) {
+  const results = await Promise.all(roots.map(async root => { try { return { root, items: await scanLibraryFolder(root) }; } catch { return { root, error: 'Folder unavailable. Check the drive or network connection.' }; } }));
+  const previous = new Map(state.items.map(item => [item.id, item]));
+  for (const { root, items } of results) if (items && state.folders.includes(root)) {
+    for (const item of items) item.added = previous.get(item.id)?.added ?? item.added;
+    state.items = state.items.filter(i => i.root !== root).concat(items);
+  }
   state.items = regroup([...new Map(state.items.map(item => [item.id, item])).values()]);
   state.libraryVersion = 2;
   await persist(); scanner?.invalidate(); void metadata?.sync(state.items); return { ...state, warnings: results.filter(r => r.error).map(r => `${r.root}: ${r.error}`) };
+}
+async function importCompletedShow(job, config) {
+  const localPath = file => destinationFile(downloadFiles, job.target, config, file);
+  const files = job.plan.files.filter(file => file.type === 'video').map(file => localPath(join(job.plan.root, file.newPath)));
+  for (const file of files) {
+    const stat = await mediaFS.stat(file);
+    if (!stat.isFile() || stat.size <= 0) throw new Error('The completed episode file is unavailable.');
+  }
+  const roots = state.folders.filter(root => files.some(file => contains(root, file)));
+  if (roots.length) await rescan(roots);
+  const known = new Set(state.items.map(item => item.path));
+  const additions = files.filter(file => !known.has(file)).map(file => {
+    const item = describe(file, roots.find(root => contains(root, file)) || '');
+    return { ...item, kind: 'show', group: job.release.title, season: item.season ?? job.release.season ?? 1, episode: item.episode ?? (job.release.episode || null) };
+  });
+  if (additions.length) { state.items = regroup(state.items.concat(additions)); await persist(); }
+}
+function publishDownloads() {
+  if (win && !win.isDestroyed()) win.webContents.send('library:downloads', { items: state.items, movieEditions: state.movieEditions });
 }
 app.whenReady().then(async () => {
   storage = path.join(app.getPath('userData'), 'library.json');
   embeddedSubtitles = createEmbeddedSubtitles({ dir: path.join(app.getPath('userData'), 'subtitles'), stat: mediaFS.stat, probe, remote,
     extractLocal: (file, index) => run(ffmpeg, ['-v', 'error', '-nostdin', '-i', file, '-map', '0:' + index, '-c:s', 'webvtt', '-f', 'webvtt', 'pipe:1'], { timeout: 180000 }) });
-  const downloadFiles = { remote, connections: () => state.sshConnections || [] };
   const env = { ...readEnv([path.join(app.getAppPath(), '.env'), path.join(app.getPath('userData'), '.env')]), ...process.env };
   const prowlarr = env.MATRO_PROWLARR_URL || env.MATRO_PROWLARR_API_KEY ? { url: env.MATRO_PROWLARR_URL, key: env.MATRO_PROWLARR_API_KEY } : undefined;
   upgrades = createMovieUpgrades({ getState: () => state, probe, stat: mediaFS.stat, describe, persist, resolveFile: (target, config, file) => destinationFile(downloadFiles, target, config, file), metadata: item => metadata?.snapshot()?.[item.id] });
   const dev = app.isPackaged ? {} : process.env;
-  torrents = createTorrents({ dir: app.getPath('userData'), secure: safeStorage, catalogFetch: (url, options) => net.fetch(url, options), videos: app.getPath('videos'), prowlarr,
-    catalog: dev.MATRO_TORRENT_API || undefined, seriesShowsURL: dev.MATRO_SERIES_METADATA_API || undefined, seriesReleasesURL: dev.MATRO_SERIES_RELEASES_API || undefined, animeCatalogURL: dev.MATRO_ANIME_API || undefined,
-    validateUpgrade: (id, release) => upgrades.validate(id, release), onPrepared: (job, config) => upgrades.prepared(job, config), onComplete: async (job, config) => { await upgrades.completed(job, config); scanner?.invalidate(); void metadata?.sync(state.items); if (win && !win.isDestroyed()) win.webContents.send('library:downloads', state); }, checkPaths: createPathChecker(downloadFiles) });
+  torrents = createTorrents({
+    dir: app.getPath('userData'), secure: safeStorage, catalogFetch: (url, options) => net.fetch(url, options), videos: app.getPath('videos'), prowlarr,
+    catalog: dev.MATRO_TORRENT_API || undefined, seriesShowsURL: dev.MATRO_SERIES_METADATA_API || undefined,
+    seriesReleasesURL: dev.MATRO_SERIES_RELEASES_API || undefined, animeCatalogURL: dev.MATRO_ANIME_API || undefined,
+    validateUpgrade: (id, release) => upgrades.validate(id, release), onPrepared: (job, config) => upgrades.prepared(job, config),
+    onComplete: async (job, config) => {
+      if (job.release.kind === 'show') await importCompletedShow(job, config);
+      else await upgrades.completed(job, config);
+      scanner?.invalidate(); void metadata?.sync(state.items); publishDownloads();
+    },
+    checkPaths: createPathChecker(downloadFiles)
+  });
   segments = createSegments(path.join(app.getPath('userData'), 'fingerprints'));
   // TMDB lookups are opt-in: they run only when a key is configured in .env (project or user-data folder) or the environment.
   metadata = createMetadata({ dir: app.getPath('userData'), fetch: (url, options) => net.fetch(url, options), auth: credentials(env),
@@ -113,7 +169,7 @@ app.whenReady().then(async () => {
   handle('downloads:series-releases', options => torrents.seriesReleases(options));
   handle('downloads:series-source', id => shell.openExternal(torrents.seriesSource(id)));
   handle('downloads:upgrade', id => upgrades.context(id));
-  handle('downloads:favorite', async options => { const result = await upgrades.favorite(options?.sourceId, options?.id); win.webContents.send('library:downloads', state); return result; });
+  handle('downloads:favorite', async options => { const result = await upgrades.favorite(options?.sourceId, options?.id); publishDownloads(); return result; });
   handle('downloads:jobs', async target => downloadArtwork(await torrents.jobs(target)));
   handle('downloads:retry', id => torrents.retry(id));
   handle('downloads:remove', options => torrents.remove(options));
@@ -136,7 +192,7 @@ app.whenReady().then(async () => {
     const root = remote.register(options);
     const wasSaved = state.folders.includes(root);
     try {
-      const items = await scan(root);
+      const items = await scanLibraryFolder(root);
       if (!state.folders.includes(root)) state.folders.push(root);
       state.sshConnections ||= [];
       if (!state.sshConnections.some(config => remote.register(config) === root)) state.sshConnections.push({ ...remote.configs.get(root), root });
@@ -148,7 +204,7 @@ app.whenReady().then(async () => {
       throw new Error(`Could not read SSH media: ${error.message}. Check that SSH key login works in your terminal and Python 3 is installed on the server.`);
     }
   });
-  handle('library:folder', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (result.canceled) return state; const root = result.filePaths[0]; const items = await scan(root); if (!state.folders.includes(root)) state.folders.push(root); const existing = new Map(state.items.map(i => [i.id, i])); for (const item of items) existing.set(item.id, item); state.items = regroup([...existing.values()]); await persist(); scanner.invalidate(); void metadata.sync(state.items); return state; });
+  handle('library:folder', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (result.canceled) return state; const root = result.filePaths[0]; const items = await scanLibraryFolder(root); if (!state.folders.includes(root)) state.folders.push(root); const existing = new Map(state.items.map(i => [i.id, i])); for (const item of items) existing.set(item.id, item); state.items = regroup([...existing.values()]); await persist(); scanner.invalidate(); void metadata.sync(state.items); return state; });
   handle('library:files', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Media', extensions: [...extensions] }, { name: 'All files', extensions: ['*'] }] }); return result.canceled ? state : importFiles(result.filePaths); });
   handle('library:import', files => { if (!Array.isArray(files) || files.length > 5000) throw new Error('Invalid file selection'); return importFiles(files); });
   handle('library:rescan', rescan);

@@ -2,22 +2,34 @@ const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('node:fs/promises'), path = require('node:path'), http = require('node:http');
 
 test('Movies and Series have separate searches and series filters send episode files to Shows', async () => {
-  const profile = path.resolve('.test-media', 'series-ui-' + Date.now()), showRoot = path.join(profile, 'Shows'), movieRoot = path.join(profile, 'Movies'); await fs.mkdir(profile, { recursive: true });
+  const profile = path.resolve('.test-media', 'series-ui-' + Date.now()), showRoot = path.join(profile, 'Shows'), movieRoot = path.join(profile, 'Movies');
+  await fs.mkdir(showRoot, { recursive: true });
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, folders: [showRoot], items: [] }));
   const hash = 'abcdef12' + '1'.repeat(32), second = '2'.repeat(40), old = '3'.repeat(40);
-  let metadataRequests = 0, releaseRequests = 0, movieRequests = 0, torrent = null, added = null;
+  let metadataRequests = 0, releaseRequests = 0, movieRequests = 0, torrent = null, added = null, queuedEpisode = null;
   const files = [{ index: 0, name: 'Release/video.mkv', size: 10000, priority: 1 }, { index: 1, name: 'Release/English.srt', size: 100, priority: 1 }, { index: 2, name: 'Release/README.txt', size: 50, priority: 1 }, { index: 3, name: 'Release/poster.jpg', size: 50, priority: 1 }];
-  const release = (season, episode, quality, hash) => ({ hash, imdb_id: '1234567', season: String(season), episode: String(episode), filename: `Sample.Show.S0${season}E0${episode}.${quality}.x265.mkv`, title: `Sample Show S0${season}E0${episode} ${quality} <img src=x onerror=window.injected=true>`, seeds: 10, peers: 2, size_bytes: 1000000000 });
+  const release = (season, episode, quality, hash) => ({ hash, imdb_id: '1234567', season: String(season), episode: String(episode), filename: `Sample.Show.S0${season}E0${episode}.${quality}.WEB-DL.x265-TEAM.mkv`, title: `Sample Show S0${season}E0${episode} ${quality} <img src=x onerror=window.injected=true>`, seeds: 10, peers: 2, size_bytes: 1000000000 });
   const server = http.createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     const url = new URL(req.url, 'http://fixture'), data = new URLSearchParams(body), json = value => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(value)); };
     if (url.pathname === '/metadata/search/shows') { metadataRequests++; json([{ show: { id: 7, name: 'Sample Show', premiered: '2021-01-01', language: 'English', genres: ['Drama'], status: 'Ended', externals: { imdb: 'tt1234567' }, summary: '<b>A series summary</b>' } }]); return; }
-    if (url.pathname === '/series/get-torrents') { releaseRequests++; json({ torrents_count: 200, torrents: url.searchParams.get('page') === '1' ? [release(1, 1, '720p', old)] : [release(2, 3, '1080p', hash), release(2, 4, '720p', second)] }); return; }
+    if (url.pathname === '/metadata/shows/7/episodes') { json([{ season: 2, number: 3 }, { season: 2, number: 4 }]); return; }
+    if (url.pathname === '/series/get-torrents') { releaseRequests++; json({ torrents_count: 200, torrents: url.searchParams.get('page') === '1' ? [release(1, 1, '720p', old)] : [release(2, 3, '1080p', hash), release(2, 4, '1080p', second)] }); return; }
     if (url.pathname === '/movies/list_movies.json') { movieRequests++; json({ status: 'ok', data: { movie_count: 0 } }); return; }
     if (url.pathname.endsWith('/auth/login')) { res.setHeader('Set-Cookie', 'SID=fixture; path=/'); res.end('Ok.'); return; }
     if (url.pathname.endsWith('/app/version')) { res.end('v5.1.4'); return; }
-    if (url.pathname.endsWith('/torrents/info')) { json(torrent ? [torrent] : []); return; }
-    if (url.pathname.endsWith('/torrents/add')) { added = data; torrent = { hash, name: 'Sample Show', tags: data.get('tags'), save_path: data.get('savepath'), state: 'stoppedDL', progress: 0 }; res.end('Ok.'); return; }
-    if (url.pathname.endsWith('/torrents/files')) { json(files); return; }
+    if (url.pathname.endsWith('/torrents/info')) {
+      const requested = url.searchParams.get('hashes');
+      json([torrent, queuedEpisode].filter(item => item && (!requested || requested === item.hash))); return;
+    }
+    if (url.pathname.endsWith('/torrents/add')) {
+      const actualHash = new URL(data.get('urls')).searchParams.get('xt').split(':').at(-1);
+      const item = { hash: actualHash, name: 'Sample Show', tags: data.get('tags'), save_path: data.get('savepath'), state: 'stoppedDL', progress: 0 };
+      if (actualHash === second) queuedEpisode = { ...item, state: 'metaDL' };
+      else { added = data; torrent = item; }
+      res.end('Ok.'); return;
+    }
+    if (url.pathname.endsWith('/torrents/files')) { json(url.searchParams.get('hash') === second ? [] : files); return; }
     if (url.pathname.endsWith('/torrents/stop')) { res.end(); return; }
     if (url.pathname.endsWith('/torrents/filePrio')) { for (const index of data.get('id').split('|').map(Number)) files.find(file => file.index === index).priority = +data.get('priority'); res.end(); return; }
     if (url.pathname.endsWith('/torrents/renameFile')) { files.find(file => file.name === data.get('oldPath')).name = data.get('newPath'); res.end(); return; }
@@ -58,12 +70,28 @@ test('Movies and Series have separate searches and series filters send episode f
     expect(files[0].name).toBe('Sample Show/S02/S02E03 Sample Show (2021) [1080p].mkv');
     expect(files[1].name).toBe('Sample Show/S02/S02E03 Sample Show (2021) [1080p].en.srt');
     expect(files.slice(2).every(file => file.priority === 0)).toBe(true);
+    await page.locator('#series-filter-form [name="episode"]').fill('');
+    await page.getByRole('button', { name: 'Find season download', exact: true }).click();
+    await expect(page.getByText('2 episodes from TEAM', { exact: false })).toBeVisible();
+    expect(queuedEpisode).toBeNull();
+    await page.getByRole('button', { name: 'Download season to This PC', exact: true }).click();
+    await expect(page.locator('#download-detail [data-season-notice]')).toContainText('1 episode queued on This PC. 1 already in Downloads.');
+    await expect.poll(() => queuedEpisode?.hash).toBe(second);
     await page.screenshot({ path: 'test-results/series-downloader.png' });
     await page.keyboard.press('Escape');
     await page.getByRole('button', { name: 'Movies', exact: true }).click();
     await expect(page.getByRole('searchbox', { name: 'Search movie torrents', exact: true })).toHaveValue('A movie query');
     await expect(page.locator('.download-destination .mono')).toContainText(movieRoot);
     expect(metadataRequests).toBe(1); expect(movieRequests).toBe(0); expect(releaseRequests).toBe(2);
+    await page.locator('.dock [data-tab="show"]').click();
+    await expect(page.getByRole('button', { name: 'Open Sample Show', exact: true })).toHaveCount(0);
+    const finished = path.join(showRoot, files[0].name);
+    await fs.mkdir(path.dirname(finished), { recursive: true });
+    await fs.writeFile(finished, 'mock episode contents');
+    torrent.progress = 1; torrent.state = 'stoppedUP';
+    await expect(page.getByRole('button', { name: 'Open Sample Show', exact: true })).toBeVisible();
+    const { items } = await page.evaluate(() => window.matro.load());
+    expect(items.map(item => [item.kind, item.season, item.episode])).toEqual([['show', 2, 3]]);
     expect(errors).toEqual([]);
   } finally { await app?.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });

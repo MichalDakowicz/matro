@@ -1,11 +1,12 @@
 const fs = require('node:fs/promises');
+const { randomUUID } = require('node:crypto');
 const path = require('node:path');
 const { scan } = require('./scan');
 const { probe } = require('./media');
 const { tx } = require('./db');
 
 // `autoProbe: false` is for one-shot tools such as the CLI, which should exit instead of probing every file.
-function createLibrary(db, { autoProbe = true } = {}) {
+function createLibrary(db, { autoProbe = true, excludedFiles } = {}) {
   const q = {
     folders: db.prepare('SELECT id, path, added, (SELECT COUNT(*) FROM items WHERE folder_id = folders.id) AS items FROM folders ORDER BY path'),
     folder: db.prepare('SELECT * FROM folders WHERE id = ?'),
@@ -25,19 +26,23 @@ function createLibrary(db, { autoProbe = true } = {}) {
     setProbe: db.prepare('UPDATE items SET probe = ?, duration = ? WHERE id = ?'),
     unprobed: db.prepare('SELECT id, path FROM items WHERE probe IS NULL LIMIT 1')
   };
-  const state = { scanning: false, probing: false, lastScan: null };
-  const pending = new Map();
+  const state = { scanning: false, probing: false, lastScan: null, revision: randomUUID() };
+  const pending = new Map(), folderScans = new Map();
+  let allFoldersScan;
+  const changed = () => { state.revision = randomUUID(); };
 
-  async function rescan(folderId) {
+  async function scanFolder(folderId) {
     const folder = q.folder.get(folderId);
     if (!folder) throw new Error('Unknown folder.');
     let rows;
-    try { rows = await scan(folder.path); }
+    try { rows = await scan(folder.path, excludedFiles); }
     catch (error) { return { folder: folder.path, ok: false, error: error.code === 'ENOENT' ? 'Folder is not available.' : error.message }; }
     const known = new Map(q.existing.all(folderId).map(row => [row.id, row]));
     const now = Date.now();
     const stats = await Promise.all(rows.map(row => fs.stat(row.path).catch(() => null)));
     const live = rows.map((row, i) => [row, stats[i]]).filter(([, stat]) => stat);
+    if (!q.folder.get(folderId)) return { folder: folder.path, ok: false, error: 'Folder was removed from the library.' };
+    const catalogChanged = live.length !== known.size || live.some(([row]) => !known.has(row.id));
     tx(db, () => {
       for (const [row, stat] of live) {
         q.upsert.run(row.id, folderId, row.path, row.title, row.groupId, row.groupTitle, row.year ?? null, row.kind, row.season, row.episode, stat.size, Math.floor(stat.mtimeMs), now);
@@ -46,18 +51,28 @@ function createLibrary(db, { autoProbe = true } = {}) {
       // Files that vanished from a folder we could read are gone from the catalog; their watch state goes with them.
       for (const id of known.keys()) q.dropItem.run(id);
     });
+    if (catalogChanged) changed();
     if (autoProbe) probeSoon();
     return { folder: folder.path, ok: true, items: live.length, removed: known.size };
   }
-  async function rescanAll() {
-    if (state.scanning) return state.last;
+  function rescan(folderId) {
+    const prior = folderScans.get(folderId) || Promise.resolve();
+    const task = prior.catch(() => {}).then(() => scanFolder(folderId)).finally(() => {
+      if (folderScans.get(folderId) === task) folderScans.delete(folderId);
+    });
+    folderScans.set(folderId, task);
+    return task;
+  }
+  function rescanAll() {
+    if (allFoldersScan) return allFoldersScan;
     state.scanning = true;
-    try {
+    allFoldersScan = (async () => {
       const results = [];
       for (const folder of q.folders.all()) results.push(await rescan(folder.id));
-      state.last = { at: Date.now(), results };
-      return state.last;
-    } finally { state.scanning = false; }
+      state.lastScan = { at: Date.now(), results };
+      return state.lastScan;
+    })().finally(() => { state.scanning = false; allFoldersScan = null; });
+    return allFoldersScan;
   }
 
   async function addFolder(input) {
@@ -66,6 +81,7 @@ function createLibrary(db, { autoProbe = true } = {}) {
     if (!stat.isDirectory()) throw Object.assign(new Error('That path is not a folder.'), { status: 400 });
     if (q.byPath.get(resolved)) throw Object.assign(new Error('That folder is already in the library.'), { status: 409 });
     const { lastInsertRowid } = q.addFolder.run(resolved, Date.now());
+    changed();
     const result = await rescan(Number(lastInsertRowid));
     return { id: Number(lastInsertRowid), ...result };
   }
@@ -94,6 +110,6 @@ function createLibrary(db, { autoProbe = true } = {}) {
       }
     })().finally(() => { state.probing = false; });
   }
-  return { folders: () => q.folders.all(), addFolder, removeFolder: id => q.dropFolder.run(id), rescan, rescanAll, item: id => q.item.get(id), info, probeSoon, state, byPath: p => q.byPath.get(p) };
+  return { folders: () => q.folders.all(), addFolder, removeFolder: id => { if (q.dropFolder.run(id).changes) changed(); }, rescan, rescanAll, item: id => q.item.get(id), info, probeSoon, state, byPath: p => q.byPath.get(p) };
 }
 module.exports = { createLibrary };

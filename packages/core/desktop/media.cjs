@@ -20,7 +20,7 @@ function describe(file, root = '') {
     season: episode ? Number(episode[1]) : null, episode: episode ? Number(episode[2]) : null,
     format: path.extname(file).slice(1).toUpperCase(), added: Date.now() };
 }
-async function scan(root) {
+async function scan(root, exclude) {
   root = path.resolve(root);
   const items = [];
   async function walk(dir) {
@@ -33,8 +33,10 @@ async function scan(root) {
     }
   }
   await walk(root);
-  items.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true }));
-  const videos = items.filter(item => item.kind !== 'audio');
+  const excluded = await exclude?.();
+  const included = excluded ? items.filter(item => !excluded.has(item.path)) : items;
+  included.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true }));
+  const videos = included.filter(item => item.kind !== 'audio');
   const directVideo = videos.some(item => path.dirname(item.path) === root);
   const seasonChildren = videos.some(item => seasonNumber(path.relative(root, item.path).split(path.sep)[0]) !== undefined);
   const rootIsTitle = !isContainer(path.basename(root)) && (directVideo || seasonChildren);
@@ -53,7 +55,7 @@ async function scan(root) {
       if (titlePath !== root || !isContainer(path.basename(root))) item.titlePath = titlePath;
     }
   }
-  return groupFolders(items);
+  return groupFolders(included);
 }
 function groupFolders(items) {
   const titles = new Map();
@@ -64,11 +66,12 @@ function groupFolders(items) {
   }
   for (const [groupId, entries] of titles) {
     const seasons = new Map();
+    const isShow = entries.length > 1 || describe(entries[0].path).episode !== null;
     for (const item of entries) {
       const parsed = describe(item.path, item.root);
       item.groupId = groupId;
       item.group = path.basename(item.titlePath);
-      item.kind = entries.length > 1 || parsed.episode !== null ? 'show' : 'movie';
+      item.kind = isShow ? 'show' : 'movie';
       if (item.kind === 'movie') { item.season = null; item.episode = null; continue; }
       const folders = path.relative(item.titlePath, path.dirname(item.path)).split(path.sep);
       item.season = parsed.season ?? Number(folders.map(seasonNumber).find(value => value !== undefined) ?? 1);

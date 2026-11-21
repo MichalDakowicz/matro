@@ -1341,7 +1341,11 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 // Closing the window waits for the latest position to be written before the app quits.
 api?.onClosing?.(async () => { try { remember(); await save(); } finally { void api.window('close'); } });
 api?.onFullscreen(active => { fullscreenActive = active; fullscreenQueueOpen = false; document.body.classList.toggle('fullscreen', active); hidePreview(); if (view === 'player') { renderQueue(); $('.stage')?.classList.remove('idle'); scheduleIdle(); } });
-api?.onDownloads?.(state => { library = { ...library, ...state }; rerender(); });
+api?.onDownloads?.(state => {
+  library = { ...library, ...state };
+  if (state.metadata) metadata = state.metadata;
+  rerender();
+});
 api?.onMetadata?.(update => { metadata = update || {}; rerender(); });
 api?.onSegments(update => {
   if (update.scanner) { scannerSummary = update.scanner; renderScannerStatus(); }
