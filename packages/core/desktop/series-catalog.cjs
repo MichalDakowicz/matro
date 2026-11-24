@@ -71,7 +71,7 @@ function createSeriesCatalog({ request, json, rememberRelease, showsURL = 'https
     const start = search.nextPage;
     if (start === 1) {
       const [episodes, first] = await Promise.all([metadataEpisodes(show), releasePage(show, 1)]);
-      Object.assign(search, seasonEpisodes(episodes, season));
+      Object.assign(search, seasonEpisodes(episodes, season, search.from));
       search.lastPage = Math.min(100, Math.max(1, Math.ceil(Number(first.torrents_count) / 100)));
       addSeasonCandidates(search, readReleases(show, first, quality), { anime, season });
     }
@@ -100,14 +100,14 @@ function createSeriesCatalog({ request, json, rememberRelease, showsURL = 'https
       while (seasonDownloads.size > 100) seasonDownloads.delete(seasonDownloads.keys().next().value);
       batch = details;
     }
-    return { season, pack, batch, expected: search.episodes.size, coverage, nextPage: search.nextPage };
+    return { season, from: search.from > 1 ? search.from : null, pack, batch, expected: search.episodes.size, coverage, nextPage: search.nextPage };
   }
-  async function findSeason(show, season, quality, page) {
+  async function findSeason(show, season, quality, page, from = 1) {
     if (season === null) throw new Error('Choose a season to find a season download.');
-    const key = JSON.stringify([show.id, season, quality]);
+    const key = JSON.stringify([show.id, season, quality, from]);
     let search = seasonSearches.get(key);
     if (!search || search.expires < Date.now()) {
-      search = { nextPage: 1, groups: new Map(), expires: Date.now() + 5 * 60 * 1000 };
+      search = { from, nextPage: 1, groups: new Map(), expires: Date.now() + 5 * 60 * 1000 };
       seasonSearches.delete(key); seasonSearches.set(key, search);
       while (seasonSearches.size > 10) seasonSearches.delete(seasonSearches.keys().next().value);
     }
@@ -179,8 +179,10 @@ function createSeriesCatalog({ request, json, rememberRelease, showsURL = 'https
       const quality = text(options.quality, 20);
       if (quality && !qualities.includes(quality)) throw new Error('Invalid resolution filter.');
       if (options.seasonDownload === true) {
-        if (episode !== null) throw new Error('Leave Episode blank to find a season download.');
-        return findSeason(show, season, quality, page);
+        if (episode !== null) throw new Error('Use From episode, not Episode, to find a season download.');
+        const from = integer(options.fromEpisode, 999, true) ?? 1;
+        if (from < 1) throw new Error('Choose an episode number of 1 or more.');
+        return findSeason(show, season, quality, page, from);
       }
       const found = [], seen = new Set(); let scanned = 0, total = 0, current = page;
       // With filters, scan a bounded set of provider pages. More releases continues

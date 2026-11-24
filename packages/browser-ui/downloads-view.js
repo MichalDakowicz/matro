@@ -104,15 +104,15 @@ export function movieDetail(movie, { target, label, configured, sending, sent, u
     }).join('')}${configured ? '' : '<p class="dim detail-note">Connect this destination in Download settings first.</p>'}`;
 }
 function seasonResult(data, { target, label, configured, sending, sent, searching }) {
-  const { season, pack, batch, expected, coverage, nextPage } = data;
-  const code = `Season ${season}`;
+  const { season, from, pack, batch, expected, coverage, nextPage } = data;
+  const code = from ? `Season ${season} from episode ${from}` : `Season ${season}`;
   const item = pack || batch;
   const key = `${target}:${pack?.hash || batch?.id}`;
   const row = item ? releaseRow({
     label: `${esc(code)} · ${esc(item.quality)}`, hash: pack?.hash, selectionId: pack?.selectionId, seasonPack: !!pack, batchId: batch?.id,
     note: pack ? `<small>${esc(pack.title)} · ${esc(pack.size)} · ${pack.seeds} seeds</small>` : `<small>${batch.count} episodes from ${esc(batch.group)} · up to two transfers at a time</small>`,
     disabled: !configured || searching || sending.has(key) || sent.has(key),
-    text: sending.has(key) ? 'Sending…' : sent.has(key) ? (batch ? 'Queued' : 'Added') : `Download season to ${label}`
+    text: sending.has(key) ? 'Sending…' : sent.has(key) ? (batch ? 'Queued' : 'Added') : `${from ? "Download episodes" : "Download season"} to ${label}`
   }) : `<p class="dim detail-note">${expected ? `Found ${coverage} of ${expected} listed episodes from a matching release group for ${code}.` : `No numbered episodes are listed for ${code}.`}</p>`;
   return `${row}${nextPage ? `<button type="button" class="text-button" id="season-more" ${searching ? 'disabled' : ''}>Search older releases for this season</button>` : ''}`;
 }

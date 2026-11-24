@@ -79,6 +79,14 @@ test('season lookup combines matching episodes across pages and prefers a listed
   assert.equal(preferred.pack.hash, code(8));
   assert.equal(preferred.batch, null);
   assert.equal(remembered.get(code(8)).episode, 0);
+
+  // Starting from an episode downloads that episode to the end of the season; a whole-season pack can't do that.
+  const partial = await withPack.releases({ ...filters, quality: '', fromEpisode: 2 });
+  assert.equal(partial.from, 2);
+  assert.equal(partial.pack, null);
+  assert.equal(partial.batch.count, 2);
+  assert.deepEqual(withPack.seasonBatch(partial.batch.id).map(value => value.episode), [2, 3]);
+  await assert.rejects(withPack.releases({ ...filters, episode: 2 }), /From episode/);
 });
 
 test('an anime season persists and deduplicates absolute-numbered episodes before dispatch', async t => {

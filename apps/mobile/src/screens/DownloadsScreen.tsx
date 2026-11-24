@@ -12,7 +12,7 @@ type Transfer = { hash: string; name: string; progress: number; state: string; s
 type Release = { hash: string | null; selectionId?: string; title?: string; quality: string; size: string; seeds?: number; codec?: string; season?: number; episode?: number; absoluteEpisode?: number; releaseTitle?: string; downloadKind?: string };
 type Title = { id: string; title: string; year: string; overview?: string; status?: string; torrents?: Release[]; indexed?: boolean };
 type Config = { server?: { username: string; passwordSaved?: boolean; storage?: { movieRoot?: string; showRoot?: string } } };
-type SeasonDownload = { season: number; expected: number; coverage: number; nextPage: number | null; pack: Release | null; batch: { id: string; group: string; quality: string; count: number } | null };
+type SeasonDownload = { season: number; from: number | null; expected: number; coverage: number; nextPage: number | null; pack: Release | null; batch: { id: string; group: string; quality: string; count: number } | null };
 function animeTitles(releases: (Release & { title: string; year: string })[]) {
   const titles = new Map<string, Title>();
   for (const release of releases) {
@@ -59,13 +59,13 @@ export default function DownloadsScreen({ base, headers, initialRequest }: ArtPr
     if (!selected) return;
     if (at === 1) setSeasonDownload(null);
     const seasonNumber = kind === 'anime' ? season || '1' : season;
-    if (!/^\d{1,2}$/.test(seasonNumber) || kind === 'show' && episode) {
-      setSeasonNotice(kind === 'show' ? 'Enter a season and leave Episode blank to find a season download.' : 'Enter a season to find a season download.');
+    if (!/^\d{1,2}$/.test(seasonNumber)) {
+      setSeasonNotice(kind === 'show' ? 'Enter a season to find a season download. Add an episode to start from it.' : 'Enter a season to find a season download.');
       return;
     }
     setSeasonNotice('Finding matching season releases…');
     try {
-      const options = kind === 'anime' ? { animeSelections: releases.map(item => item.selectionId).filter(Boolean) } : { id: selected.id, page: at, seasonDownload: true };
+      const options = kind === 'anime' ? { animeSelections: releases.map(item => item.selectionId).filter(Boolean) } : { id: selected.id, page: at, seasonDownload: true, ...(episode ? { fromEpisode: +episode } : {}) };
       setSeasonDownload(await call('series-releases', { ...options, season: +seasonNumber, quality: kind === 'anime' ? '' : quality }));
       setSeasonNotice('');
     } catch (error) { setSeasonNotice(error instanceof Error ? error.message : 'Could not find a season download.'); }
@@ -136,7 +136,7 @@ export default function DownloadsScreen({ base, headers, initialRequest }: ArtPr
           {seasonNotice ? <Text accessibilityLiveRegion="polite" style={t.muted}>{seasonNotice}</Text> : null}
           {seasonDownload && (seasonItem ? <View style={s.release}>
             <View style={{ flex: 1 }}>
-              <Text style={t.text}>Season {seasonDownload.season} · {seasonItem.quality}</Text>
+              <Text style={t.text}>Season {seasonDownload.season}{seasonDownload.from ? ` from episode ${seasonDownload.from}` : ''} · {seasonItem.quality}</Text>
               <Text style={t.dim}>{seasonDownload.batch ? `${seasonDownload.batch.count} episodes from ${seasonDownload.batch.group} · up to two transfers at a time` : seasonDownload.pack?.title}</Text>
             </View>
             <Pill label={addedSeason === seasonKey ? (seasonDownload.batch ? 'Queued' : 'Added') : 'Download season'} compact disabled={busy || !config.server || addedSeason === seasonKey} onPress={() => {
