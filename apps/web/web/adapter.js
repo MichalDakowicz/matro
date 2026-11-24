@@ -209,6 +209,16 @@ export function createAdapter(session) {
       const saved = await offline.store.meta(id);
       if (!saved?.complete) await offline.download({ ...item, title: latest.metadata[item.groupId || item.id]?.title || item.title }, inspect, subtitles);
     },
+    // A season at a time, two titles at once: the server converts files before sending, so more only queues there.
+    offlineSaveMany: session.offline ? null : async ids => {
+      const queue = [...ids]; let failure;
+      await Promise.all(Array.from({ length: Math.min(2, queue.length) }, async () => {
+        for (let id; (id = queue.shift());) {
+          try { await matro.offlineSave(id); } catch (error) { if (error.name !== 'AbortError') failure ??= error; }
+        }
+      }));
+      if (failure) throw failure;
+    },
     dismissContinue: session.offline ? undefined : async id => (await patch(`/api/items/${encodeURIComponent(id)}/progress`, { dismiss: true })).progress,
     setCompleted: session.offline ? undefined : async (id, completed, checkpoint) => (await patch(`/api/items/${encodeURIComponent(id)}/progress`, { completed, checkpoint })).progress,
     save: (state, { keepalive = false } = {}) => {

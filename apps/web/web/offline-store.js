@@ -43,9 +43,16 @@ export function createStore(backend) {
     record.have = have;
     await backend.set(metaKey(id), record);
     onProgress(have * CHUNK > size ? size : have * CHUNK, size);
+    // Pieces are requested a few ahead of the one being stored, so the network doesn't idle while the disk works.
+    const ahead = new Map();
+    const request = n => {
+      if (!ahead.has(n)) { const { start, end } = chunkRange(size, n), piece = fetchRange(start, end, got => onProgress(Math.min(size, start + got), size)); piece.catch(() => {}); ahead.set(n, piece); }
+      return ahead.get(n);
+    };
     for (let n = have; n < total; n++) {
       if (signal?.aborted) throw new DOMException('Download paused.', 'AbortError');
-      const { start, end } = chunkRange(size, n), blob = await fetchRange(start, end, got => onProgress(Math.min(size, start + got), size));
+      for (let k = n; k < Math.min(total, n + 3); k++) request(k);
+      const { start, end } = chunkRange(size, n), blob = await request(n); ahead.delete(n);
       if (blob.size !== end - start + 1) throw new Error('The server sent an incomplete piece.');
       await backend.set(chunkKey(id, n), blob);
       record.have = n + 1;

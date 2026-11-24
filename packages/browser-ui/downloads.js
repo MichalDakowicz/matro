@@ -289,7 +289,7 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
       if (seriesFilters.season === '' || seriesFilters.episode !== '') {
         seasonDownload = null; seasonNotice = 'Enter a season and leave Episode blank to find a season download.'; drawDetail(); return;
       }
-      options = { id: seriesSelected.id, season: seriesFilters.season, quality: seriesFilters.quality, page, seasonDownload: true };
+      options = { id: seriesSelected.id, season: seriesFilters.season, quality: seriesFilters.quality, page, seasonDownload: true, ...(seriesFilters.episode !== '' ? { fromEpisode: seriesFilters.episode } : {}) };
     }
     if (page === 1) seasonDownload = null;
     loadingSeries = true;

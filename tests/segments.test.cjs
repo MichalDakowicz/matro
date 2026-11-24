@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const { hashFrame, distance, detectSegments, createSegments } = require('../packages/core/desktop/segments.cjs');
 const { fixtures } = require('./fixtures.cjs');
 const path = require('node:path');
+const os = require('node:os');
+const fs = require('node:fs/promises');
 function noise(seed, count) {
   let state = BigInt(seed);
   return Array.from({ length: count }, () => {
@@ -85,4 +87,23 @@ test('interrupted decoding reuses finished chunks instead of starting over', asy
     assert.equal((await fs.stat(first)).mtimeMs, before);
     assert.equal((await fs.readdir(chunkDir)).length, 2);
   } finally { engine.close(); }
+});
+
+test('a damaged stretch is skipped, and only a file that cannot be decoded at all fails', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-fp-'));
+  const file = path.join(dir, 'episode.mkv'); await fs.writeFile(file, 'x');
+  const frames = Buffer.from(Array.from({ length: 72 * 60 }, (_, i) => (i * 37) % 251));
+  let bad = new Set([60]), everything = false;
+  const dependencies = {
+    fs: require('node:fs/promises'), ffmpeg: 'ffmpeg', probe: async () => ({ video: true, duration: 150 }),
+    run: async (_binary, args) => { if (everything || bad.has(Number(args[args.indexOf('-ss') + 1]))) throw new Error('Invalid data found'); return frames; }
+  };
+  const engine = createSegments(path.join(dir, 'cache'), dependencies);
+  try {
+    const partial = await engine.detect({ id: 'a', path: file, title: 'A', episode: 1 }, [], () => {}, { mode: 'full' });
+    assert.deepEqual(partial, []); // no siblings to compare with, but the damaged chunk did not throw
+    everything = true;
+    const dead = path.join(dir, 'dead.mkv'); await fs.writeFile(dead, 'y');
+    await assert.rejects(engine.detect({ id: 'b', path: dead, title: 'B', episode: 2 }, [{ id: 'a', path: file, title: 'A', episode: 1 }], () => {}, { mode: 'full' }), /Invalid data found|could be read/);
+  } finally { engine.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });

@@ -6,7 +6,7 @@ const { probe } = require('./media');
 const { tx } = require('./db');
 
 // `autoProbe: false` is for one-shot tools such as the CLI, which should exit instead of probing every file.
-function createLibrary(db, { autoProbe = true, excludedFiles } = {}) {
+function createLibrary(db, { autoProbe = true, excludedFiles, onChange } = {}) {
   const q = {
     folders: db.prepare('SELECT id, path, added, (SELECT COUNT(*) FROM items WHERE folder_id = folders.id) AS items FROM folders ORDER BY path'),
     folder: db.prepare('SELECT * FROM folders WHERE id = ?'),
@@ -29,7 +29,7 @@ function createLibrary(db, { autoProbe = true, excludedFiles } = {}) {
   const state = { scanning: false, probing: false, lastScan: null, revision: randomUUID() };
   const pending = new Map(), folderScans = new Map();
   let allFoldersScan;
-  const changed = () => { state.revision = randomUUID(); };
+  const changed = () => { state.revision = randomUUID(); onChange?.(); };
 
   async function scanFolder(folderId) {
     const folder = q.folder.get(folderId);
@@ -108,7 +108,7 @@ function createLibrary(db, { autoProbe = true, excludedFiles } = {}) {
       for (let row; (row = q.unprobed.get());) {
         try { await probeItem(row); } catch { q.setProbe.run(JSON.stringify({ duration: 0, video: null, audio: [], subtitles: [], chapters: [], broken: true }), null, row.id); }
       }
-    })().finally(() => { state.probing = false; });
+    })().catch(() => { /* Background probing must never crash the server, e.g. if the database closes mid-run. */ }).finally(() => { state.probing = false; });
   }
   return { folders: () => q.folders.all(), addFolder, removeFolder: id => { if (q.dropFolder.run(id).changes) changed(); }, rescan, rescanAll, item: id => q.item.get(id), info, probeSoon, state, byPath: p => q.byPath.get(p) };
 }

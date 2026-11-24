@@ -2,6 +2,11 @@ node_modules/
 .expo/
 dist/
 android/
+# Local native modules keep their Android source in git; only the generated project is ignored.
+!/modules/*/android/
+/modules/*/android/build/
+/modules/*/android/.gradle/
+/modules/*/android/.cxx/
 ios/
 *.apk
 google-services.json

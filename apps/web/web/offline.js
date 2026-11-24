@@ -43,6 +43,17 @@ const wait = (ms, signal) => new Promise((resolve, reject) => {
   else signal.addEventListener('abort', abort, { once: true });
 });
 
+// A dropped connection or a 5xx answer is retried with backoff; the server's own refusals (4xx) and a changed file are not.
+export async function retrying(signal, run) {
+  for (let tries = 0;; tries++) {
+    try { return await run(); }
+    catch (error) {
+      if (signal.aborted || error.fatal || error instanceof ApiError && error.status < 500 || tries >= 6) throw error;
+      await wait(Math.min(30000, 1500 * 2 ** tries), signal);
+    }
+  }
+}
+
 export function createOffline(user) {
   const scope = scopeFor(user);
   const backend = {
@@ -57,18 +68,21 @@ export function createOffline(user) {
     const id = item.id;
     if (jobs.has(id)) return jobs.get(id).done;
     const controller = new AbortController(), { signal } = controller;
-    const job = { controller, item, have: 0, size: 0, started: Date.now(), initial: 0 };
+    // `prepared` is the server's transcode progress (0-1) while it converts the file, null when unknown.
+    const job = { controller, item, have: 0, size: 0, prepared: null, started: Date.now(), initial: 0 };
     const root = `/api/items/${encodeURIComponent(id)}/offline`;
     async function run() {
       let info = await inspect(id), status;
       const started = Date.now();
       for (;;) {
         if (signal.aborted) throw signal.reason;
-        status = await api('GET', root, undefined, { signal });
+        status = await retrying(signal, () => api('GET', root, undefined, { signal }));
         if (status.state === 'ready') break;
         if (status.state !== 'preparing' || Date.now() - started > 30 * 60 * 1000) throw new Error('The server did not finish preparing this title.');
+        job.prepared = typeof status.progress === 'number' ? status.progress : null; emit();
         await wait(2000, signal);
       }
+      job.prepared = null;
       const texts = {};
       const tracks = [];
       for (const track of info.subtitles) {
@@ -78,16 +92,16 @@ export function createOffline(user) {
       }
       info = { ...info, audio: info.audio.slice(0, 1), subtitles: tracks };
       let first = true;
-      const fetchRange = async (start, end) => {
+      const fetchRange = (start, end) => retrying(signal, async () => {
         const res = await fetch(`${root}/file?version=${encodeURIComponent(status.version)}`, {
           credentials: 'same-origin', signal, headers: { range: `bytes=${start}-${end}` },
         });
         if (res.status !== 206 || res.headers.get('content-range') !== `bytes ${start}-${end}/${status.size}`) {
           await res.body?.cancel();
-          throw new Error('The server could not resume this download. Try again.');
+          throw Object.assign(new Error('The server could not resume this download. Try again.'), { fatal: res.status < 500 });
         }
         return res.blob();
-      };
+      });
       await store.download({ id, ...status, info, subtitles: texts, title: item.title, fetchRange, signal,
         onProgress(have, size) {
           if (first) { first = false; job.started = Date.now(); job.initial = have; }

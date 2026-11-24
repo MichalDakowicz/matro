@@ -6,13 +6,13 @@ const episodeCode = /\b(?:S\d{1,2}[ ._-]*E\d{1,3}|\d{1,2}x\d{2,3}|(?:ep(?:isode)
 const technicalTag = /\b(?:\d{3,4}p|4k|web(?:[ ._-]?(?:dl|rip))?|hdtv|blu[ ._-]?ray|b[dr]rip|[xh]26[45]|hevc|av1|hi10p|\d{1,2}bit|dual[ ._-]?audio|multi(?:sub)?|dub(?:bed)?|subbed)\b/i;
 const normalized = value => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
-function seasonEpisodes(list, season) {
+function seasonEpisodes(list, season, from = 1) {
   if (!Array.isArray(list)) throw new Error('The season episode list is unavailable.');
   const episodes = new Set(), absolute = new Map();
   let sequential = true, previousSeason = 0, previousEpisode = 0;
   for (const { season: number, number: episode } of list) {
     if (!Number.isInteger(number) || number < 1 || !Number.isInteger(episode) || episode < 1 || episode > 999) continue;
-    if (number === season) episodes.add(episode);
+    if (number === season && episode >= from) episodes.add(episode);
     if (number === previousSeason + 1) { previousSeason = number; previousEpisode = 0; }
     sequential &&= number === previousSeason && episode === previousEpisode + 1;
     if (sequential) absolute.set(absolute.size + 1, { season: number, episode });
@@ -60,7 +60,8 @@ function isSeasonPack(item, season) {
 const stronger = (a, b) => b.seeds - a.seeds || a.release.hash.localeCompare(b.release.hash);
 function addSeasonCandidates(search, items, { anime, season }) {
   for (const item of items) {
-    if (isSeasonPack(item, season)) {
+    // A pack always holds the whole season, so a from-episode search skips packs.
+    if (!(search.from > 1) && isSeasonPack(item, season)) {
       if (!search.pack || stronger(item, search.pack) < 0) search.pack = item;
       continue;
     }
