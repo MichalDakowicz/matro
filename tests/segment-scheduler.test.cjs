@@ -137,3 +137,34 @@ test('buffering slows scan input further while scanner continues working', async
     assert.equal(scanner.snapshot().buffering, true);
   } finally { scanner.close(); }
 });
+
+test('episodes moved or deleted while listed are skipped, and scanning resumes when they return', async () => {
+  const state = await sampleState(), seen = [];
+  const engine = { close() {}, async detect(item, siblings) { seen.push([item.id, siblings.map(s => s.id)]); return []; } };
+  const gone = state.items.find(i => i.id === 'A3'), moved = gone.path + '.moved';
+  await fs.rename(gone.path, moved);
+  const scanner = createSegmentScheduler({ getState: () => state, engine, persist: async () => {}, delay: 1 });
+  scanner.refresh();
+  try {
+    await until(() => ['A1', 'A2'].every(id => state.segmentScans[id]?.full));
+    assert.ok(seen.every(([id, siblings]) => id !== 'A3' && !siblings.includes('A3')));
+    assert.equal(state.segmentScans.A3, undefined);
+    await fs.rename(moved, gone.path); scanner.invalidate();
+    await until(() => state.segmentScans.A3?.full);
+  } finally { scanner.close(); }
+});
+
+test('episodes that cannot be scanned are named with the reason and back off instead of blocking completion', async () => {
+  const state = await sampleState();
+  const engine = { close() {}, async detect(item) { if (item.id === 'A2') throw new Error('Invalid array length'); return []; } };
+  let last;
+  const scanner = createSegmentScheduler({ getState: () => state, engine, persist: async () => {}, onUpdate: update => { last = update.scanner; }, delay: 1 });
+  scanner.refresh();
+  try {
+    await until(() => ['A1', 'A3', 'B1', 'B2', 'B3'].every(id => state.segmentScans[id]?.full) && last?.complete);
+    assert.equal(last.failed, 1);
+    assert.match(last.message, /could not be scanned.*S1 E2 A: Invalid array length/);
+    assert.equal(state.segmentScans.A2.attempts, 1);
+    assert.ok(state.segmentScans.A2.retryAt > Date.now());
+  } finally { scanner.close(); }
+});

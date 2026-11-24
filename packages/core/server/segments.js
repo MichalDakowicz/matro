@@ -30,7 +30,7 @@ function createScanner({ dataDir, db }) {
       if (options.priority !== undefined && child.pid) try { os.setPriority(child.pid, options.priority); } catch { /* Best effort. */ }
     })
   });
-  const scheduler = createSegmentScheduler({ getState: () => { state.items = items.all(); return state; }, engine, persist });
+  const scheduler = createSegmentScheduler({ getState: () => { state.items = items.all(); return state; }, engine, persist, onUpdate: update => { if (update.stage === 'error') console.error(`segment scan failed for ${update.id}: ${update.message}`); } });
   return {
     ...scheduler,
     markers: (manual = {}, dismissed = {}) => {

@@ -93,28 +93,37 @@ function createSegments(cacheDirectory, dependencies) {
       const file = path.join(cacheDirectory, key + '.json');
       try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch { /* Cache miss. */ }
       const metadata = await probe(item.path);
-      if (!metadata.video) return { duration: metadata.duration, hashes: [] };
+      // A file with no readable duration has nothing to fingerprint; failing here would be retried forever.
+      if (!metadata.video || !(metadata.duration > 0)) return { duration: metadata.duration || 0, hashes: [] };
       const hashes = Array(Math.ceil(metadata.duration)).fill(null);
       const windows = mode === 'quick' && metadata.duration > 900 ? [[0, 300], [Math.floor(metadata.duration - 240), 240]] : [[0, metadata.duration]];
       const starts = [...new Set(windows.flatMap(([start, duration]) => Array.from({ length: Math.ceil((start + duration) / 60) - Math.floor(start / 60) }, (_, n) => (Math.floor(start / 60) + n) * 60)))];
       const chunkDirectory = path.join(cacheDirectory, fullKey + '.chunks');
       await fs.mkdir(chunkDirectory, { recursive: true });
+      let failed = 0, firstError;
       for (const [index, start] of starts.entries()) {
         signal.throwIfAborted();
         const chunkFile = path.join(chunkDirectory, `${start}.json`);
         let chunk;
         try { chunk = JSON.parse(await fs.readFile(chunkFile, 'utf8')); } catch { /* Chunk not prepared yet. */ }
-        if (!chunk) {
+        if (!chunk) try {
           const rate = options.playback ? ['-readrate', String(options.readRate || 4)] : [];
           const frames = await run(ffmpeg, ['-v', 'error', '-nostdin', '-threads', options.playback ? '1' : '2', '-ss', String(start), ...rate, '-i', item.path, '-t', String(Math.min(60, metadata.duration - start)), '-map', '0:v:0', '-an', '-sn', '-vf', 'fps=1,scale=9:8,format=gray', '-filter_threads', '1', '-threads', '1', '-f', 'rawvideo', 'pipe:1'], { encoding: 'buffer', timeout: 15 * 60 * 1000, signal, priority: options.playback ? os.constants.priority.PRIORITY_LOW : os.constants.priority.PRIORITY_BELOW_NORMAL });
           chunk = [];
           for (let i = 0; i + 72 <= frames.length; i += 72) chunk.push(hashFrame(frames.subarray(i, i + 72)));
           await fs.writeFile(chunkFile, JSON.stringify(chunk));
+        } catch (error) {
+          // A damaged stretch must not discard the rest of the episode (or fail it forever); only an abort stops the scan.
+          signal.throwIfAborted();
+          failed++; firstError ??= error;
+          continue;
         }
         for (let i = 0; i < chunk.length; i++) hashes[start + i] = chunk[i];
         options.onProgress?.({ stage: 'decoding', scanTitle: item.title, percent: Math.round((index + 1) / starts.length * 100) });
       }
+      if (failed === starts.length) throw firstError;
       const result = { duration: metadata.duration, step: 1, hashes };
+      if (failed) return result; // incomplete: use it now, but never cache it as the finished fingerprint
       await fs.mkdir(cacheDirectory, { recursive: true }); await fs.writeFile(file, JSON.stringify(result));
       return result;
     })();

@@ -42,6 +42,7 @@ function createSegmentScheduler({ getState, engine, persist, onUpdate = () => {}
     for (const waiter of waiters.get(id) || []) error ? waiter.reject(error) : waiter.resolve(markers);
     waiters.delete(id);
   }
+  const readable = item => stats.get(item.path)?.value !== 'unavailable';
   async function signature(items) {
     const parts = [];
     for (const item of items) {
@@ -64,9 +65,13 @@ function createSegmentScheduler({ getState, engine, persist, onUpdate = () => {}
       const ordered = prioritizeEpisodes(state, currentId), signatures = new Map();
       for (const mode of ['quick', 'full']) {
         for (const item of ordered) {
-          const siblings = state.items.filter(i => i.id !== item.id && sameSeason(i, item));
+          const everyone = state.items.filter(i => i.id !== item.id && sameSeason(i, item));
           const key = `${titleKey(item)}:${item.season}`;
-          if (!signatures.has(key)) signatures.set(key, await signature([item, ...siblings]));
+          if (!signatures.has(key)) signatures.set(key, await signature([item, ...everyone]));
+          // Moved or deleted files stay listed until the next rescan; never scan from or against them.
+          // Their absence is part of the signature, so the season rescans as soon as they return.
+          if (!readable(item)) continue;
+          const siblings = everyone.filter(readable);
           const stamp = signatures.get(key), scan = state.segmentScans[item.id];
           if (scan?.signature === stamp && (scan[mode] || scan.retryAt > Date.now())) continue;
           job = { item, siblings, mode, signature: stamp }; break;
@@ -75,8 +80,10 @@ function createSegmentScheduler({ getState, engine, persist, onUpdate = () => {}
       }
       status.ready = ordered.filter(i => state.segmentScans[i.id]?.quick).length; status.total = ordered.length;
       if (!job || closed) {
-        const unavailable = ordered.some(i => state.segmentScans[i.id]?.retryAt > Date.now());
-        status = { ...status, running: false, complete: !unavailable && ordered.length > 0, id: null, message: unavailable ? 'Some episodes unavailable; retrying shortly' : ordered.length ? 'Background scan complete' : 'No seasons to scan' }; publish();
+        // Episodes that keep failing are named with the reason instead of hiding behind a generic retry message.
+        const failed = ordered.filter(i => state.segmentScans[i.id]?.error && state.segmentScans[i.id].retryAt > Date.now());
+        const detail = failed.length ? ` · ${failed.length} could not be scanned (${failed.slice(0, 2).map(i => `S${i.season} E${i.episode} ${i.group}: ${state.segmentScans[i.id].error}`).join('; ')}${failed.length > 2 ? '…' : ''})` : '';
+        status = { ...status, running: false, complete: ordered.length > 0, id: null, failed: failed.length, message: ordered.length ? 'Background scan complete' + detail : 'No seasons to scan' }; publish();
         return;
       }
       const { item, siblings, mode, signature: stamp } = job;
@@ -88,7 +95,7 @@ function createSegmentScheduler({ getState, engine, persist, onUpdate = () => {}
       }
       status = { ...status, running: true, complete: false, id: item.id, group: item.group, title: item.title, phase: mode, message: `${mode === 'quick' ? 'Preparing' : 'Checking full episode'} · ${item.group} · S${item.season} E${item.episode}` };
       publish({ id: item.id, stage: 'started', mode });
-      const markers = await engine.detect(item, siblings, update => {
+      const markers = !siblings.length ? [] : await engine.detect(item, siblings, update => {
         if (closed || !getState().items.some(i => i.id === item.id)) return;
         if (update.stage === 'decoding') status.message = `${playing ? 'Scanning gently' : 'Scanning'} · ${update.scanTitle || item.title} · ${update.percent}%`;
         if (update.markers) {
@@ -97,10 +104,10 @@ function createSegmentScheduler({ getState, engine, persist, onUpdate = () => {}
         }
         publish({ id: item.id, mode, ...update, ...(update.markers ? { markers: getState().markers[item.id] } : {}) });
       }, { mode, signal: active.controller.signal, playback: playing, readRate: buffering ? .5 : 4 });
-      if (closed || !getState().items.some(i => i.id === item.id)) return;
+      if (closed || !getState().items.some(i => i.id === item.id)) { settle(item.id, null, []); return; }
       const latest = getState();
       latest.markers[item.id] = mergeMarkers(latest.markers[item.id], markers, latest.markerDismissals?.[item.id]);
-      latest.segmentScans[item.id] = { ...latest.segmentScans[item.id], signature: stamp, [mode]: true, retryAt: 0 };
+      latest.segmentScans[item.id] = { ...latest.segmentScans[item.id], signature: stamp, [mode]: true, retryAt: 0, attempts: 0, error: undefined };
       await persist();
       status = { ...status, running: false, id: null, ready: prioritizeEpisodes(latest, currentId).filter(i => latest.segmentScans[i.id]?.quick).length };
       publish({ id: item.id, stage: 'done', mode, markers: latest.markers[item.id] });
@@ -108,7 +115,10 @@ function createSegmentScheduler({ getState, engine, persist, onUpdate = () => {}
     } catch (error) {
       if (!closed && job) {
         if (error.name !== 'AbortError') {
-          getState().segmentScans[job.item.id] = { ...getState().segmentScans[job.item.id], retryAt: Date.now() + 5 * 60000 };
+          stats.clear();
+          // Back off further each time the same episode fails; a changed file or library rescan starts over.
+          const previous = getState().segmentScans[job.item.id], attempts = (previous?.attempts || 0) + 1;
+          getState().segmentScans[job.item.id] = { ...previous, attempts, error: error.message, retryAt: Date.now() + Math.min(6 * 3600000, 5 * 60000 * 2 ** (attempts - 1)) };
           await persist().catch(() => {});
           publish({ id: job.item.id, stage: 'error', message: error.message });
         }
