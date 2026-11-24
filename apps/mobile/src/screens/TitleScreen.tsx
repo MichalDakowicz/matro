@@ -8,11 +8,14 @@ import { Icon, IconButton, MediaArt, Pill, ProgressBar, styles as t } from '../c
 import type { ArtProps } from '../components/LibraryParts';
 import { colors, fonts } from '../theme';
 
-export default function TitleScreen({ data, items, onBack, onPlay, onComplete, onEnqueue, onSave, ...art }: ArtProps & { data: Library; items: Item[]; onBack: () => void; onPlay: (item: Item, start?: number) => void; onComplete: (item: Item) => void; onEnqueue: (items: Item[]) => void; onSave?: (item: Item) => void }) {
+export default function TitleScreen({ data, items, onBack, onPlay, onComplete, onEnqueue, onSave, onSaveMany, onRemoveSaved, savedIds, ...art }: ArtProps & { data: Library; items: Item[]; onBack: () => void; onPlay: (item: Item, start?: number) => void; onComplete: (item: Item) => void; onEnqueue: (items: Item[]) => void; onSave?: (item: Item) => void; onSaveMany?: (items: Item[]) => void; onRemoveSaved?: (items: Item[]) => void; savedIds?: Set<string> }) {
   const item = items[0], m = metadataFor(data, item), target = resumeItem(data, items), p = data.progress[target.id];
   const insets = useSafeAreaInsets(), seasons = [...new Set(items.map(i => i.season || 1))];
   const [season, setSeason] = useState(target.season || seasons[0]);
   const resume = p?.position > 0 && !p.completed;
+  const inSeason = items.filter(i => (i.season || 1) === season);
+  // From the episode Play would start now to the end of its season.
+  const rest = items.filter(i => (i.season || 1) === (target.season || 1) && (i.episode || 0) >= (target.episode || 0));
   const facts = [m.year, m.genres?.slice(0, 3).join(' · '), item.kind === 'show' ? `${seasons.length} seasons · ${items.length} episodes` : m.runtime ? `${Math.floor(m.runtime / 60) ? Math.floor(m.runtime / 60) + 'h ' : ''}${m.runtime % 60}m` : '', item.kind === 'show' ? 'Series' : item.kind === 'audio' ? 'Audio' : 'Movie', item.format].filter(Boolean).join(' · ');
   const header = <View style={{ paddingTop: 260 + insets.top }}>
     <Text style={[t.heading, { fontSize: 36, lineHeight: 39 }]}>{nameFor(data, item)}</Text>
@@ -27,8 +30,10 @@ export default function TitleScreen({ data, items, onBack, onPlay, onComplete, o
       <View style={s.circleAction}><IconButton name="check" label={data.progress[item.id]?.completed ? 'Mark incomplete' : 'Mark complete'} size={50} active={!!data.progress[item.id]?.completed} onPress={() => onComplete(item)} /></View>
     </View>
     {onSave && item.kind !== 'show' && <View style={{ alignSelf: 'flex-start', marginTop: 12 }}><Pill label="Save offline" icon="download" onPress={() => onSave(target)} /></View>}
+    {onRemoveSaved && <View style={{ alignSelf: 'flex-start', marginTop: 12 }}><Pill label="Remove from this device" compact onPress={() => onRemoveSaved(items)} /></View>}
     {m.rating ? <View style={s.ratings}><Text style={[t.mono, { marginBottom: 6 }]}>TMDB</Text><View style={[t.row, { alignItems: 'baseline', gap: 5 }]}><Text style={s.score}>{m.rating.toFixed(1)}</Text><Text style={t.dim}>/10{m.votes ? ` · ${m.votes.toLocaleString()} votes` : ''}</Text></View></View> : null}
     {item.kind === 'show' && <View style={{ marginTop: 28 }}><View style={t.sectionHeading}><Text style={t.sectionTitle}>Episodes</Text><Text style={t.dim}>{items.filter(i => data.progress[i.id]?.completed).length} / {items.length} watched</Text></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 14 }}>{seasons.map(value => <Pill key={value} compact label={`Season ${value}`} style={season === value ? { backgroundColor: '#ffffff18' } : undefined} onPress={() => setSeason(value)} />)}</ScrollView></View>}
+    {onSaveMany && item.kind === 'show' && <View style={[t.row, { flexWrap: 'wrap', gap: 8, marginBottom: 14 }]}><Pill label={`Save season ${season} offline`} icon="download" compact onPress={() => onSaveMany(inSeason)} />{rest.length > 1 && <Pill label={`Save from S${target.season || 1} E${target.episode} to season end`} icon="download" compact onPress={() => onSaveMany(rest)} />}</View>}
   </View>;
   const footer = <View style={{ gap: 28, marginTop: 28 }}>
     {!!m.cast?.length && <View><Text style={[t.sectionTitle, { marginBottom: 18 }]}>Cast</Text><View style={s.castGrid}>{m.cast.map(person => <View key={person.name} style={s.castMember}><MediaArt {...art} path={person.photo} title={person.name} style={{ width: '100%', aspectRatio: 2 / 3, borderRadius: 6 }} /><Text numberOfLines={2} style={[t.text, { fontSize: 12.5, fontFamily: fonts.medium, marginTop: 8 }]}>{person.name}</Text><Text numberOfLines={2} style={[t.dim, { fontSize: 11, marginTop: 3 }]}>{person.role}</Text></View>)}</View></View>}
@@ -43,7 +48,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onComplete, o
           <MediaArt {...art} path={e?.still} style={s.episodeStill}><LinearGradient colors={['transparent', '#000a']} style={StyleSheet.absoluteFill} /><Text style={s.episodeCode}>S{episode.season} E{episode.episode}</Text>{progress?.duration > 0 && !done && <View style={s.episodeProgress}><ProgressBar value={progress.position / progress.duration} /></View>}</MediaArt>
           <View style={{ flex: 1, gap: 4 }}><Text style={[t.text, { fontFamily: fonts.medium, lineHeight: 20 }]} numberOfLines={2}>{episode.episode}. {episodeName(data, episode)}</Text><Text style={[t.dim, { fontSize: 11 }]}>{[e?.runtime ? e.runtime + 'm' : '', episode.format, done ? 'Watched' : progress?.position ? formatTime(progress.position) + ' watched' : ''].filter(Boolean).join(' · ')}</Text>{e?.overview && <Text numberOfLines={2} style={[t.dim, { fontSize: 11, lineHeight: 17 }]}>{e.overview}</Text>}</View>
         </Pressable><Pressable onPress={() => onComplete(episode)} accessibilityLabel={`${done ? 'Mark incomplete' : 'Mark complete'} ${episodeName(data, episode)}`} style={[s.episodeCheck, done && { backgroundColor: colors.primary }]}><Icon name="check" size={13} color={done ? colors.onPrimary : colors.text} /></Pressable>
-        {onSave && <View style={{ alignSelf: 'flex-end', marginTop: 6 }}><Pill label="Save episode offline" icon="download" compact onPress={() => onSave(episode)} /></View>}</View>;
+        {onSave && <View style={{ alignSelf: 'flex-end', marginTop: 6 }}><Pill label={savedIds?.has(episode.id) ? 'Saved offline' : 'Save episode offline'} icon="download" compact disabled={savedIds?.has(episode.id)} onPress={() => onSave(episode)} /></View>}</View>;
       }} />
     <View style={{ position: 'absolute', top: insets.top + 12, left: 14, borderRadius: 999, backgroundColor: '#171719aa', borderWidth: 1, borderColor: colors.hairline }}><IconButton name="back" label="Close details" onPress={onBack} /></View>
   </View>;

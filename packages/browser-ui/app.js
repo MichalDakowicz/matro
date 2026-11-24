@@ -612,13 +612,19 @@ function detail(id, focus = true) {
       <p class="detail-sub">${[...facts, selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie', selected.format].map(esc).join(' <span aria-hidden="true">·</span> ')}</p>
       ${m?.overview ? `<p class="detail-overview">${esc(m.overview)}</p>` : ''}
       <div class="detail-actions">${selected.kind === 'movie' && api.canCompareEditions !== false ? `<button class="pill" data-upgrade="${selected.id}">Find better quality / compare editions</button>` : ''}<button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
-      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}${api.offlineSave ? `<button class="pill" data-offline-save="${target.id}">${icon('download')}${selected.kind === 'show' ? 'Save episode offline' : 'Save offline'}</button>` : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
+      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}${api.offlineSave ? `<button class="pill" data-offline-save="${target.id}">${icon('download')}${selected.kind === 'show' ? 'Save episode offline' : 'Save offline'}</button>` : ''}${api.offlineSaveMany && selected.kind === 'show' ? offlineSeasonButtons(items, target) : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
       ${m?.rating ? `<div class="ratings"><div><p class="rating-label">TMDB</p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}</div>
     <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
       ${castPanel(m)}${productionPanel(m)}${filePanel(selected, m)}</div></div>`;
   $('#title-links').hidden = !m; $('#imdb-link').hidden = !m?.imdbId;
   document.querySelectorAll('.detail').forEach(old => old.remove()); root.append(overlay); applyStyles(overlay);
   if (focus) restoreFocus($('.dock-back'));
+}
+// One button for the current season and one for "from the current episode to the season's end" (current = what Play starts).
+function offlineSeasonButtons(items, target) {
+  const season = items.filter(i => i.season === target.season), rest = season.filter(i => i.episode >= target.episode);
+  const button = (label, list) => `<button class="pill" data-offline-many="${list.map(i => i.id).join(',')}">${icon('download')}${label}</button>`;
+  return button(`Save season ${target.season} offline`, season) + (rest.length > 1 ? button(`Save from ${code(target)} to season end`, rest) : '');
 }
 // Cast and production come from TMDB; a missing portrait gets the generated cover, like missing posters do.
 const castPanel = m => m?.cast?.length ? `<section class="panel flat cast-panel" aria-labelledby="cast-h"><div class="panel-head"><h3 id="cast-h">Cast</h3></div><div class="cast-grid">${m.cast.map(c => `<div class="cast-member"><span class="cast-photo art" data-hue="${hash(c.name) % 360}">${c.photo ? `<img src="${esc(c.photo)}" alt="" loading="lazy" draggable="false">` : icon('person')}</span><strong>${esc(c.name)}</strong>${c.role ? `<small>${esc(c.role)}</small>` : ''}</div>`).join('')}</div></section>` : '';
@@ -1279,6 +1285,13 @@ document.addEventListener('matro:saved-title', event => {
 document.addEventListener('click', event => {
   const btn = event.target.closest('button'); if (!btn || btn.disabled) return;
   void attempt(async () => {
+    if (btn.dataset.offlineMany && api.offlineSaveMany) {
+      const ids = btn.dataset.offlineMany.split(',');
+      toast(`Preparing ${ids.length} episodes to save offline. See progress in your profile.`);
+      try { await api.offlineSaveMany(ids); toast('Saved for offline playback.'); }
+      catch (error) { if (error.name !== 'AbortError') throw error; }
+      return;
+    }
     if (btn.dataset.offlineSave && api.offlineSave) {
       toast('Preparing to save offline. See progress in your profile.');
       try { await api.offlineSave(btn.dataset.offlineSave); toast('Saved for offline playback.'); }

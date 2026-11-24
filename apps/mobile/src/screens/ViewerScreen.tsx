@@ -15,7 +15,7 @@ import FoldersScreen from './FoldersScreen';
 import OfflineScreen from './OfflineScreen';
 import MovieRequestsScreen from './MovieRequestsScreen';
 import { useMovieRequestAlerts } from '../lib/movie-request-alerts';
-import { offlineLibrary, rememberLibrary, savedTitle, saveOffline, type SavedMedia } from '../lib/offline';
+import { offlineLibrary, rememberLibrary, removeOffline, resumeInterrupted, savedTitle, savedTitles, saveOffline, saveOfflineBatch, watchOffline, type SavedMedia } from '../lib/offline';
 
 type Props = { base: string; onSignedOut: () => void; onChangeServer: () => void };
 const kinds = [{ kind: 'show', title: 'Shows', noun: 'shows' }, { kind: 'movie', title: 'Movies', noun: 'titles' }, { kind: 'audio', title: 'Music & audio', noun: 'files' }];
@@ -85,7 +85,21 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     return recent(b) - recent(a) || (b[0].added || 0) - (a[0].added || 0);
   }) : [], [allGroups, data?.progress]);
   const continues = useMemo(() => data ? continueItems(data, allGroups) : [], [data, allGroups]);
-  const detail = allGroups.find(items => titleKey(items[0]) === selected);
+  // Titles opened from the Saved tab show only the episodes that are on this device.
+  const [savedIds, setSavedIds] = useState<Set<string>>(new Set()), [savedOnly, setSavedOnly] = useState(false);
+  useEffect(() => {
+    if (!data) return;
+    let run = 0;
+    const refresh = () => {
+      const current = ++run;
+      void savedTitles(base, data.user).then(list => { if (current === run) setSavedIds(new Set(list.filter(record => record.complete).map(record => record.id))); }).catch(() => {});
+    };
+    refresh();
+    const stop = watchOffline(refresh);
+    return () => { run++; stop(); };
+  }, [base, data?.user.id]);
+  const found = allGroups.find(items => titleKey(items[0]) === selected);
+  const detail = savedOnly ? found?.filter(item => savedIds.has(item.id)) : found;
   const art = { base, headers };
   const updateProgress = async (item: Item, dismiss: boolean) => {
     if (!data) return;
@@ -134,12 +148,29 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     void startPlayback(item, queue, start);
     if (!offline) void request(base, '/api/state', { method: 'PUT', body: { queue: queue.map(i => i.id) } }).catch(e => setError(e.message));
   };
+  const saveName = (item: Item) => data && item.kind !== 'show' ? nameFor(data, item) : item.title;
+  useEffect(() => {
+    if (!data || offline) return;
+    const resume = () => void resumeInterrupted(base, data.user, data.items, saveName).catch(() => {});
+    resume();
+    const subscription = AppState.addEventListener('change', state => { if (state === 'active') resume(); });
+    return () => subscription.remove();
+  }, [base, offline, data?.user.id, data?.items]);
   const save = (item: Item) => {
     if (!data || offline) return;
-    void saveOffline(base, data.user, item, item.kind === 'show' ? item.title : nameFor(data, item)).catch(error => Alert.alert('Could not save title', error.message));
+    void saveOffline(base, data.user, item, saveName(item)).catch(error => Alert.alert('Could not save title', error.message));
     Alert.alert('Save offline', 'Matro will prepare the title. You can follow progress from your profile.');
   };
-  const changeTab = (value: string) => { setTab(value); setSelected(null); setFolder(null); setFilter('all'); setRequestSearch(null); };
+  const saveMany = (list: Item[]) => {
+    if (!data || offline || !list.length) return;
+    void saveOfflineBatch(base, data.user, list, saveName).catch(error => Alert.alert('Could not save everything', error.message));
+    Alert.alert('Saving offline', `${list.length} ${list.length === 1 ? 'episode' : 'episodes'} queued. Matro prepares two at a time; follow progress under Saved.`);
+  };
+  const removeSaved = (list: Item[]) => Alert.alert('Remove from this device?', 'The saved files are deleted. They stay in your library on the server.', [
+    { text: 'Cancel', style: 'cancel' },
+    { text: 'Remove', style: 'destructive', onPress: () => void Promise.all(list.map(item => removeOffline(base, data!.user, item.id))).then(() => { setSelected(null); setSavedOnly(false); }).catch(e => setError(e.message)) },
+  ]);
+  const changeTab = (value: string) => { setSavedOnly(false); setTab(value); setSelected(null); setFolder(null); setFilter('all'); setRequestSearch(null); };
   useEffect(() => {
     if (playing || !alerts.supported || alerts.opened === openedAlerts.current) return;
     openedAlerts.current = alerts.opened;
@@ -152,7 +183,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       if (next && data.preferences.autoplay !== false) void startPlayback(next, playing.queue);
       else { setPlaying(null); void load(); }
     }} />;
-  if (detail && data) return <TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onComplete={complete} onEnqueue={enqueue} onSave={offline ? undefined : save} />;
+  if (detail && data) return <TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onComplete={complete} onEnqueue={enqueue} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} />;
   const contentStyle = { paddingTop: insets.top + 76, paddingBottom: insets.bottom + 104, paddingHorizontal: 18 };
   const search = tab === 'search';
   const matches = (items: Item[]) => !search || `${nameFor(data!, items[0])} ${metadataFor(data!, items[0]).people?.join(' ')} ${items.map(i => i.title + ' ' + i.path).join(' ')}`.toLowerCase().includes(query.toLowerCase().trim());
@@ -169,11 +200,8 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const browse = data && ['movie', 'show', 'audio'].includes(tab), allBrowse = browse ? groups.filter(items => items[0].kind === tab) : [];
   const browseItems = browse ? allBrowse.filter(items => filter === 'all' || statusOf(data!, items) === filter) : [];
   return <View style={s.fill}>
-    {tab === 'offline' && data ? <OfflineScreen base={base} user={data.user} offline={offline}
-      onOpen={id => {
-        const item = data.items.find(item => item.id === id); if (!item) return;
-        void savedTitle(base, data.user, id).then(saved => { if (saved) setPlaying({ item, queue: [item], saved }); }).catch(e => setError(e.message));
-      }}
+    {tab === 'offline' && data ? <OfflineScreen {...art} data={data} offline={offline}
+      onOpenTitle={items => { setSavedOnly(true); setSelected(titleKey(items[0])); }}
       onResume={id => { const item = data.items.find(item => item.id === id); if (item) save(item); }}
       onRemoved={() => { if (offline) void load(); }} /> :
     !data ? <View style={[s.center, { padding: 24 }]}>{refreshing ? <ActivityIndicator color={colors.text} /> : <><Text style={t.heading}>Your library</Text><Text style={[t.muted, { marginVertical: 16 }]}>{error || 'Could not load your library.'}</Text><Pill label="Try again" onPress={() => void load()} /></>}</View> :

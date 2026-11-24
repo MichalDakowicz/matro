@@ -66,7 +66,7 @@ function register(app) {
     const direct = canDirectPlay(item.path, info) && (audio === null || audio === info.audio[0]?.index);
     const result = direct ? { done: true, file: item.path, size: original.size } : await transcode.offline(item.path, info, audio);
     if (result.error) throw new HttpError(422, 'This file could not be prepared for offline playback.');
-    if (!result.done) return { state: 'preparing' };
+    if (!result.done) return { state: 'preparing', progress: info.duration > 0 ? Math.min(0.99, (result.preparedSeconds || 0) / info.duration) : null };
     const version = createHash('sha256').update(JSON.stringify([1, item.id, original.size, original.mtimeMs, audio, result.size])).digest('hex');
     const type = direct ? MIME[path.extname(item.path).toLowerCase()] || 'video/mp4' : 'video/mp4';
     return { state: 'ready', file: result.file, size: result.size, version, type, entry: direct ? undefined : result };

@@ -18,8 +18,9 @@ export function savedDownloads({ offline, matro, onOpenTitle }) {
       const speed = (job.have - job.initial) / Math.max(1, (Date.now() - job.started) / 1000);
       const elapsed = speed > 0 ? ` · ${size(speed)}/s · ${Math.ceil((job.size - job.have) / speed)} s left` : '';
       return h('section', { class: 'saved-download-row' }, h('strong', {}, job.item.title),
-        h('p', { class: 'dim' }, job.size ? `${size(job.have)} of ${size(job.size)}${elapsed}` : 'Preparing download…'),
-        job.size ? h('progress', { value: job.have, max: job.size, 'aria-label': `Saving ${job.item.title}` }) : null,
+        h('p', { class: 'dim' }, job.size ? `${size(job.have)} of ${size(job.size)}${elapsed}` : job.prepared === null ? 'Preparing on the server…' : `Preparing on the server · ${Math.round(job.prepared * 100)}%`),
+        job.size ? h('progress', { value: job.have, max: job.size, 'aria-label': `Saving ${job.item.title}` })
+          : job.prepared === null ? null : h('progress', { value: job.prepared, max: 1, 'aria-label': `Preparing ${job.item.title}` }),
         button('Pause', () => offline.cancel(job.item.id)));
     });
     for (const record of records.filter(record => !busy.has(record.id))) {

@@ -72,7 +72,7 @@ export function Corner({ username, onHome, onProfile, onHelp }: { username?: str
 }
 export function Dock({ tab, onChange, audio, requests }: { tab: string; onChange: (tab: string) => void; audio: boolean; requests?: string }) {
   const insets = useSafeAreaInsets();
-  const items: { id: string; label: string; icon: Glyph }[] = [{ id: 'movie', label: 'Movies', icon: 'movies' }, { id: 'show', label: 'Shows', icon: 'shows' }, ...(audio ? [{ id: 'audio', label: 'Music', icon: 'music' as Glyph }] : []), { id: 'search', label: 'Search', icon: 'search' }];
+  const items: { id: string; label: string; icon: Glyph }[] = [{ id: 'movie', label: 'Movies', icon: 'movies' }, { id: 'show', label: 'Shows', icon: 'shows' }, ...(audio ? [{ id: 'audio', label: 'Music', icon: 'music' as Glyph }] : []), { id: 'offline', label: 'Saved for offline', icon: 'download' }, { id: 'search', label: 'Search', icon: 'search' }];
   if (requests) items.push({ id: 'movie-requests', label: requests, icon: 'requests' });
   return <View style={[s.dockWrap, { bottom: insets.bottom + 14 }]}><View style={s.dock}>{items.map(item => <Pressable key={item.id} onPress={() => onChange(tab === item.id ? 'home' : item.id)} accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.id }} style={({ pressed }) => [s.dockItem, tab === item.id && { backgroundColor: '#ffffff1f' }, pressed && { opacity: .65 }]}><Icon name={item.icon} color={tab === item.id ? colors.text : '#bebab3'} /></Pressable>)}</View></View>;
 }
