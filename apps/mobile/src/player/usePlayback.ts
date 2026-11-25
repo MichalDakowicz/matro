@@ -210,7 +210,9 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     const timer = setInterval(() => { if (AppState.currentState === 'active' && intent.current && (player.playing || player.status === 'loading') && Date.now() - moved.current > 25000) { moved.current = Date.now(); recover(); } }, 2000);
     const heartbeat = setInterval(() => {
       const buffering = player.status === 'loading';
+      // A paused player still holds its prepared stream, so it keeps renewing the lease.
       if (AppState.currentState === 'active' && intent.current && (player.playing || buffering)) reportActivity(true, buffering);
+      else reportActivity(false);
     }, 20000);
     return () => { clearInterval(heartbeat); clearInterval(checkpoint); time.remove(); status.remove(); playing.remove(); end.remove(); appState.remove(); clearInterval(timer); };
   }, [base, player, persist, recover, reportsActivity, session]);

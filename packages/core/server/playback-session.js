@@ -21,11 +21,11 @@ function createPlaybackActivity(setPlayback, ttlMs = 90000) {
       buffering ||= activity.buffering;
     }
     setPlayback(sessions.size > 0, buffering);
-    if (sessions.size) timer = setTimeout(refresh, expires - now).unref();
+    if (sessions.size && expires !== Infinity) timer = setTimeout(refresh, expires - now).unref();
   }
   return {
-    set(key, playing, buffering = false) {
-      if (playing) sessions.set(key, { expires: Date.now() + ttlMs, buffering });
+    set(key, playing, buffering = false, sticky = false) {
+      if (playing) sessions.set(key, { expires: sticky ? Infinity : Date.now() + ttlMs, buffering });
       else sessions.delete(key);
       refresh();
     },

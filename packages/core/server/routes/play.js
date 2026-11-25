@@ -98,9 +98,10 @@ function register(app) {
 
   router.add('POST', '/api/playback/state', async ctx => {
     const body = await readJson(ctx.req), session = playbackSession(ctx, body.session);
-    const playing = body.playing === true;
-    if (playing) transcode.renew(session);
-    activity.set(session, playing, body.buffering === true);
+    // Any report, paused or not, proves the player is still open and keeps its prepared stream alive.
+    transcode.renew(session);
+    // Older apps send no session id and no heartbeat: keep their activity until they report playing:false or stop.
+    activity.set(session, body.playing === true, body.buffering === true, body.session == null);
   });
 
   router.add('POST', '/api/playback/stop', async ctx => {

@@ -26,6 +26,19 @@ test('scanner activity expires independently, and heartbeats renew a player leas
   assert.deepEqual(status, { playing: false, buffering: false });
 });
 
+test('activity without a session id outlives the lease until it reports idle', t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+  let status;
+  const activity = createPlaybackActivity((playing, buffering) => { status = { playing, buffering }; }, 100);
+  t.after(() => activity.close());
+  const old = playbackSession({ user: { id: 1 }, token: 'old-apk' }, null);
+  activity.set(old, true, false, true);
+  t.mock.timers.tick(10000);
+  assert.deepEqual(status, { playing: true, buffering: false });
+  activity.set(old, false);
+  assert.deepEqual(status, { playing: false, buffering: false });
+});
+
 test('frames and embedded subtitles share an access-ordered disk budget', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-assets-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));

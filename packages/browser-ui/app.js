@@ -222,9 +222,10 @@ let saveTimer = null, settlePending = null;
 // A separate clock persists playback even when media events or control rendering stall.
 setInterval(() => { if (view === 'player' && video && !video.paused) checkpoint(); }, 1000);
 if (api.playbackHeartbeat) setInterval(() => {
-  if (view === 'player' && video && playIntent && !video.ended && !playbackError && (!video.paused || loading)) {
-    void api.playbackHeartbeat({ playing: true, buffering: loading });
-  }
+  if (view !== 'player' || !video) return;
+  const active = playIntent && !video.ended && !playbackError && (!video.paused || loading);
+  // A paused player still holds its prepared stream: renew it without counting as scanner activity.
+  void api.playbackHeartbeat(active ? { playing: true, buffering: loading } : { playing: false });
 }, 20000);
 function checkpoint(now = false) {
   if (!remember()) return;
