@@ -1,9 +1,11 @@
-import { memo, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Animated, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { Item, Library } from '../lib/server';
 import { episodeName, formatTime, metadataFor, nameFor, resumeItem, statusOf } from '../../../../packages/core/client/library';
+import { randomReelStart } from '../../../../packages/core/client/reel-start';
 import { colors, fonts } from '../theme';
 import { Brand, Icon, IconButton, MediaArt, Pill, ProgressBar, styles as t, type Glyph } from './Matro';
 export type ArtProps = { base: string; headers: Record<string, string> };
@@ -20,8 +22,32 @@ export const PosterCard = memo(function PosterCard({ data, items, width, onPress
   </Pressable>;
 });
 
-export function FeaturedReel({ data, groups, onPlay, onDetail, ...art }: ArtProps & { data: Library; groups: Item[][]; onPlay: (item: Item) => void; onDetail: (item: Item) => void }) {
-  const { width } = useWindowDimensions(), reelScale = Math.max(.62, Math.min(1.1, (width - 1) / 1040)) * 1.08, posterWidth = 340 * reelScale, stride = posterWidth * .74065, start = groups.length > 1 ? groups.length : 0;
+type ReelProps = ArtProps & { data: Library; groups: Item[][]; onPlay: (item: Item) => void; onDetail: (item: Item) => void };
+
+export function FeaturedReel(props: ReelProps) {
+  const [startTitle, setStartTitle] = useState<string | null>(null);
+  const key = `matro.reelStart:${props.base}:${props.data.user.id}`;
+  const identity = ([item]: Item[]) => item.kind === 'show' ? item.groupId || item.group : item.id;
+  const [titles] = useState(() => props.groups.map(identity));
+  useEffect(() => {
+    if (!titles.length) return;
+    let active = true;
+    void AsyncStorage.getItem(key).catch(() => null).then(previous => {
+      if (!active) return;
+      const title = titles[randomReelStart(titles, previous)];
+      setStartTitle(title);
+      void AsyncStorage.setItem(key, title).catch(() => {});
+    });
+    return () => { active = false; };
+  }, [key, titles]);
+  if (startTitle === null) return null;
+  const index = props.groups.findIndex(group => identity(group) === startTitle);
+  const start = props.groups.length > 1 ? props.groups.length + Math.max(0, index) : 0;
+  return <ReelStrip {...props} start={start} />;
+}
+
+function ReelStrip({ data, groups, onPlay, onDetail, start, ...art }: ReelProps & { start: number }) {
+  const { width } = useWindowDimensions(), reelScale = Math.max(.62, Math.min(1.1, (width - 1) / 1040)) * 1.08, posterWidth = 340 * reelScale, stride = posterWidth * .74065;
   const scroll = useRef(new Animated.Value(start * stride)).current, list = useRef<FlatList<Item[]>>(null), activeRef = useRef(start);
   const [active, setActive] = useState(start);
   const slots = useMemo(() => groups.length > 1 ? [...groups, ...groups, ...groups] : groups, [groups]);

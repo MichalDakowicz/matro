@@ -10,6 +10,33 @@ function launchOptions(profile) {
   return process.env.MATRO_EXECUTABLE ? { executablePath: process.env.MATRO_EXECUTABLE, args: [`--user-data-dir=${profile}`], env } : { args: [path.resolve(__dirname, '..')], env };
 }
 
+test('the featured reel starts on a different title when reopened', async ({}, testInfo) => {
+  const profile = testInfo.outputPath('profile');
+  await fs.mkdir(profile, { recursive: true });
+  const items = await Promise.all(['North', 'South'].map(async name => {
+    const file = path.join(profile, `${name}.mkv`);
+    await fs.writeFile(file, '');
+    return describe(file);
+  }));
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items, folders: [] }));
+  const app = await electron.launch(launchOptions(profile));
+  try {
+    const page = await app.firstWindow();
+    const title = page.locator('.show-title');
+    await expect(title).toHaveText(/^(North|South)$/);
+    const first = await title.textContent(), other = first === 'North' ? 'South' : 'North';
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.locator('#reel').press('ArrowRight');
+    await expect(title).toHaveText(other);
+    const movies = page.getByRole('button', { name: 'Movies 2', exact: true });
+    await movies.click();
+    await movies.click();
+    await expect(title).toHaveText(other);
+    await page.reload();
+    await expect(title).toHaveText(first);
+  } finally { await app.close(); }
+});
+
 test('the selected movie metadata language updates the grid title and poster', async ({}, testInfo) => {
   test.skip(!!process.env.MATRO_EXECUTABLE, 'Packaged builds do not accept fixture TMDB endpoints');
   const profile = testInfo.outputPath('profile');

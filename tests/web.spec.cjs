@@ -199,6 +199,17 @@ test('an open web library picks up a catalog change without a reload', async () 
     await page.getByRole('button', { name: 'Rescan folders', exact: true }).press('Enter');
     await expect(page.locator('#toast')).toContainText('No media files were found. Existing titles were kept.');
     await expect(page.locator('.source-count')).toHaveText('2 items');
+    await page.setViewportSize({ width: 375, height: 800 });
+    await page.evaluate(() => window.matroTheme.set('light'));
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const movies = page.locator('.dock [data-tab="movie"]'), featured = page.locator('.show-title');
+    await movies.click();
+    await expect(featured).toHaveText(/^(Northbound|New Arrival)$/);
+    const start = await featured.textContent(), other = start === 'Northbound' ? 'New Arrival' : 'Northbound';
+    await page.locator('#reel').press('ArrowLeft');
+    await expect(featured).toHaveText(other);
+    await page.reload();
+    await expect(featured).toHaveText(other);
   } finally {
     await browser?.close();
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
