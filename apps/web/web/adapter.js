@@ -55,8 +55,13 @@ export function createAdapter(session) {
     acceptLibrary(data);
     return data;
   }
+  const toldRequests = new Set();
   function acceptLibrary(data) {
     session.user = data.user; latest = data;
+    // A request the viewer made has been answered: say so once per tab until they open the requests page.
+    const fresh = (data.requestUpdates || []).filter(update => !toldRequests.has(update.id));
+    for (const update of fresh) toldRequests.add(update.id);
+    if (fresh.length) say(fresh.length > 1 ? `${fresh.length} of your requests have an answer.` : `${fresh[0].title} ${fresh[0].outcome === 'ready' ? 'is ready to watch.' : 'was declined.'}`);
     if (data.metadataEnabled) follow();
   }
   let offlineSync;

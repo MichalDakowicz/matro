@@ -41,7 +41,7 @@ function register(app) {
     const state = stateOf(ctx.user.id); scanner.refresh();
     return { user: ctx.user, folders: [...new Set(q.folders.all().map(f => label(f.path)))], items, ...state, markers: scanner.markers(state.markers, state.markerDismissals),
       scanner: scanner.snapshot(), metadata: tmdb.snapshot(), metadataEnabled: tmdb.enabled, catalogRevision: library.state.revision, movieRequestsEnabled: true,
-      movieRequestPushEnabled: admin && app.movieRequests.push.enabled };
+      movieRequestPushEnabled: app.movieRequests.push.enabled, requestUpdates: app.movieRequests.updates(ctx.user) };
   });
   router.add('GET', '/api/library/revision', () => ({ catalogRevision: library.state.revision }));
 

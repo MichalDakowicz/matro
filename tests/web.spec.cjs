@@ -119,6 +119,14 @@ test('viewers request a movie and the owner searches for a release without start
     await expect(page.getByText('Request removed.', { exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Withdraw this request' })).toHaveCount(0);
 
+    await expect(page.locator('.request-status.pending')).toHaveText('Waiting');
+    await page.getByRole('button', { name: 'Season', exact: true }).click();
+    await page.getByLabel('Series title').fill('Another Show');
+    await page.getByLabel('Season number').fill('2');
+    await page.getByRole('button', { name: 'Send request', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Another Show' })).toBeVisible();
+    await expect(page.getByText(/· Season 2$/)).toBeVisible();
+
     await page.getByRole('button', { name: 'Profile: viewer' }).click();
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
@@ -130,7 +138,7 @@ test('viewers request a movie and the owner searches for a release without start
     await page.evaluate(() => window.matroTheme.set('dark'));
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await expect(page.getByRole('button', { name: 'Send request' })).toHaveCount(0);
-    await expect(page.getByText(/^viewer · /)).toBeVisible();
+    await expect(page.getByText(/^viewer · /).first()).toBeVisible();
     await page.getByRole('button', { name: 'Search releases for The Example (2024)' }).click();
     await expect(page.getByRole('searchbox', { name: 'Search movie torrents' })).toHaveValue('The Example');
     await expect(page.getByText('Requested movie · The Example (2024)', { exact: true })).toBeVisible();
@@ -139,6 +147,8 @@ test('viewers request a movie and the owner searches for a release without start
     expect((await app.downloads.jobs('server')).length).toBe(0);
 
     await page.getByRole('button', { name: 'Movie requests', exact: true }).click();
+    await page.getByRole('button', { name: 'Decline Another Show' }).click();
+    await expect(page.getByText('Another Show declined.', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Mark The Example (2024) handled' }).click();
     await expect(page.getByText('No pending movie requests.')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'The Example (2024)' })).toBeVisible();
@@ -147,6 +157,8 @@ test('viewers request a movie and the owner searches for a release without start
     await confirmation.getByRole('button', { name: 'Cancel' }).click();
     await expect(page.getByRole('heading', { name: 'The Example (2024)' })).toBeVisible();
     await removeHandled.click();
+    await confirmation.getByRole('button', { name: 'Remove request', exact: true }).click();
+    await page.getByRole('button', { name: 'Remove request for Another Show' }).click();
     await confirmation.getByRole('button', { name: 'Remove request', exact: true }).click();
     await expect(page.getByText('No handled movie requests yet.')).toBeVisible();
     await page.getByRole('button', { name: 'Refresh requests' }).click();

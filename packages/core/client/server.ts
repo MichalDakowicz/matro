@@ -86,25 +86,33 @@ export const logout = async (base: string): Promise<unknown> => {
   finally { await tokenStorage?.set(base, null); }
 };
 
+export type RequestKind = 'movie' | 'series' | 'season';
 export type MovieRequest = {
-  id: number; title: string; year: number | null; status: 'pending' | 'handled'; created: number; requester: string | null;
+  id: number; title: string; year: number | null; kind: RequestKind; season: number | null; tmdbId: number | null;
+  status: 'pending' | 'handled'; outcome: 'pending' | 'ready' | 'declined'; groupId: string | null; isNew: boolean;
+  created: number; requester: string | null;
 };
-export type MovieRequests = { pending: MovieRequest[]; handled: MovieRequest[]; alertsConfigured?: boolean; canRemove?: boolean };
+export type MovieRequests = { pending: MovieRequest[]; handled: MovieRequest[]; alertsConfigured?: boolean; canRemove?: boolean; tmdb?: boolean };
+export type RequestDraft = { title: string; year?: string; kind: RequestKind; season?: number; tmdbId?: number };
+export type TitleChoice = { id: number; title: string; year: string | null; overview: string; thumb: string | null };
 export const movieRequests = (base: string, owner: boolean): Promise<MovieRequests> =>
   request(base, owner ? '/api/admin/movie-requests' : '/api/movie-requests');
-export const sendMovieRequest = (base: string, title: string, year: string): Promise<{ request: MovieRequest; duplicate: boolean }> =>
-  request(base, '/api/movie-requests', { method: 'POST', body: { title, year } });
-export const markMovieRequestHandled = (base: string, id: number): Promise<{ request: MovieRequest }> =>
-  request(base, `/api/admin/movie-requests/${id}`, { method: 'PATCH' });
+export const sendMovieRequest = (base: string, draft: RequestDraft): Promise<{ request: MovieRequest; duplicate: boolean }> =>
+  request(base, '/api/movie-requests', { method: 'POST', body: draft });
+export const searchRequestTitles = async (base: string, kind: RequestKind, query: string): Promise<TitleChoice[]> =>
+  (await request(base, `/api/movie-requests/search?kind=${kind === 'movie' ? 'movie' : 'show'}&query=${encodeURIComponent(query)}`)).results;
+export const markMovieRequestHandled = (base: string, id: number, declined = false): Promise<{ request: MovieRequest }> =>
+  request(base, `/api/admin/movie-requests/${id}`, { method: 'PATCH', body: declined ? { declined: true } : undefined });
 export const removeMovieRequest = (base: string, id: number): Promise<unknown> =>
   request(base, `/api/movie-requests/${id}`, { method: 'DELETE' });
-const movieRequestDevicePath = '/api/admin/movie-requests/device';
-export const registerMovieRequestDevice = (base: string, token: string): Promise<{ registration: string }> =>
-  request(base, movieRequestDevicePath, { method: 'PUT', body: { token } });
-export const unregisterMovieRequestDevice = (base: string): Promise<unknown> =>
-  request(base, movieRequestDevicePath, { method: 'DELETE' });
-export const testMovieRequestAlert = (base: string): Promise<unknown> =>
-  request(base, movieRequestDevicePath + '/test', { method: 'POST' });
+// Viewers and the head account register their phones on different routes.
+const movieRequestDevicePath = (owner: boolean) => owner ? '/api/admin/movie-requests/device' : '/api/movie-requests/device';
+export const registerMovieRequestDevice = (base: string, token: string, owner: boolean): Promise<{ registration: string }> =>
+  request(base, movieRequestDevicePath(owner), { method: 'PUT', body: { token } });
+export const unregisterMovieRequestDevice = (base: string, owner: boolean): Promise<unknown> =>
+  request(base, movieRequestDevicePath(owner), { method: 'DELETE' });
+export const testMovieRequestAlert = (base: string, owner: boolean): Promise<unknown> =>
+  request(base, movieRequestDevicePath(owner) + '/test', { method: 'POST' });
 
 export type Item = { id: string; groupId: string; title: string; group: string; kind: string; season: number | null; episode: number | null; format: string; root?: string; path?: string; added?: number };
 export type Progress = { position: number; duration: number; completed?: boolean; hidden?: boolean; updated: number };
@@ -114,7 +122,7 @@ export type TrackPreference = { audio?: TrackChoice | null; subtitle?: TrackChoi
 export type Preferences = { autoplay?: boolean; volume?: number; tracks?: Record<string, TrackPreference>; [key: string]: unknown };
 export type Segment = { type: 'intro' | 'outro' | 'recap'; start: number; end: number; source: 'manual' | 'automatic' };
 export type ScannerStatus = { ready: number; total: number; message: string; complete?: boolean };
-export type Library = { markers?: Record<string, Segment[]>; scanner?: ScannerStatus; user: MatroUser; items: Item[]; folders?: string[]; progress: Record<string, Progress>; queue: string[]; preferences: Preferences; metadata: Record<string, Metadata>; catalogRevision?: string; movieRequestsEnabled?: boolean; movieRequestPushEnabled?: boolean };
+export type Library = { markers?: Record<string, Segment[]>; scanner?: ScannerStatus; user: MatroUser; items: Item[]; folders?: string[]; progress: Record<string, Progress>; queue: string[]; preferences: Preferences; metadata: Record<string, Metadata>; catalogRevision?: string; movieRequestsEnabled?: boolean; movieRequestPushEnabled?: boolean; requestUpdates?: { id: number; title: string; outcome: 'ready' | 'declined' }[] };
 export type Track = { index: number; language: string; title: string; bitmap?: boolean; text?: boolean; codec?: string; channels?: number; default?: boolean };
 export type Info = { duration: number; directPlay: boolean; video?: { codec: string; height: number; width: number } | null; chapters?: { start: number; title: string }[]; audio: Track[]; embedded: Track[]; uploaded: { id: number; language: string; name: string }[] };
 export const library = async (base: string): Promise<Library> => { await ensureNativeSession(base); return request(base, '/api/library'); };

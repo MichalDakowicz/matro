@@ -11,10 +11,10 @@ const { createMovieRequests } = require('./movie-requests');
 
 function createApp({ dataDir = config.dataDir, tmdb: tmdbOptions, downloads: downloadOptions, movieRequests: requestOptions } = {}) {
   const db = open(require('node:path').join(dataDir, 'matro.db'));
-  const auth = createAuth(db), library = createLibrary(db, { excludedFiles: root => app.downloads.pendingLibraryFiles(root), onChange: () => app.scanner?.invalidate() }), router = createRouter();
+  const auth = createAuth(db), library = createLibrary(db, { excludedFiles: root => app.downloads.pendingLibraryFiles(root), onChange: () => { app.scanner?.invalidate(); app.movieRequests?.fulfil(); } }), router = createRouter();
   const app = { dataDir, db, auth, library, router, tmdb: createTmdb(db, tmdbOptions), invites: createInvites(db) };
   app.scanner = require('./segments').createScanner({ dataDir, db });
-  app.downloads = createDownloads({ dataDir, library, tmdb: app.tmdb, ...downloadOptions });
+  app.downloads = createDownloads({ dataDir, library, tmdb: app.tmdb, afterImport: () => app.movieRequests?.fulfil(), ...downloadOptions });
   app.movieRequests = createMovieRequests(db, requestOptions);
   for (const name of ['account', 'library', 'play', 'admin', 'downloads', 'movie-requests']) require(`./routes/${name}`).register(app);
   const server = createServer({ router, publicDir: config.publicDir, authenticate: token => auth.session(token), config });

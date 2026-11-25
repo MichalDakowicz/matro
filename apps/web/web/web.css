@@ -33,7 +33,13 @@ body.in-player .offline-indicator,body.fullscreen .offline-indicator{display:non
 .web-form,.web-inline{display:flex;flex-direction:column;gap:6px}
 .web-inline{flex-direction:row;flex-wrap:wrap;gap:10px;margin-top:16px}.web-inline input{flex:1;min-width:160px;height:44px;padding:0 14px;border:1px solid rgb(var(--ink) / 0.19);border-radius:8px;background:rgb(var(--ink) / 0.03);color:var(--text);font:inherit}
 .web-error,.web-status{min-height:1.4em;margin:0;font-size:13px;color:var(--warn)}.web-status{color:var(--muted)}
-.movie-request-form{max-width:600px;margin-bottom:12px}
+.movie-request-form{max-width:600px;margin-bottom:12px;display:grid;gap:12px}
+.movie-request-form>button[type=submit]{justify-self:start}.movie-request-form [hidden]{display:none}
+.movie-request-picks{list-style:none;margin:0;padding:0;display:grid;gap:6px}.movie-request-picks:empty{display:none}
+.movie-request-pick{display:flex;align-items:center;gap:12px;width:100%;min-height:54px;padding:6px 12px 6px 6px;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:12px}
+.movie-request-pick:hover{background:rgb(var(--ink) / 0.08)}.movie-request-pick img,.movie-request-nothumb{flex:none;width:36px;height:54px;border-radius:6px;object-fit:cover;background:var(--surface)}
+.movie-request-pick .min{display:grid;gap:2px;font-size:13px}.movie-request-pick .muted{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.request-status{font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}.request-status.ready{color:var(--good)}.request-status.declined{color:var(--warn)}.request-new{font-size:12px;font-weight:600;color:var(--good)}
 .movie-request-form .download-fields{grid-template-columns:minmax(0,1fr) minmax(160px,35%)}
 .movie-request-results{max-width:900px;margin-top:16px}
 .movie-request-results>.muted{margin-bottom:20px}

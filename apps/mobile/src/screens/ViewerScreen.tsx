@@ -29,7 +29,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const [offline, setOffline] = useState(false), playRun = useRef(0);
   const [refreshing, setRefreshing] = useState(false), [account, setAccount] = useState(false), [folder, setFolder] = useState<string | null>(null);
   const revision = useRef<string | undefined>(undefined);
-  const alerts = useMovieRequestAlerts(base, !offline && data?.user.role === 'admin' && data.movieRequestPushEnabled === true);
+  const alerts = useMovieRequestAlerts(base, !offline && data?.movieRequestPushEnabled === true, data?.user.role === 'admin');
   const openedAlerts = useRef(0);
   const keyboard = useKeyboardVisible();
   const { width } = useWindowDimensions(), insets = useSafeAreaInsets(), columns = Math.max(3, Math.floor((width - 24) / 108)), cardWidth = (width - 36 - (columns - 1) * 12) / columns;

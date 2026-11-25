@@ -67,6 +67,20 @@ CREATE INDEX IF NOT EXISTS movie_request_push_due ON movie_request_push(notify_a
 CREATE INDEX IF NOT EXISTS movie_request_push_device ON movie_request_push(device_id);
 `;
 
+// Columns added after the first release. Existing databases gain them in place; nothing is rebuilt or dropped.
+const added = {
+  movie_requests: {
+    kind: "TEXT NOT NULL DEFAULT 'movie'", season: 'INTEGER NOT NULL DEFAULT 0', tmdb_id: 'INTEGER',
+    declined: 'INTEGER NOT NULL DEFAULT 0', group_id: 'TEXT', fulfilled: 'INTEGER', seen: 'INTEGER NOT NULL DEFAULT 1'
+  }
+};
+function migrate(db) {
+  for (const [table, columns] of Object.entries(added)) {
+    const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));
+    for (const [name, definition] of Object.entries(columns)) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+  }
+}
+
 function open(file) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
@@ -78,6 +92,7 @@ function open(file) {
     if (!userColumns.has('legacy_scope')) db.exec('ALTER TABLE users ADD COLUMN legacy_scope INTEGER NOT NULL DEFAULT 0');
     db.exec(`UPDATE users SET account_key = lower(hex(randomblob(16))), legacy_scope = 1 WHERE account_key IS NULL;
       CREATE UNIQUE INDEX IF NOT EXISTS users_account_key ON users(account_key);`);
+    migrate(db);
   }, 'BEGIN IMMEDIATE');
   return db;
 }
