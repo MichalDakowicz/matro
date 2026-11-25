@@ -603,6 +603,23 @@ test('subtitles stay right after seeks and 5-second skips, paused or playing', a
     await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
     await page.locator('[data-subtitle="3"]').click();
     await expect.poll(active).toBe('A place for your collection.');
+    const caption = page.locator('#subtitle-caption'), top = page.getByRole('button', { name: 'Top', exact: true });
+    await expect(caption).toHaveText('A place for your collection.');
+    const bottom = await caption.boundingBox();
+    await top.press('Enter');
+    await expect(top).toHaveAttribute('aria-pressed', 'true');
+    const upper = await caption.boundingBox(), heading = await page.locator('.player-heading').boundingBox();
+    expect(upper.y).toBeLessThan(bottom.y);
+    expect(upper.y).toBeGreaterThanOrEqual(heading.y + heading.height);
+    const horizontal = page.getByRole('slider', { name: 'Horizontal subtitle position' });
+    await horizontal.press('End');
+    await expect(horizontal).toHaveValue('100');
+    expect((await caption.boundingBox()).x).toBeGreaterThan(upper.x);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('matro.subtitlePosition')))).toEqual({ x: 100, y: 0 });
+    await page.getByRole('button', { name: 'Reset position' }).press('Enter');
+    await expect(horizontal).toHaveValue('50');
+    const timeline = await page.locator('.timeline').boundingBox(), reset = await caption.boundingBox();
+    expect(reset.y + reset.height).toBeLessThanOrEqual(timeline.y);
     await page.getByRole('button', { name: 'Close audio and subtitles' }).click();
     // Paused: a seek that restarts the stream must show the line for the new moment without pressing play.
     await page.locator('#seek').evaluate(el => { el.value = '6'; el.dispatchEvent(new Event('change', { bubbles: true })); });
@@ -776,7 +793,7 @@ test('a loaded subtitle file is copied next to the video and offered again next 
     await expect(page.locator('.sub-style-row output')).toHaveText('150%');
     for (const choice of ['font:serif', 'background:solid', 'bold:on', 'edge:outline']) await page.locator(`[data-sub-style="${choice}"]`).click();
     await expect(page.locator('[data-sub-style="bold:on"]')).toHaveAttribute('aria-pressed', 'true');
-    const vars = await page.locator('video').evaluate(v => ['--cue-scale', '--cue-font', '--cue-bg', '--cue-weight', '--cue-shadow'].map(name => v.style.getPropertyValue(name)));
+    const vars = await page.locator('#subtitle-caption').evaluate(caption => ['--cue-scale', '--cue-font', '--cue-bg', '--cue-weight', '--cue-shadow'].map(name => getComputedStyle(caption).getPropertyValue(name)));
     expect(vars[0]).toBe('1.5'); expect(vars[1]).toContain('Georgia'); expect(vars[2]).toBe('rgb(0 0 0 / 1)'); expect(vars[3]).toBe('700'); expect(vars[4]).toContain('#000');
     await page.screenshot({ path: 'test-results/subtitle-panel.png' });
     await page.getByRole('button', { name: 'Close audio and subtitles' }).click();
