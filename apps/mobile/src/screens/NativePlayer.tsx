@@ -105,6 +105,10 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
       <View style={[s.sheet, { paddingBottom: Math.max(16, insets.bottom + 12), maxHeight: landscape ? height - 20 : height * .78 }, landscape && { width: 360, left: undefined, top: 0, bottom: 0, maxHeight: height, borderTopRightRadius: 0 }]}>
         <View style={t.sectionHeading}><Text style={t.sectionTitle}>{sheet === 'tracks' ? 'Audio and subtitles' : 'Queue'}</Text><IconButton name="close" label={sheet === 'tracks' ? 'Close audio and subtitles' : 'Close queue'} onPress={() => setSheet(null)} /></View>
         {sheet === 'tracks' ? <ScrollView showsVerticalScrollIndicator={false}>
+          {p.qualities.length > 0 && <View style={[t.row, { flexWrap: 'wrap', marginBottom: 12 }]}>
+            <Text style={t.muted}>Quality</Text>
+            {p.qualities.map(q => <Pill key={q.id} label={q.label} primary={p.quality === q.id} onPress={() => p.chooseQuality(q.id)} />)}
+          </View>}
           <Text style={s.panelLabel}>Audio</Text>
           {p.info?.audio.map(track => <Pressable key={track.index} onPress={() => p.chooseAudio(track.index)} accessibilityRole="radio" accessibilityState={{ checked: p.audio === track.index }} style={[s.track, p.audio === track.index && s.selectedTrack]}><View style={{ flex: 1 }}><Text style={[t.text, { fontFamily: fonts.medium }]}>{languageName(track.language)}</Text>{track.title ? <Text style={[t.dim, { marginTop: 3 }]}>{track.title}</Text> : null}<Text style={[t.dim, { fontSize: 11, marginTop: 4 }]}>{[track.codec?.toUpperCase(), track.channels ? `${track.channels} channels` : ''].filter(Boolean).join(' · ')}</Text></View>{p.audio === track.index && <Icon name="check" size={18} />}</Pressable>)}
           <Text style={[s.panelLabel, { marginTop: 22 }]}>Subtitles</Text>

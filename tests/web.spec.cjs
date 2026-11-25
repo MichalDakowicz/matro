@@ -389,6 +389,15 @@ test('Vite production UI signs in, plays through the HTTP adapter and saves prog
     expect(await page.locator('video').evaluate(v => v.src.startsWith('blob:'))).toBe(true);
     await page.locator('#seek').evaluate(el => { el.value = '6'; el.dispatchEvent(new Event('change', { bubbles: true })); });
     await expect(page.locator('#position')).toHaveText('0:06');
+    await page.locator('#tracks-button').click();
+    const tier = page.getByRole('button', { name: '480p', exact: true });
+    const switched = page.waitForResponse(response => response.url().includes('/transcode?') && new URL(response.url()).searchParams.get('quality') === '480p');
+    await tier.click();
+    expect((await switched).ok()).toBe(true);
+    await expect(tier).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#position')).toHaveText('0:06');
+    await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Close audio and subtitles' }).click();
     await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
     const saved = await page.evaluate(async () => (await (await fetch('/api/library')).json()).progress);
     expect(Object.values(saved).some(p => p.position >= 5.9)).toBe(true);

@@ -1092,11 +1092,17 @@ function renderTracks() {
     <div class="track-columns"><div><h3>Audio</h3>${audioRows || '<p class="scan-note">No audio tracks</p>'}</div>
     <div><h3>Subtitles</h3><button class="track-option ${subtitle === null ? 'selected' : ''}" data-subtitle="off" aria-pressed="${subtitle === null}"><span class="radio"></span><span><strong>Off</strong><small>No subtitles</small></span></button>${subtitleRows}
     ${subtitle === 'external' ? '<button class="track-option selected" disabled><span class="radio"></span><span><strong>External file</strong><small>Loaded subtitles</small></span></button>' : ''}</div></div>
+    ${qualityRow()}
     <div class="track-bottom"><div class="delay-controls"><span>Sub delay</span><button class="icon-button" data-action="delay-down" aria-label="Subtitles earlier by 0.1 seconds">−</button><output>${delay > 0 ? '+' : ''}${delay.toFixed(1)} s</output><button class="icon-button" data-action="delay-up" aria-label="Subtitles later by 0.1 seconds">+</button></div>
     <button class="text-button" data-action="subtitle-file">Load subtitle file…</button></div>
     ${subStylePanel(bitmap)}
     ${bitmap ? '<p class="bitmap-note">Bitmap subtitles keep their original appearance. Track or delay changes briefly reload playback.</p>' : ''}
     ${info.chapters.length ? `<div class="player-chapters">${info.chapters.map((c, index) => `<button class="chapter-button" data-chapter="${index}">${esc(c.title)} · ${fmt(c.start)}</button>`).join('')}</div>` : ''}</section>`;
+}
+function qualityRow() {
+  if (!(info.qualities?.length > 1)) return '';
+  const chosen = api.quality();
+  return `<div class="sub-style"><div class="sub-style-row"><span>Quality</span><div class="size-options" role="group" aria-label="Stream quality">${info.qualities.map(q => `<button class="${chosen === q.id ? 'selected' : ''}" data-quality="${q.id}" aria-pressed="${chosen === q.id}" title="${esc(q.detail)}">${esc(q.label)}</button>`).join('')}</div></div></div>`;
 }
 // Subtitle look is one global preference: size (50–200%), font, background box, weight/slant and an edge effect.
 // It is applied through CSS variables that video::cue reads, so restyling never reloads the track.
@@ -1171,7 +1177,7 @@ async function pickSubtitle(value) {
   subtitle = Number(value); subtitleText = text; rememberTracks(); applySubtitle(); renderTracks();
   if (wasBitmap) await restartStream();
 }
-async function restartStream() { const token = ++generation; await loadStream(offset + video.currentTime, playIntent, token); }
+async function restartStream() { const token = ++generation; await loadStream(pendingStream?.id === current.id ? pendingStream.position : offset + video.currentTime, playIntent, token); }
 async function changeSubtitleDelay(change) { delay = Math.max(-60, Math.min(60, Math.round((delay + change) * 10) / 10)); adjustCues(); renderTracks(); rememberTracks(); if (bitmapTrack()) await restartStream(); }
 function resetPlayer() {
   // load() resets currentTime and queues media events. Invalidate the stream
@@ -1332,6 +1338,7 @@ document.addEventListener('click', event => {
     if (btn.dataset.removeFolder !== undefined) { library = await api.removeFolder(library.folders[Number(btn.dataset.removeFolder)]); renderLibrary(); return; }
     if (btn.dataset.removeQueue) { library.queue = library.queue.filter(id => id !== btn.dataset.removeQueue); await save(); renderQueue(); return; }
     if (btn.dataset.audio) { const position = offset + video.currentTime, playing = playIntent; audio = Number(btn.dataset.audio); rememberTracks(); updateMetadata(); renderTracks(); const token = ++generation; await loadStream(position, playing, token); return; }
+    if (btn.dataset.quality) { if (btn.dataset.quality === api.quality()) return; api.setQuality(btn.dataset.quality); discardPrepared(); renderTracks(); await restartStream(); return; }
     if (btn.dataset.subtitle) return pickSubtitle(btn.dataset.subtitle);
     if (btn.dataset.subStyle) { const [key, value] = btn.dataset.subStyle.split(':'); const style = subStyle(); setSubStyle({ [key]: ['bold', 'italic'].includes(key) ? !style[key] : value }); return; }
     if (btn.dataset.chapter !== undefined) return seek(info.chapters[Number(btn.dataset.chapter)].start);

@@ -226,6 +226,7 @@ test('track info, direct play ranges, transcode and embedded subtitles', async (
   const bytes = Buffer.from(await second.arrayBuffer());
   assert.ok(bytes.length > 1000 && bytes.includes(Buffer.from('ftyp')));
   assert.equal((await fetch(`${base}/api/items/${ep.id}/transcode?t=1&audio=99`, { headers: { cookie: jar.sam } })).status, 400);
+  assert.equal((await fetch(`${base}/api/items/${ep.id}/transcode?quality=constructor`, { headers: { cookie: jar.sam } })).status, 400);
   const slot = await fetch(`${base}/api/items/${ep.id}/transcode?t=0&preload=1`, { headers: { cookie: jar.sam } });
   assert.equal(slot.status, 200, 'a preload runs beside the main stream');
   await slot.body.cancel();

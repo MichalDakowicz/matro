@@ -178,3 +178,29 @@ test('seeking replaces the same viewer’s preparation without exhausting capaci
     assert.equal(entry.error, null);
   }
 });
+
+test('a quality tier scales the picture down, caps the bitrate and is part of the cache key', async t => {
+  const options = { input: 'movie.mkv', info: { video: { codec: 'h264', pixelFormat: 'yuv420p' } } };
+  assert.ok(argumentsFor(options).includes('copy'));
+  const tier = argumentsFor({ ...options, quality: '480p' });
+  assert.equal(tier.includes('copy'), false);
+  assert.equal(tier[tier.indexOf('-vf') + 1], 'scale=-2:trunc(min(ih\\,480)/2)*2');
+  assert.equal(tier[tier.indexOf('-maxrate') + 1], '1500k');
+  assert.equal(argumentsFor({ ...options, quality: 'bogus' }).includes('copy'), true);
+  const bitmap = argumentsFor({ ...options, quality: '720p', burn: 3 });
+  assert.match(bitmap[bitmap.indexOf('-filter_complex') + 1], /scale=-2:trunc\(min\(ih\\,720\)\/2\)\*2\[video\]$/);
+
+  const encoder = process.env.MATRO_VIDEO_ENCODER; process.env.MATRO_VIDEO_ENCODER = 'software';
+  t.after(() => { if (encoder === undefined) delete process.env.MATRO_VIDEO_ENCODER; else process.env.MATRO_VIDEO_ENCODER = encoder; });
+  const f = await fixtures(), info = await probe(f.mkv), dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-quality-'));
+  const cache = createPlaybackCache({ ffmpeg, dir });
+  t.after(async () => { cache.close(); await fs.rm(dir, { recursive: true, force: true }); });
+  const base = { file: f.mkv, input: f.mkv, info, offset: 0, audio: null, burn: null, delay: 0 };
+  const [original, small] = [await cache.get(base), await cache.get({ ...base, quality: '480p' })];
+  assert.notEqual(original, small);
+  assert.equal(await cache.get({ ...base, quality: 'original' }), original);
+  await until(() => small.done || small.error); assert.ifError(small.error);
+  await until(() => original.done || original.error); assert.ifError(original.error);
+  assert.equal((await probe(small.file)).video.height, Math.min(info.video.height, 480));
+  assert.equal((await probe(original.file)).video.height, info.video.height);
+});

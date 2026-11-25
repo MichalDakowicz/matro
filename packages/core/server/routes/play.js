@@ -4,6 +4,7 @@ const { normalize } = require('../lang');
 const { toVtt, createEmbedded, MAX_UPLOAD } = require('../subtitles');
 const { createFrames } = require('../previews');
 const { createStreams } = require('../stream');
+const { QUALITIES } = require('../../playback/encoding.cjs');
 const { createAssetCache } = require('../asset-cache');
 const { playbackSession, createPlaybackActivity } = require('../playback-session');
 const path = require('node:path');
@@ -118,7 +119,9 @@ function register(app) {
     if (!Number.isFinite(offset) || offset < 0 || (info.duration && offset >= info.duration)) throw new HttpError(400, 'Bad start time.');
     if (audio !== null && !info.audio.some(t => t.index === audio)) throw new HttpError(400, 'Unknown audio track.');
     if (burn !== null && !info.subtitles.some(t => t.index === burn && t.bitmap)) throw new HttpError(400, 'Unknown image subtitle track.');
-    await transcode(ctx.req, ctx.res, { session, file: item.path, info, offset, audio, burn, delay: Number.isFinite(delay) ? delay : 0, preload });
+    const quality = ctx.query.get('quality');
+    if (quality !== null && quality !== 'original' && !QUALITIES[quality]) throw new HttpError(400, 'Unknown quality.');
+    await transcode(ctx.req, ctx.res, { session, file: item.path, info, offset, audio, burn, delay: Number.isFinite(delay) ? delay : 0, preload, quality: QUALITIES[quality] ? quality : null });
   });
 
   // A still frame, used for seek previews and thumbnails.

@@ -122,13 +122,15 @@ export const inspect = (base: string, id: string): Promise<Info> => request(base
 export const saveProgress = (base: string, id: string, entry: Progress) => request(base, '/api/state', { method: 'PUT', body: { progress: { [id]: entry } } });
 export const changeProgress = (base: string, id: string, body: { dismiss: true } | { completed: boolean; checkpoint?: Progress }): Promise<{ progress: Record<string, Progress> }> =>
   request(base, `/api/items/${encodeURIComponent(id)}/progress`, { method: 'PATCH', body });
-export function playbackPath(id: string, info: Info, position: number, audio: number | null, burn: number | null, delay = 0, session?: string) {
+export function playbackPath(id: string, info: Info, position: number, audio: number | null, burn: number | null, delay = 0, session?: string, quality?: string) {
   const root = `/api/items/${encodeURIComponent(id)}`;
   const q = new URLSearchParams();
   if (session) q.set('session', session);
-  if (info.directPlay && burn === null && (audio === null || audio === info.audio[0]?.index)) return { path: root + '/direct' + (session ? '?' + q : ''), offset: 0, start: position };
+  const tier = info.video && quality && quality !== 'original' ? quality : null;
+  if (!tier && info.directPlay && burn === null && (audio === null || audio === info.audio[0]?.index)) return { path: root + '/direct' + (session ? '?' + q : ''), offset: 0, start: position };
   q.set('t', String(position));
   if (audio !== null) q.set('audio', String(audio));
+  if (tier) q.set('quality', tier);
   if (burn !== null) { q.set('burn', String(burn)); if (delay) q.set('delay', String(delay)); }
   return { path: root + '/transcode?' + q, offset: position, start: 0 };
 }
