@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { autoSkipTarget, chapterIndex, framePath, seasonCopies, showCreditsNext, sleepMinutes, tapZone } from '../player/playerTools.ts';
+import { createAutoSkip } from '../../../../packages/core/client/auto-skip.js';
+import { chapterIndex, framePath, seasonCopies, showCreditsNext, sleepMinutes, tapZone } from '../player/playerTools.ts';
 import { defaultSubtitleStyle, parseSubtitleStyle, subtitleTextStyle } from '../player/subtitleStyle.ts';
 
 const intro = { type: 'intro' as const, start: 10, end: 40, source: 'manual' as const };
@@ -27,11 +28,12 @@ test('the current chapter is the last one that has started', () => {
 });
 
 test('auto-skip jumps past intros and recaps but never outros, and never backwards', () => {
-  assert.equal(autoSkipTarget([intro, outro], 12, 200), 40);
-  assert.equal(autoSkipTarget([intro, outro], 170, 200), null);
-  assert.equal(autoSkipTarget([intro], 40, 200), null);
-  assert.equal(autoSkipTarget([{ ...intro, end: 500 }], 12, 200), 199.9);
-  assert.equal(autoSkipTarget([], 12, 200), null);
+  const autoSkip = createAutoSkip();
+  assert.equal(autoSkip.target([intro, outro], 12, 200), 40);
+  assert.equal(autoSkip.target([intro, outro], 170, 200), null);
+  assert.equal(autoSkip.target([intro], 40, 200), null);
+  assert.equal(autoSkip.target([{ ...intro, end: 500 }], 12, 200), 199.9);
+  assert.equal(autoSkip.target([], 12, 200), null);
 });
 
 test('Next episode appears from a valid outro of an episode that has a successor', () => {

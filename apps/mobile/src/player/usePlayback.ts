@@ -4,7 +4,7 @@ import { useVideoPlayer } from 'expo-video';
 import { inspect, mediaHeaders, playbackPath, request, saveProgress, type Info, type Item, type Library, type Preferences, type Progress, type Track } from '../lib/server';
 import { matchTrack, titleKey, trackKey } from '../../../../packages/core/client/library';
 import { isContinueDismissed } from '../../../../packages/core/client/watch-progress.js';
-import { autoSkipTarget } from './playerTools';
+import { createAutoSkip } from '../../../../packages/core/client/auto-skip.js';
 import { parseVtt, type Cue } from '../../../../packages/core/client/subtitles';
 import { downloadPlayback } from './diskBuffer';
 import { progressRecovery, recoveryScope } from '../lib/storage';
@@ -31,7 +31,8 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   });
   const lastLocal = useRef(0), rewatching = useRef(!!data.progress[item.id]?.completed);
   const [markers, setMarkers] = useState(data.markers?.[item.id] || []);
-  const markersRef = useRef(markers), seekRef = useRef<(value: number) => void>(() => {}), lastSkip = useRef(0), backgroundRef = useRef(background);
+  const markersRef = useRef(markers), seekRef = useRef<(value: number, automatic: boolean) => void>(() => {}), autoSkip = useRef<ReturnType<typeof createAutoSkip> | null>(null), backgroundRef = useRef(background);
+  autoSkip.current ??= createAutoSkip();
   markersRef.current = markers; backgroundRef.current = background;
   const [settings, setSettings] = useState<Preferences>(data.preferences);
   // Background audio keeps the decoder alive with the screen off and shows a media notification. Both need the expo-video plugin option.
@@ -169,9 +170,10 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
         if (currentTime > playbackStart.current + .03) sampledPlayback.current = true;
       } else playbackStart.current = null;
       if (Math.abs(next - at.current) > .05) moved.current = Date.now();
-      // Auto-skip only while playing, and never right after a skip, so a seek that lands inside the range cannot loop.
-      const skipTo = prefs.current.autoSkip === true && sourceReady.current && player.playing && Date.now() - lastSkip.current > 1500 ? autoSkipTarget(markersRef.current, next, infoRef.current?.duration || 0) : null;
-      if (skipTo !== null) { lastSkip.current = Date.now(); seekRef.current(skipTo); }
+      if (prefs.current.autoSkip === true && sourceReady.current && player.playing) {
+        const skipTo = autoSkip.current?.target(markersRef.current, next, infoRef.current?.duration || 0);
+        if (skipTo != null) { seekRef.current(skipTo, true); return; }
+      }
       at.current = next; setPosition(next); setBuffered(disk.current ? infoRef.current?.duration || 0 : offset.current + Math.max(0, player.bufferedPosition));
       const subtitleTime = next - choices.current.delay;
       setCaption(cues.current.filter(cue => cue.start <= subtitleTime && cue.end > subtitleTime).map(cue => cue.text).join('\n'));
@@ -204,10 +206,12 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     const timer = setInterval(() => { if (AppState.currentState === 'active' && intent.current && (player.playing || player.status === 'loading') && Date.now() - moved.current > 25000) { moved.current = Date.now(); recover(); } }, 2000);
     return () => { void request(base, '/api/playback/state', { method: 'POST', body: { playing: false } }).catch(() => {}); clearInterval(checkpoint); time.remove(); status.remove(); playing.remove(); end.remove(); appState.remove(); clearInterval(timer); };
   }, [base, player, persist, recover]);
-  const seek = useCallback((value: number) => {
+  const seek = useCallback((value: number, automatic = false) => {
     const duration = infoRef.current?.duration || 0; if (!duration) return;
     playbackStart.current = null;
-    const target = Math.max(0, Math.min(duration - .1, value)); at.current = target; setPosition(target); setCaption(''); moved.current = Date.now();
+    const target = Math.max(0, Math.min(duration - .1, value));
+    if (!automatic) autoSkip.current?.seek(target);
+    at.current = target; setPosition(target); setCaption(''); moved.current = Date.now();
     if (direct.current && !replacing.current && (!disk.current || localSource.current) && target >= offset.current) { pendingStart.current = { time: target - offset.current, since: Date.now() }; player.currentTime = target - offset.current; }
     else void load(target, intent.current);
     void persist().catch(() => {});

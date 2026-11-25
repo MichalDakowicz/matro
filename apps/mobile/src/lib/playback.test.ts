@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import vm from 'node:vm';
 import { playbackPath } from '../../../../packages/core/client/server.ts';
 import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
-import * as playerTools from '../player/playerTools.ts';
+import { createAutoSkip } from '../../../../packages/core/client/auto-skip.js';
 import { isContinueDismissed } from '../../../../packages/core/client/watch-progress.js';
 
 const require = createRequire(import.meta.url);
@@ -37,7 +37,7 @@ function harness(t: any, directPlay = false, markers: { type: string; start: num
     '../../../../packages/core/client/library': { trackKey: () => 'movie', matchTrack: () => undefined },
     '../../../../packages/core/client/watch-progress.js': { isContinueDismissed },
     '../../../../packages/core/client/subtitles': { parseVtt },
-    './playerTools': playerTools,
+    '../../../../packages/core/client/auto-skip.js': { createAutoSkip },
     './diskBuffer': { downloadPlayback: (_: any, __: any, ready: any) => { const job = { ready, cancelled: false }; downloads.push(job); return () => { job.cancelled = true; }; } },
     '../lib/storage': { recoveryScope: () => 'test', progressRecovery: { write: async () => {} } },
   };
@@ -78,6 +78,22 @@ test('auto-skip jumps past an intro only when it is enabled and playback is runn
   const paused = harness(t, true, intro, { autoSkip: true }); await flush(); paused.pending[0].resolve(); await flush();
   paused.player.currentTime = 0; paused.emit('timeUpdate'); paused.player.playing = false; paused.player.currentTime = 6; paused.emit('timeUpdate', { currentTime: 6 });
   assert.equal(paused.player.currentTime, 6, 'a paused player is left alone');
+});
+
+test('seeking into a marker suppresses auto-skip and a used marker stays skipped after rewinding', async t => {
+  const intro = [{ type: 'intro', start: 5, end: 15, source: 'manual' }];
+  const h = harness(t, true, intro, { autoSkip: true }); await flush(); h.pending[0].resolve(); await flush();
+  h.emit('timeUpdate');
+  h.hook.seek(6); h.emit('timeUpdate');
+  assert.equal(h.player.currentTime, 6);
+  h.player.currentTime = 12; h.emit('timeUpdate');
+  assert.equal(h.player.currentTime, 12);
+  h.hook.seek(3); h.emit('timeUpdate');
+  h.player.currentTime = 6; h.emit('timeUpdate');
+  assert.equal(h.player.currentTime, 15);
+  h.hook.seek(3); h.emit('timeUpdate');
+  h.player.currentTime = 6; h.emit('timeUpdate');
+  assert.equal(h.player.currentTime, 6);
 });
 
 test('rapid seeks serialize native loads and skip superseded requests', async t => {

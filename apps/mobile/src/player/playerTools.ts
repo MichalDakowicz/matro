@@ -25,13 +25,6 @@ export function chapterIndex(chapters: Chapter[] | undefined, time: number) {
   return found;
 }
 
-/** Where auto-skip should jump, or null when playback is not inside an intro or recap. */
-export function autoSkipTarget(markers: Segment[], position: number, duration: number) {
-  const marker = markers.find(m => (m.type === 'intro' || m.type === 'recap') && position >= m.start && position < m.end);
-  const target = marker ? Math.min(marker.end, duration - .1) : null;
-  return target !== null && target > position ? target : null;
-}
-
 /** "Next episode" appears from the credits of an episode that has a successor. */
 export const showCreditsNext = (markers: Segment[], position: number, duration: number, hasNext: boolean) =>
   hasNext && reachedOutro(position, duration, markers);
