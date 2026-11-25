@@ -20,7 +20,7 @@ const sourceChanged = () => new HttpError(503, 'This file changed during inspect
 async function sourceStat(file) {
   const stat = await fs.stat(file, { bigint: true });
   if (!stat.isFile()) throw new Error('The media path is no longer a file.');
-  return { size: Number(stat.size), mtime: Number(stat.mtimeMs), fingerprint: [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':') };
+  return { size: Number(stat.size), mtime: Number(stat.mtimeMs), fingerprint: [stat.size, stat.mtimeNs, stat.ino || ''].join(':') };
 }
 
 // `autoProbe: false` is for one-shot tools such as the CLI, which should exit instead of probing every file.
@@ -35,6 +35,7 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, onScan, 
     dropFolder: db.prepare('UPDATE folders SET removed = 1 WHERE id = ? AND removed = 0'),
     moveItem: db.prepare('UPDATE items SET folder_id = ? WHERE id = ?'),
     existing: db.prepare('SELECT id, path FROM active_items WHERE folder_id = ?'),
+    showGroups: db.prepare("SELECT DISTINCT group_id FROM items WHERE folder_id = ? AND kind = 'show'"),
     // Catalogs from before fingerprints keep their probes while size and mtime still match.
     upsert: db.prepare(`INSERT INTO items (id, folder_id, path, title, group_id, group_title, year, kind, season, episode, size, mtime, added, fingerprint)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -58,18 +59,21 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, onScan, 
     setProbeFailure: db.prepare(`UPDATE items SET probe_failures = ?, probe_error = ?, probed_at = ?, retry_probe_after = ?
       WHERE id = ? AND fingerprint IS ? AND removed = 0`),
     unprobed: db.prepare(`SELECT rowid, id, path, fingerprint, probe_failures FROM items
-      WHERE rowid > ? AND removed = 0 AND probe IS NULL AND COALESCE(retry_probe_after, 0) <= ? ORDER BY rowid LIMIT 1`)
+      WHERE rowid > ? AND removed = 0 AND probe IS NULL AND COALESCE(retry_probe_after, 0) <= ? ORDER BY rowid LIMIT 1`),
+    nextRetry: db.prepare(`SELECT MIN(retry_probe_after) AS at FROM items
+      WHERE removed = 0 AND probe IS NULL AND retry_probe_after > ?`)
   };
   const state = { scanning: false, probing: false, lastScan: null, revision: randomUUID() };
   const pending = new Map(), folderScans = new Map();
-  let allFoldersScan, folderAdds = Promise.resolve(), probeAgain = false;
+  let allFoldersScan, folderAdds = Promise.resolve(), probeAgain = false, retryTimer;
   const changed = () => { state.revision = randomUUID(); onChange?.(); };
 
   async function scanFolder(folderId) {
     const folder = q.folder.get(folderId);
     if (!folder) return { ok: false, error: 'Folder was removed from the library.' };
     let rows;
-    try { rows = await scan(folder.path, excludedFiles); }
+    const knownShows = new Set(q.showGroups.all(folderId).map(row => row.group_id));
+    try { rows = await scan(folder.path, excludedFiles, knownShows); }
     catch (error) { return { folder: folder.path, ok: false, error: error.code === 'ENOENT' ? 'Folder is not available.' : error.message }; }
     const known = new Set(q.existing.all(folderId).map(row => row.id));
     const previousCount = known.size;
@@ -208,13 +212,19 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, onScan, 
   }
   function probeSoon() {
     if (state.probing) { probeAgain = true; return; }
+    clearTimeout(retryTimer);
     state.probing = true;
     (async () => {
+      // An already-due row is tried once per pass. A stale file otherwise
+      // keeps its old deadline until the next rescan notices the change.
+      const started = Date.now();
       let cursor = 0;
-      for (let row; (row = q.unprobed.get(cursor, Date.now()));) {
+      for (let row; (row = q.unprobed.get(cursor, started));) {
         cursor = row.rowid;
         try { await probeItem(row); } catch { /* A failed probe can be retried after its backoff. */ }
       }
+      const { at } = q.nextRetry.get(started);
+      if (at !== null) retryTimer = setTimeout(probeSoon, Math.max(0, at - Date.now())).unref();
     })().catch(() => { /* The database can close during a background probe. */ }).finally(() => {
       state.probing = false;
       if (probeAgain) { probeAgain = false; probeSoon(); }

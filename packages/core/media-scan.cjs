@@ -3,7 +3,8 @@ const { createHash } = require('node:crypto');
 
 const VIDEO = new Set('mkv mp4 m4v avi mov webm flv wmv mpg mpeg ts mts m2ts vob ogv 3gp'.split(' '));
 const idFor = value => createHash('sha256').update(value).digest('hex').slice(0, 24);
-const seasonNumber = folder => folder.match(/^(?:s|season[ ._-]*)(\d+)$/i)?.[1];
+const numberedSeason = folder => folder.match(/^(?:s|season[ ._-]*)(\d+)$/i)?.[1];
+const seasonNumber = folder => /^specials$/i.test(folder) ? '0' : numberedSeason(folder);
 const isContainer = folder => /^(?:media|movies?|shows?|tv|tv[ ._-]*shows?|videos?|library|collection)$/i.test(folder);
 const clean = value => value.replace(/[._]/g, ' ').replace(/\s+/g, ' ').trim();
 const sortPaths = (a, b) => a.localeCompare(b, undefined, { numeric: true });
@@ -60,25 +61,36 @@ async function walk(fs, root, extensions, { allowHiddenFiles = false, onDirector
   return files.sort(sortPaths);
 }
 
-function locateTitles(root, files) {
-  const parent = path.dirname(root);
-  if (seasonNumber(path.basename(root)) !== undefined) return files.map(file => ({ file, folder: parent }));
-  const rootIsTitle = !isContainer(path.basename(root)) && files.some(file =>
-    path.dirname(file) === root || seasonNumber(path.relative(root, file).split(path.sep)[0]) !== undefined);
+function titleFolders(root, files, season, useSeasonRoot = false) {
+  const container = isContainer(path.basename(root));
+  const seasonRoot = season(path.basename(root)) !== undefined;
+  const childSeasons = files.some(file => season(path.relative(root, file).split(path.sep)[0]) !== undefined);
+  const rootIsTitle = !container && (childSeasons || files.some(file => path.dirname(file) === root));
   return files.map(file => {
+    if (seasonRoot) return path.dirname(root);
+    const directories = path.relative(root, path.dirname(file)).split(path.sep).filter(Boolean);
+    if (rootIsTitle || useSeasonRoot && childSeasons && (!directories.length || season(directories[0]) !== undefined)) return root;
     let folder = root;
-    if (!rootIsTitle) {
-      for (const directory of path.relative(root, path.dirname(file)).split(path.sep).filter(Boolean)) {
-        if (seasonNumber(directory) !== undefined) break;
-        folder = path.join(folder, directory);
-        if (!isContainer(directory)) break;
-      }
+    for (const directory of directories) {
+      if (season(directory) !== undefined) break;
+      folder = path.join(folder, directory);
+      if (!isContainer(directory)) break;
     }
-    return { file, folder: folder !== root || !isContainer(path.basename(root)) ? folder : undefined };
+    return folder !== root || !container ? folder : undefined;
   });
 }
 
-function groupVideos(entries) {
+function locateTitles(root, files, wasShow = () => false) {
+  const current = titleFolders(root, files, seasonNumber, true);
+  // Existing shows keep their folder ID even when a Specials directory becomes a season.
+  const previous = titleFolders(root, files, numberedSeason);
+  return files.map((file, i) => ({
+    file,
+    folder: previous[i] && previous[i] !== current[i] && wasShow(previous[i]) ? previous[i] : current[i]
+  }));
+}
+
+function groupVideos(entries, wasShow = () => false) {
   const groups = new Map();
   for (const { file, folder, root } of entries) {
     const info = describe(file);
@@ -89,19 +101,24 @@ function groupVideos(entries) {
   const rows = new Map();
   for (const [key, group] of groups) {
     const folder = group[0].folder;
-    const isShow = group.some(({ info }) => info.episode !== null || (folder && info.folderEpisode !== null));
+    const described = group.map(({ file, info }) => {
+      const directories = folder ? path.relative(folder, path.dirname(file)).split(path.sep) : [];
+      const season = directories.map(seasonNumber).find(value => value !== undefined) ?? seasonNumber(path.basename(folder || ''));
+      return { file, info, season };
+    });
+    const isShow = described.some(({ info, season }) => info.episode !== null || season !== undefined || (folder && info.folderEpisode !== null))
+      || Boolean(folder && group.length > 1 && wasShow(folder));
     const first = group[0].info;
     const groupName = folder || first.group ? titleOf(folder ? path.basename(folder) : first.group) : first;
     const seasons = new Map();
-    for (const { file, info } of group) {
+    for (const { file, info, season } of described) {
       const separateMovie = !isShow && group.length > 1;
       const row = {
         title: info.title, group: separateMovie ? info.title : groupName.title, year: (separateMovie ? null : groupName.year) ?? info.year,
         groupKey: separateMovie ? `file:${file}` : key, kind: isShow ? 'show' : 'movie', season: null, episode: null
       };
       if (isShow) {
-        const folders = folder ? path.relative(folder, path.dirname(file)).split(path.sep) : [];
-        row.season = info.season ?? Number(folders.map(seasonNumber).find(value => value !== undefined) ?? 1);
+        row.season = info.season ?? Number(season ?? 1);
         row.episode = info.episode ?? info.folderEpisode;
         if (!seasons.has(row.season)) seasons.set(row.season, []);
         seasons.get(row.season).push({ file, row });

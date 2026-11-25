@@ -1,4 +1,5 @@
 const { test } = require('node:test');
+const { createHash } = require('node:crypto');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -148,6 +149,34 @@ test('server and desktop agree on loose episodes, release years, unnumbered cuts
     assert.equal(loose[0].groupId, loose[1].groupId);
     assert.equal(rows.find(item => item.title === 'Special').episode, 9);
     assert.deepEqual(rows.filter(item => item.title.endsWith('Cut')).map(item => item.kind), ['movie', 'movie']);
+  }
+});
+
+test('season directories signal shows and keep pre-upgrade folder group IDs', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-season-folders-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  for (const [title, folder, season] of [['Show', 'Season 1', 1], ['Second Show', 'S02', 2], ['Third Show', 'Specials', 0]]) {
+    const show = path.join(root, title), episodes = path.join(show, folder);
+    await fs.mkdir(episodes, { recursive: true });
+    await Promise.all([fs.writeFile(path.join(episodes, 'Pilot.mkv'), ''), fs.writeFile(path.join(show, 'Other.mkv'), '')]);
+    for (const [scanLibrary, prefix] of [[scanServer, 'dir:'], [scan, '']]) {
+      const previousId = createHash('sha256').update(prefix + show).digest('hex').slice(0, 24);
+      const rows = await scanLibrary(show);
+      assert.equal(rows.length, 2);
+      assert.equal(rows.every(row => row.kind === 'show' && row.groupId === previousId), true);
+      assert.equal(rows.find(row => row.title === 'Pilot').season, season);
+      assert.equal((await scanLibrary(episodes))[0].groupId, previousId);
+    }
+  }
+
+  const title = path.join(root, 'Older Show');
+  await fs.mkdir(title);
+  await Promise.all(['Pilot', 'Finale'].map(name => fs.writeFile(path.join(title, name + '.mkv'), '')));
+  for (const [scanLibrary, prefix] of [[scanServer, 'dir:'], [scan, '']]) {
+    const previousId = createHash('sha256').update(prefix + title).digest('hex').slice(0, 24);
+    const rows = await scanLibrary(title, undefined, new Set([previousId]));
+    assert.equal(rows.length, 2);
+    assert.equal(rows.every(row => row.kind === 'show' && row.groupId === previousId), true);
   }
 });
 

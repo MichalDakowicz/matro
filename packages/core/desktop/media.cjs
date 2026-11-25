@@ -15,21 +15,23 @@ function describe(file, root = '') {
     kind: AUDIO.has(ext.toLowerCase()) ? 'audio' : episode !== null ? 'show' : 'movie',
     season, episode, format: ext.toUpperCase(), added: Date.now() };
 }
-async function scan(root, exclude) {
+async function scan(root, exclude, knownShows) {
   root = path.resolve(root);
   const walked = await walk(fs, root, extensions, { allowHiddenFiles: true, onDirectoryError() {} });
   const excluded = await exclude?.();
   const items = walked.filter(file => !excluded?.has(file)).map(file => describe(file, root));
   const videos = items.filter(item => item.kind !== 'audio');
-  for (const [index, { folder }] of locateTitles(root, videos.map(item => item.path)).entries()) {
+  const wasShow = folder => knownShows?.has(idFor(folder));
+  for (const [index, { folder }] of locateTitles(root, videos.map(item => item.path), wasShow).entries()) {
     if (folder) videos[index].titlePath = folder;
   }
-  return groupFolders(items);
+  return groupFolders(items, knownShows);
 }
-function groupFolders(items) {
+const existingShowGroups = items => new Set(items.filter(item => item.kind === 'show' && item.titlePath && !item.prelude).map(item => item.groupId));
+function groupFolders(items, knownShows = existingShowGroups(items)) {
   const entries = items.filter(item => item.kind !== 'audio' && (item.titlePath || (item.root && !item.prelude && describeName(item.path).episode !== null)))
     .map(item => ({ file: item.path, folder: item.titlePath, root: item.root }));
-  const rows = groupVideos(entries);
+  const rows = groupVideos(entries, folder => knownShows.has(idFor(folder)));
   for (const item of items) {
     if (!rows.has(item.path)) continue;
     const { groupKey, ...row } = rows.get(item.path);
@@ -95,4 +97,4 @@ async function probe(file) {
       text: ['subrip', 'ass', 'ssa', 'webvtt', 'mov_text', 'text'].includes(s.codec_name), bitmap: ['hdmv_pgs_subtitle', 'dvd_subtitle', 'dvb_subtitle', 'xsub'].includes(s.codec_name) })),
     chapters: (data.chapters || []).map(c => ({ start: Number(c.start_time), title: c.tags?.title || 'Chapter' })) };
 }
-module.exports = { extensions, describe, scan, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, probe, run, ffmpeg, idFor };
+module.exports = { extensions, describe, scan, groupFolders, existingShowGroups, applyPreludes, sidecars, keepSidecar, SIDECAR, probe, run, ffmpeg, idFor };

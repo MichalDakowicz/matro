@@ -9,7 +9,7 @@ const { createEmbeddedSubtitles } = require('./embedded-subtitles.cjs');
 const { remote } = require('./ssh-media.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { scan, describe, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
+const { scan, describe, groupFolders, existingShowGroups, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
 const { createStreamServer } = require('./stream.cjs');
 const { createPreviews } = require('./previews.cjs');
 const { createSegments } = require('./segments.cjs');
@@ -73,13 +73,14 @@ async function pendingLibraryFiles() {
   }
   return excluded;
 }
-const scanLibraryFolder = root => scan(root, pendingLibraryFiles);
+const scanLibraryFolder = (root, knownShows = existingShowGroups(state.items)) => scan(root, pendingLibraryFiles, knownShows);
 function rescan(roots = state.folders) {
   scanQueue = scanQueue.catch(() => {}).then(() => scanFolders(roots.filter(root => state.folders.includes(root))));
   return scanQueue;
 }
 async function scanFolders(roots) {
-  const results = await Promise.all(roots.map(async root => { try { return { root, items: await scanLibraryFolder(root) }; } catch { return { root, error: 'Folder unavailable. Check the drive or network connection.' }; } }));
+  const knownShows = existingShowGroups(state.items);
+  const results = await Promise.all(roots.map(async root => { try { return { root, items: await scanLibraryFolder(root, knownShows) }; } catch { return { root, error: 'Folder unavailable. Check the drive or network connection.' }; } }));
   const previous = new Map(state.items.map(item => [item.id, item]));
   for (const { root, items } of results) if (items && state.folders.includes(root)) {
     for (const item of items) item.added = previous.get(item.id)?.added ?? item.added;
