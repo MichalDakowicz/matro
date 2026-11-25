@@ -124,16 +124,19 @@ function register(app) {
   const checkpointTime = (entry, now) => Math.min(entry.updated ?? 0, now);
   const previousTime = (state, id) => state.progressTimes[id] ?? state.progress[id]?.updated ?? 0;
   const sameCheckpoint = (a, b) => a.position === b.position && a.duration === b.duration && a.completed === b.completed && !!a.hidden === !!b.hidden;
-  function mergeProgress(state, sent, now) {
+  // Without the account header the client is older: its `updated` is an echoed server time, not its own clock.
+  const legacyRequest = ctx => ctx.req.headers['x-matro-account'] === undefined;
+  function mergeProgress(state, sent, now, legacy = false) {
     const confirmed = Object.create(null);
     for (const [id, entry] of Object.entries(sent)) {
       if (!validCheckpoint(entry)) continue;
       const previous = state.progress[id];
       const timestamp = checkpointTime(entry, now);
       // An echoed server snapshot also counts as a duplicate.
-      const order = entry.updated === previous?.updated ? 0 : timestamp - previousTime(state, id);
+      const order = entry.updated === previous?.updated ? 0 : timestamp - (legacy ? previous?.updated ?? 0 : previousTime(state, id));
       if (!isObject(previous) || order > 0 || (order === 0 && (!previous.hidden || entry.hidden === true))) {
-        const next = { position: entry.position, duration: entry.duration ?? 0, updated: now };
+        // An older client compares against its own stored time, so keep that rather than the server clock.
+        const next = { position: entry.position, duration: entry.duration ?? 0, updated: legacy ? timestamp : now };
         if (typeof entry.completed === 'boolean') next.completed = entry.completed;
         if (typeof entry.hidden === 'boolean') next.hidden = entry.hidden;
         // A first paused checkpoint can belong to a show dismissed on another device.
@@ -165,7 +168,7 @@ function register(app) {
     } else {
       const previous = isObject(state.progress[item.id]) ? state.progress[item.id] : {}, checkpoint = body.checkpoint;
       // A recovered local position can be ahead of the server. Ignore older client snapshots.
-      const newer = validCheckpoint(checkpoint) && checkpoint.updated !== previous.updated && checkpointTime(checkpoint, now) > previousTime(state, item.id);
+      const newer = validCheckpoint(checkpoint) && checkpoint.updated !== previous.updated && checkpointTime(checkpoint, now) > (legacyRequest(ctx) ? previous.updated ?? 0 : previousTime(state, item.id));
       const source = newer ? checkpoint : previous;
       const hidden = item.kind === 'show' && (!!previous.hidden || isContinueDismissed(siblings, state.progress));
       progress = { [item.id]: { ...previous, position: source.position ?? 0, duration: source.duration ?? 0, completed: body.completed,
@@ -182,7 +185,7 @@ function register(app) {
     let progress;
     if (body.progress !== undefined) {
       if (!isObject(body.progress)) throw new HttpError(400, 'Bad progress.');
-      progress = mergeProgress(state, body.progress, now);
+      progress = mergeProgress(state, body.progress, now, legacyRequest(ctx));
     }
     if (body.queue !== undefined && !validQueue(body.queue)) throw new HttpError(400, 'Bad queue.');
     if (body.queueChange !== undefined) {

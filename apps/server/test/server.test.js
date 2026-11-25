@@ -439,6 +439,19 @@ test('watch state uses account-bound operations and ignores invalid or stale che
   assert.equal((await catalog('state-viewer')).progress[second.id].position, 25);
 });
 
+test('an older client echoing server times cannot overwrite a slow-clock phone', async () => {
+  assert.equal((await join('slow-viewer', 'slow-viewer', 'viewer-pass-5')).status, 200);
+  const { user, groups } = await catalog('slow-viewer');
+  const id = groups[0][0].id, headers = { 'x-matro-account': String(user.id) };
+  const slow = Date.now() - 3600e3;
+  await call('slow-viewer', 'PUT', '/api/state', { progress: { [id]: { position: 100, duration: 1000, updated: slow } } }, headers);
+  const loaded = (await catalog('slow-viewer')).progress[id];
+  await call('slow-viewer', 'PUT', '/api/state', { progress: { [id]: { position: 500, duration: 1000, updated: slow + 60e3 } } }, headers);
+  // No account header: this is the old client, sending everything it loaded earlier.
+  await call('slow-viewer', 'PUT', '/api/state', { progress: { [id]: loaded } });
+  assert.equal((await catalog('slow-viewer')).progress[id].position, 500);
+});
+
 test('head account upload lands in the library; logout and password reset end sessions', async () => {
   const bytes = fs.readFileSync(path.join(mediaDir, 'Heat (1995)', 'Heat.1995.mp4'));
   const up = await call('admin', 'POST', '/api/admin/upload?path=' + encodeURIComponent('Up Movie (2001)/../Up.Movie.mp4'), bytes, { 'content-type': 'application/octet-stream' });
