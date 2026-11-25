@@ -9,7 +9,7 @@ const GB = 1024 ** 3;
 const episode = (number: number, show = 'show'): Item => ({ id: `${show}-${number}`, title: `E${number}`, groupId: show, group: show, kind: 'show', season: 1, episode: number, format: 'MKV' });
 const items = [3, 1, 5, 2, 4, 6].map(number => episode(number)), done = (...ids: string[]) => Object.fromEntries(ids.map(id => [id, { position: 1, duration: 1, completed: true, updated: 1 }]));
 const keep = (count: number, removeWatched = false, capBytes: number | null = null): SmartSettings => ({ rules: { show: { keep: count, removeWatched } }, capBytes });
-const held = (id: string, gb = 1, complete = true): Held => ({ id, bytes: gb * GB, complete });
+const held = (id: string, gb = 1, complete = true, batch = 'smart:show'): Held => ({ id, bytes: gb * GB, complete, batch });
 const ids = (list: Item[]) => list.map(item => item.id);
 
 test('nothing is saved or removed without a rule', () => {
@@ -24,6 +24,16 @@ test('watched episodes go only when the rule says so, and unwatched ones never d
   const state = { shows: show(items), progress: done('show-1', 'show-2'), held: [held('show-1'), held('show-2'), held('show-5')] };
   assert.deepEqual(planSmart({ ...state, settings: keep(2, false) }).remove, []);
   assert.deepEqual(planSmart({ ...state, settings: keep(2, true) }).remove, ['show-1', 'show-2']);
+});
+test('watched saves made by hand or by a manual batch are kept', () => {
+  const { remove } = planSmart({ shows: show(items), progress: done('show-1', 'show-2'), settings: keep(2, true),
+    held: [{ ...held('show-1'), batch: undefined }, held('show-2', 1, true, 'b1')] });
+  assert.deepEqual(remove, []);
+});
+test('watched smart saves that are queued or partially downloaded are kept', () => {
+  const { remove } = planSmart({ shows: show(items), progress: done('show-1', 'show-2'), settings: keep(2, true),
+    held: [held('show-1', 0, false), held('show-2', 0.5, false)] });
+  assert.deepEqual(remove, []);
 });
 test('a paused or failed record is not saved again', () => {
   assert.deepEqual(planSmart({ shows: show(items), progress: {}, settings: keep(2), held: [held('show-1', 0, false)] }).save.map(item => item.id), ['show-2']);

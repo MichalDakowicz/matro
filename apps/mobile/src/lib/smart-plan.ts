@@ -4,7 +4,8 @@ import type { Item, Progress } from '../../../../packages/core/client/server';
 export type SmartRule = { keep: number; removeWatched: boolean };
 export type SmartSettings = { rules: Record<string, SmartRule>; /** Stop saving once this much is on the device. Null means no cap. */ capBytes: number | null };
 /** One record on the device. `bytes` is 0 while the size is not known yet. */
-export type Held = { id: string; bytes: number; complete: boolean };
+export type Held = { id: string; bytes: number; complete: boolean; batch?: string };
+export const isSmartBatch = (batch?: string) => batch?.startsWith('smart:') === true;
 export const NO_SMART: SmartSettings = { rules: {}, capBytes: null };
 export const KEEP_CHOICES = [1, 3, 5, 10];
 export const CAP_CHOICES: [label: string, bytes: number | null][] = [['No cap', null], ['5 GB', 5 * 1024 ** 3], ['10 GB', 10 * 1024 ** 3], ['25 GB', 25 * 1024 ** 3], ['50 GB', 50 * 1024 ** 3]];
@@ -33,7 +34,12 @@ export function planSmart({ shows, progress, settings, held }: { shows: Record<s
   const ruled = Object.entries(settings.rules).flatMap(([key, rule]) => shows[key] ? [{ group: shows[key], rule }] : []);
   for (const { group, rule } of ruled) {
     if (!rule.removeWatched) continue;
-    for (const episode of group) if (watched(episode.id) && have.has(episode.id)) { remove.push(episode.id); used -= have.get(episode.id)!.bytes || typical; }
+    for (const episode of group) {
+      const record = have.get(episode.id);
+      if (!watched(episode.id) || !record?.complete || !isSmartBatch(record.batch)) continue;
+      remove.push(episode.id);
+      used -= record.bytes || typical;
+    }
   }
   for (const { group, rule } of ruled) {
     const wanted = group.filter(episode => !watched(episode.id)).slice(0, rule.keep);

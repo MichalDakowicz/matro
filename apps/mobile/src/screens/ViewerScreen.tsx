@@ -115,14 +115,39 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     return () => { run++; stop(); };
   }, [base, data?.user.id]);
   // "Keep the next episodes saved": settings per account, applied whenever the server's library arrives or something is watched.
-  const [smart, setSmart] = useState<SmartSettings>(NO_SMART), [capped, setCapped] = useState(0);
-  useEffect(() => { if (data) void loadSmart(base, data.user).then(setSmart); }, [base, data?.user.id]);
-  const watchedMarker = data ? `${data.items.length}:${Object.values(data.progress).filter(progress => progress.completed).length}` : '';
+  const user = data?.user;
+  const smartScope = user ? recoveryScope(base, user) : null;
+  const [loadedSmart, setLoadedSmart] = useState<{ scope: string; settings: SmartSettings } | null>(null);
+  const [smartResult, setSmartResult] = useState<{ scope: string; capped: number } | null>(null);
+  const smartReady = loadedSmart !== null && loadedSmart.scope === smartScope;
+  const smart = smartReady ? loadedSmart.settings : NO_SMART;
+  const capped = smartResult?.scope === smartScope ? smartResult?.capped ?? 0 : 0;
   useEffect(() => {
-    if (!data || offline || !Object.keys(smart.rules).length) { setCapped(0); return; }
-    void reconcileSmart(base, data, smart).then(result => setCapped(result.capped)).catch(() => {});
-  }, [watchedMarker, offline, smart]);
-  const changeSmart = (next: SmartSettings) => { setSmart(next); if (data) void saveSmart(base, data.user, next).catch(() => {}); };
+    setLoadedSmart(null);
+    setSmartResult(null);
+    const currentUser = dataRef.current?.user;
+    if (!currentUser || !smartScope) return;
+    let active = true;
+    void loadSmart(base, currentUser).then(settings => {
+      if (active) setLoadedSmart({ scope: smartScope, settings });
+    });
+    return () => { active = false; };
+  }, [base, smartScope]);
+  const watchedMarker = data ? JSON.stringify(Object.entries(data.progress).filter(([, entry]) => entry.completed).map(([key]) => key).sort()) : '';
+  useEffect(() => {
+    const current = dataRef.current;
+    if (!current || !smartScope || offline || !Object.keys(smart.rules).length) { setSmartResult(null); return; }
+    let active = true;
+    void reconcileSmart(base, current, smart, () => active).then(result => {
+      if (active) setSmartResult({ scope: smartScope, capped: result.capped });
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [base, smartScope, data?.items, watchedMarker, offline, smart]);
+  const changeSmart = (next: SmartSettings) => {
+    if (!user || !smartReady || !smartScope) return;
+    setLoadedSmart({ scope: smartScope, settings: next });
+    void saveSmart(base, user, next).catch(() => {});
+  };
   const keepRule = (items: Item[], rule: SmartRule | null) => {
     const rules = { ...smart.rules }, key = titleKey(items[0]);
     if (rule) rules[key] = rule; else delete rules[key];
@@ -215,7 +240,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       if (next && data.preferences.autoplay !== false) void startPlayback(next, playing.queue);
       else { setPlaying(null); void load(); }
     }} />;
-  if (detail && data) return <TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onComplete={complete} onEnqueue={enqueue} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} smart={offline || savedOnly ? undefined : { rule: smart.rules[titleKey(detail[0])], onChange: rule => keepRule(detail, rule) }} />;
+  if (detail && data) return <TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onComplete={complete} onEnqueue={enqueue} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} smart={offline || savedOnly || !smartReady ? undefined : { rule: smart.rules[titleKey(detail[0])], onChange: rule => keepRule(detail, rule) }} />;
   const contentStyle = { paddingTop: insets.top + 76, paddingBottom: insets.bottom + 104, paddingHorizontal: 18 };
   const search = tab === 'search';
   const matches = (items: Item[]) => !search || `${nameFor(data!, items[0])} ${metadataFor(data!, items[0]).people?.join(' ')} ${items.map(i => i.title + ' ' + i.path).join(' ')}`.toLowerCase().includes(query.toLowerCase().trim());

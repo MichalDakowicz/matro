@@ -10,10 +10,10 @@ export function SmartKeep({ rule, onChange }: { rule?: SmartRule; onChange: (rul
     <Text accessibilityRole="header" style={t.sectionTitle}>Keep next episodes saved</Text>
     <Text style={t.dim}>Whenever your server is reachable, Matro saves the next unwatched episodes in order. Unwatched episodes are never removed.</Text>
     <View style={[t.row, { flexWrap: 'wrap', gap: 8 }]}>
-      <Pill label="Off" style={choice} primary={!rule} onPress={() => onChange(null)} />
-      {KEEP_CHOICES.map(keep => <Pill key={keep} label={String(keep)} style={choice} primary={rule?.keep === keep} onPress={() => onChange({ keep, removeWatched: rule?.removeWatched ?? false })} />)}
+      <Pill label="Off" accessibilityLabel="Keep next episodes off" selected={!rule} style={choice} primary={!rule} onPress={() => onChange(null)} />
+      {KEEP_CHOICES.map(keep => <Pill key={keep} label={String(keep)} accessibilityLabel={`Keep ${keep} unwatched ${keep === 1 ? 'episode' : 'episodes'} saved`} selected={rule?.keep === keep} style={choice} primary={rule?.keep === keep} onPress={() => onChange({ keep, removeWatched: rule?.removeWatched ?? false })} />)}
     </View>
-    {rule && <Pill label={rule.removeWatched ? 'Removing watched episodes' : 'Keep watched episodes'} icon={rule.removeWatched ? 'check' : undefined} style={{ ...choice, alignSelf: 'flex-start' }} onPress={() => onChange({ ...rule, removeWatched: !rule.removeWatched })} />}
+    {rule && <Pill label={rule.removeWatched ? 'Removing watched episodes' : 'Keep watched episodes'} accessibilityLabel="Automatically remove watched smart saves" selected={rule.removeWatched} icon={rule.removeWatched ? 'check' : undefined} style={{ ...choice, alignSelf: 'flex-start' }} onPress={() => onChange({ ...rule, removeWatched: !rule.removeWatched })} />}
   </View>;
 }
 
@@ -32,19 +32,19 @@ export function SmartSaves({ settings, names, batches, offline, onCap, onStop, o
         <Text style={t.text}>{batch.label}</Text>
         <Text style={t.dim}>{[batch.waiting && `${batch.waiting} saving or waiting`, batch.paused && `${batch.paused} paused`].filter(Boolean).join(' · ')}</Text>
         <View style={[t.row, { flexWrap: 'wrap', gap: 8 }]}>
-          {batch.waiting > 0 && <Pill label="Pause all" style={choice} onPress={() => onPause(batch.id)} />}
-          {batch.paused > 0 && <Pill label="Resume all" style={choice} disabled={offline} onPress={() => onResume(batch.id)} />}
-          <Pill label="Cancel all" style={choice} onPress={() => onCancel(batch.id)} />
+          {batch.waiting > 0 && <Pill label="Pause all" accessibilityLabel={`Pause batch: ${batch.label}`} style={choice} onPress={() => onPause(batch.id)} />}
+          {batch.paused > 0 && <Pill label="Resume all" accessibilityLabel={`Resume batch: ${batch.label}`} style={choice} disabled={offline} onPress={() => onResume(batch.id)} />}
+          <Pill label="Cancel all" accessibilityLabel={`Cancel batch: ${batch.label}`} style={choice} onPress={() => onCancel(batch.id)} />
         </View>
       </View>)}
     </View>}
     {!!rules.length && <View style={{ gap: 12 }}>
       <Text accessibilityRole="header" style={t.sectionTitle}>Kept ready</Text>
       <Text style={t.dim}>Storage cap for saved titles. Matro stops adding episodes when it is reached and never removes anything you saved yourself.</Text>
-      <View style={[t.row, { flexWrap: 'wrap', gap: 8 }]}>{CAP_CHOICES.map(([label, bytes]) => <Pill key={label} label={label} style={choice} primary={settings.capBytes === bytes} onPress={() => onCap(bytes)} />)}</View>
+      <View style={[t.row, { flexWrap: 'wrap', gap: 8 }]}>{CAP_CHOICES.map(([label, bytes]) => <Pill key={label} label={label} accessibilityLabel={`Storage cap: ${label}`} selected={settings.capBytes === bytes} style={choice} primary={settings.capBytes === bytes} onPress={() => onCap(bytes)} />)}</View>
       {rules.map(([key, rule]) => <View key={key} style={[t.row, { justifyContent: 'space-between' }]}>
         <View style={{ flex: 1 }}><Text style={t.text} numberOfLines={1}>{names[key] || 'Show'}</Text><Text style={t.dim}>{`Next ${count(rule.keep, 'episode')}${rule.removeWatched ? ' · removes watched' : ''}`}</Text></View>
-        <Pill label="Stop" style={choice} onPress={() => onStop(key)} />
+        <Pill label="Stop" accessibilityLabel={`Stop keeping episodes of ${names[key] || 'this show'} ready`} style={choice} onPress={() => onStop(key)} />
       </View>)}
     </View>}
   </View>;
