@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const { EventEmitter } = require('node:events');
+const { execFile } = require('node:child_process');
 const { PassThrough } = require('node:stream');
 const { createPlaybackCache } = require('../packages/core/playback/cache.cjs');
 const { argumentsFor, SOFTWARE } = require('../packages/core/playback/encoding.cjs');
@@ -23,6 +24,42 @@ test('compatible H.264 is remuxed; precise seeks and bitmap subtitles require en
   assert.ok(accelerated.indexOf('-hwaccel') < accelerated.indexOf('-i'));
   assert.equal(accelerated[accelerated.indexOf('-hwaccel') + 1], 'auto');
   assert.equal(argumentsFor({ ...options, burn: 2 }, ['-c:v', 'h264_nvenc']).includes('-hwaccel'), false);
+});
+
+test('audio delay becomes an audio filter and does not touch the subtitle delay or direct copy', () => {
+  const options = { input: 'movie.mkv', info: { video: { codec: 'h264', pixelFormat: 'yuv420p' } } };
+  assert.equal(argumentsFor(options).includes('-af'), false);
+  const later = argumentsFor({ ...options, audioDelay: .35 }), earlier = argumentsFor({ ...options, audioDelay: -1.5 });
+  assert.equal(later[later.indexOf('-af') + 1], 'adelay=350:all=1');
+  assert.equal(earlier[earlier.indexOf('-af') + 1], 'atrim=start=1.5,asetpts=PTS-STARTPTS');
+  assert.ok(later.includes('copy'), 'video is still copied');
+  assert.ok(later.indexOf('-af') > later.indexOf('-map'));
+});
+
+test('audio delay moves the sound against the picture and is part of the cache key', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-adelay-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const input = path.join(dir, 'late-tone.mkv');
+  // Silence for the first second, then a tone.
+  await run(ffmpeg, ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=24', '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000', '-af', "volume=0:enable='lt(t,1)'", '-c:v', 'libx264', '-c:a', 'pcm_s16le', '-t', '3', input]);
+  const info = await probe(input);
+  const loud = async (file, from) => {
+    const text = await new Promise(resolve => execFile(ffmpeg, ['-v', 'info', '-ss', String(from), '-t', '0.3', '-i', file, '-vn', '-af', 'volumedetect', '-f', 'null', '-'], (_error, _out, stderr) => resolve(stderr)));
+    return Number(/max_volume: (-?[\d.]+|-inf) dB/.exec(text)?.[1] ?? -91) > -40;
+  };
+  const cache = createPlaybackCache({ ffmpeg, dir: path.join(dir, 'cache') });
+  t.after(() => cache.close());
+  const render = async audioDelay => {
+    const entry = await cache.get({ file: input, input, info, offset: 0, audio: null, burn: null, delay: 0, audioDelay });
+    await until(() => entry.done || entry.error); assert.ifError(entry.error); return entry;
+  };
+  const [plain, later, earlier] = [await render(0), await render(.5), await render(-.5)];
+  assert.notEqual(plain.file, later.file); assert.notEqual(later.file, earlier.file);
+  assert.equal(await loud(plain.file, 1.1), true, 'unshifted tone is audible from 1.1 s');
+  assert.equal(await loud(later.file, 1.1), false, 'a later sound is still silent at 1.1 s');
+  assert.equal(await loud(later.file, 1.6), true);
+  assert.equal(await loud(earlier.file, .6), true, 'an earlier sound is audible at 0.6 s');
+  assert.equal(await loud(plain.file, .6), false);
 });
 
 test('fragmented playback preserves continuous AAC timestamps and the video timeline with B-frames', async t => {

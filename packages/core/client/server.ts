@@ -110,7 +110,7 @@ export type Item = { id: string; groupId: string; title: string; group: string; 
 export type Progress = { position: number; duration: number; completed?: boolean; hidden?: boolean; updated: number };
 export type Metadata = { title?: string; poster?: string; backdrop?: string; overview?: string; tagline?: string; year?: string | number; genres?: string[]; runtime?: number; rating?: number; votes?: number; people?: string[]; peopleLabel?: string; cast?: { name: string; role?: string; photo?: string }[]; episodes?: Record<string, Record<string, { name?: string; overview?: string; still?: string; runtime?: number }>> };
 export type TrackChoice = { language: string; title: string; codec?: string; channels?: number };
-export type TrackPreference = { audio?: TrackChoice | null; subtitle?: TrackChoice | null; off?: boolean; delay?: number; size?: number };
+export type TrackPreference = { audio?: TrackChoice | null; subtitle?: TrackChoice | null; off?: boolean; delay?: number; audioDelay?: number; size?: number };
 export type Preferences = { autoplay?: boolean; volume?: number; tracks?: Record<string, TrackPreference>; [key: string]: unknown };
 export type Segment = { type: 'intro' | 'outro' | 'recap'; start: number; end: number; source: 'manual' | 'automatic' };
 export type ScannerStatus = { ready: number; total: number; message: string; complete?: boolean };
@@ -122,16 +122,27 @@ export const inspect = (base: string, id: string): Promise<Info> => request(base
 export const saveProgress = (base: string, id: string, entry: Progress) => request(base, '/api/state', { method: 'PUT', body: { progress: { [id]: entry } } });
 export const changeProgress = (base: string, id: string, body: { dismiss: true } | { completed: boolean; checkpoint?: Progress }): Promise<{ progress: Record<string, Progress> }> =>
   request(base, `/api/items/${encodeURIComponent(id)}/progress`, { method: 'PATCH', body });
-export function playbackPath(id: string, info: Info, position: number, audio: number | null, burn: number | null, delay = 0, session?: string, quality?: string) {
+type PlaybackOptions = {
+  position: number;
+  audio?: number | null;
+  burn?: number | null;
+  subtitleDelay?: number;
+  session?: string;
+  quality?: string;
+  audioDelay?: number;
+};
+
+export function playbackPath(id: string, info: Info, { position, audio = null, burn = null, subtitleDelay = 0, session, quality, audioDelay = 0 }: PlaybackOptions) {
   const root = `/api/items/${encodeURIComponent(id)}`;
   const q = new URLSearchParams();
   if (session) q.set('session', session);
   const tier = info.video && quality && quality !== 'original' ? quality : null;
-  if (!tier && info.directPlay && burn === null && (audio === null || audio === info.audio[0]?.index)) return { path: root + '/direct' + (session ? '?' + q : ''), offset: 0, start: position };
+  if (!tier && !audioDelay && info.directPlay && burn === null && (audio === null || audio === info.audio[0]?.index)) return { path: root + '/direct' + (session ? '?' + q : ''), offset: 0, start: position };
   q.set('t', String(position));
   if (audio !== null) q.set('audio', String(audio));
   if (tier) q.set('quality', tier);
-  if (burn !== null) { q.set('burn', String(burn)); if (delay) q.set('delay', String(delay)); }
+  if (burn !== null) { q.set('burn', String(burn)); if (subtitleDelay) q.set('delay', String(subtitleDelay)); }
+  if (audioDelay) q.set('adelay', String(audioDelay));
   return { path: root + '/transcode?' + q, offset: position, start: 0 };
 }
 

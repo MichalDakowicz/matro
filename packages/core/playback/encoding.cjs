@@ -66,7 +66,12 @@ function outputChannels(info, audio, channels) {
   const source = audio == null ? info.audio?.[0] : info.audio?.find(track => track.index === audio);
   return channels === 6 && source?.channels >= 6 ? 6 : 2;
 }
-function argumentsFor({ input, offset = 0, audio = null, burn = null, delay = 0, info, remote = false, quality = null, channels = 2, toneMap = !!info.video?.hdr }, encoder = SOFTWARE) {
+// Audio offset in seconds, independent of the subtitle delay: positive plays the sound later, negative earlier.
+function audioFilter(seconds) {
+  if (!seconds) return null;
+  return seconds > 0 ? `adelay=${Math.round(seconds * 1000)}:all=1` : `atrim=start=${-seconds},asetpts=PTS-STARTPTS`;
+}
+function argumentsFor({ input, offset = 0, audio = null, burn = null, delay = 0, audioDelay = 0, info, remote = false, quality = null, channels = 2, toneMap = !!info.video?.hdr }, encoder = SOFTWARE) {
   const tier = QUALITIES[quality], name = encoder[1], vaapi = name === 'h264_vaapi';
   const scale = tier ? cappedScale(tier) : 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
   // Shrink the high-bit-depth input before expanding it to float for tone-mapping.
@@ -100,7 +105,8 @@ function argumentsFor({ input, offset = 0, audio = null, burn = null, delay = 0,
   // Wait for the first fragment before writing track timing. An empty moov
   // cannot describe AAC priming / reordered video starts, so the muxer resets
   // their first timestamps independently and stretches the first audio gap.
-  args.push('-map', audio === null ? '0:a:0?' : `0:${audio}`, '-c:a', 'aac', '-ac', String(count), '-b:a', `${audioRate}k`, '-sn', '-movflags', '+frag_keyframe+delay_moov+default_base_moof', '-frag_duration', '500000', '-f', 'mp4', 'pipe:1');
+  const shift = audioFilter(audioDelay);
+  args.push('-map', audio === null ? '0:a:0?' : `0:${audio}`, ...(shift ? ['-af', shift] : []), '-c:a', 'aac', '-ac', String(count), '-b:a', `${audioRate}k`, '-sn', '-movflags', '+frag_keyframe+delay_moov+default_base_moof', '-frag_duration', '500000', '-f', 'mp4', 'pipe:1');
   return args;
 }
 module.exports = { selectEncoder, argumentsFor, canCopyVideo, QUALITIES, outputChannels, supportsToneMap, SOFTWARE };

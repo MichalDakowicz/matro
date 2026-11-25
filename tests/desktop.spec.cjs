@@ -784,3 +784,32 @@ test('the next episode is preloaded near the end and starts without waiting', as
     expect(first.completed).toBe(true); expect(first.position).toBeGreaterThan(11);
   } finally { await app.close(); }
 });
+
+test('audio delay is independent of the subtitle delay, reloads the stream and is remembered', async () => {
+  const f = await fixtures(), folder = path.join(f.dir, `audio-delay-${Date.now()}`); await fs.mkdir(folder);
+  const video = path.join(folder, 'Northbound.S01E04.Echoes.mkv'); await fs.copyFile(f.mkv, video);
+  const item = describe(video), profile = path.join(folder, 'profile'); await fs.mkdir(profile);
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items: [item], folders: [], queue: [], progress: {}, preferences: { autoplay: false, volume: .3, motion: 'off' } }));
+  const app = await electron.launch(launchOptions(profile)), page = await app.firstWindow();
+  try {
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: 'Play now', exact: true }).click();
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.1);
+    await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
+    const source = await page.locator('video').getAttribute('src');
+    for (let i = 0; i < 3; i++) await page.getByRole('button', { name: 'Audio later by 0.1 seconds', exact: true }).click();
+    await expect(page.locator('.audio-delay output')).toHaveText('+0.3 s');
+    await expect(page.locator('.delay-controls output')).toHaveText('0.0 s');
+    await expect(page.locator('video')).not.toHaveAttribute('src', source);
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.1);
+    await page.getByRole('button', { name: 'Audio earlier by 0.1 seconds', exact: true }).click();
+    await expect(page.locator('.audio-delay output')).toHaveText('+0.2 s');
+    await page.getByRole('button', { name: 'Reset', exact: true }).click();
+    await expect(page.locator('.audio-delay output')).toHaveText('0.0 s');
+    await page.getByRole('button', { name: 'Audio later by 0.1 seconds', exact: true }).click();
+    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    const tracks = Object.values((await page.evaluate(() => window.matro.load())).preferences.tracks);
+    expect(tracks.map(t => t.audioDelay)).toEqual([.1]);
+    expect(tracks.map(t => t.delay)).toEqual([0]);
+  } finally { await app.close(); }
+});

@@ -15,7 +15,7 @@ async function createStreamServer(options = {}) {
       const info = session.info || await probe(session.file);
       if (session.direct) { const stat = await mediaFS.stat(session.file); return await serveFile(req, res, session.file, stat.size, { ...headers, 'Content-Type': /\.webm$/i.test(session.file) ? 'video/webm' : 'video/mp4' }); }
       const input = await remote.input(session.file);
-      await cache.serve(req, res, { file: session.file, input, offset: session.offset, audio: session.audio, info, burn: session.bitmapSubtitle ?? null, delay: session.subtitleDelay || 0, remote: remote.isRemote(session.file), channels: session.channels }, headers, session.slot);
+      await cache.serve(req, res, { file: session.file, input, offset: session.offset, audio: session.audio, info, burn: session.bitmapSubtitle ?? null, delay: session.subtitleDelay || 0, audioDelay: session.audioDelay || 0, remote: remote.isRemote(session.file), channels: session.channels }, headers, session.slot);
     } catch (error) { if (!res.headersSent) res.writeHead(error.status || 502, headers).end('Media is unavailable. Retry playback.'); else res.destroy(); }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

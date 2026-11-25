@@ -14,13 +14,13 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   const initial = initialPosition ?? (data.progress[item.id]?.completed ? 0 : data.progress[item.id]?.position || 0);
   const pref = data.preferences.tracks?.[trackKey(item)];
   const [info, setInfo] = useState<Info | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState(''), [position, setPosition] = useState(initial), [buffered, setBuffered] = useState(initial), [playing, setPlaying] = useState(false), [caption, setCaption] = useState('');
-  const [audio, setAudio] = useState<number | null>(null), [subtitle, setSubtitle] = useState<number | null>(null), [delay, setDelayValue] = useState(pref?.delay || 0), [subtitleSize, setSubtitleSizeValue] = useState(pref?.size || 1), [rate, setRate] = useState(1);
+  const [audio, setAudio] = useState<number | null>(null), [subtitle, setSubtitle] = useState<number | null>(null), [delay, setDelayValue] = useState(pref?.delay || 0), [audioDelay, setAudioDelayValue] = useState(pref?.audioDelay || 0), [subtitleSize, setSubtitleSizeValue] = useState(pref?.size || 1), [rate, setRate] = useState(1);
   const [session] = useState(() => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
-  const choices = useRef({ audio, subtitle, delay, size: subtitleSize, quality: 'original' }), [quality, setQualityValue] = useState('original'), prefs = useRef<Preferences>(data.preferences), dataRef = useRef(data), infoRef = useRef<Info | null>(null), endRef = useRef(onEnd);
+  const choices = useRef({ audio, subtitle, delay, audioDelay, size: subtitleSize, quality: 'original' }), [quality, setQualityValue] = useState('original'), prefs = useRef<Preferences>(data.preferences), dataRef = useRef(data), infoRef = useRef<Info | null>(null), endRef = useRef(onEnd);
   const sourceReady = useRef(false), advanced = useRef(false), sampledPlayback = useRef(false), playbackStart = useRef<number | null>(null);
   const pendingStart = useRef<{ time: number; since: number } | null>(null);
   const replacement = useRef<Promise<void>>(Promise.resolve()), localSource = useRef(false);
-  const disk = useRef<{ uri: string; offset: number; audio: number | null; burn: number | null; delay: number; quality: string } | null>(null), cancelDownload = useRef<(() => void) | null>(null);
+  const disk = useRef<{ uri: string; offset: number; audio: number | null; burn: number | null; delay: number; audioDelay: number; quality: string } | null>(null), cancelDownload = useRef<(() => void) | null>(null);
   dataRef.current = data; endRef.current = onEnd;
   const at = useRef(initial), offset = useRef(0), direct = useRef(false), replacing = useRef(true), mounted = useRef(true), intent = useRef(true), generation = useRef(0), subtitleRun = useRef(0), retries = useRef(0), moved = useRef(Date.now()), lastSaved = useRef(0), forceTranscode = useRef(false), cues = useRef<Cue[]>([]), prefTimer = useRef<ReturnType<typeof setTimeout> | null>(null), bitmapTimer = useRef<ReturnType<typeof setTimeout> | null>(null), rateRef = useRef(1);
   const player = useVideoPlayer(null, p => {
@@ -64,7 +64,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     const details = infoRef.current; if (!details) return;
     const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true }))];
     const choice = (track?: Track) => track ? { language: track.language, title: track.title, codec: track.codec, channels: track.channels } : null;
-    prefs.current = { ...prefs.current, tracks: { ...prefs.current.tracks, [trackKey(item)]: { audio: choice(details.audio.find(t => t.index === choices.current.audio)), subtitle: choice(tracks.find(t => t.index === choices.current.subtitle)), off: choices.current.subtitle === null, delay: choices.current.delay, size: choices.current.size } } };
+    prefs.current = { ...prefs.current, tracks: { ...prefs.current.tracks, [trackKey(item)]: { audio: choice(details.audio.find(t => t.index === choices.current.audio)), subtitle: choice(tracks.find(t => t.index === choices.current.subtitle)), off: choices.current.subtitle === null, delay: choices.current.delay, audioDelay: choices.current.audioDelay, size: choices.current.size } } };
     if (prefTimer.current) clearTimeout(prefTimer.current);
     prefTimer.current = setTimeout(() => { void request(base, '/api/state', { method: 'PUT', body: { preferences: prefs.current } }).catch(() => {}); }, 400);
   }, [base, item.id]);
@@ -90,10 +90,12 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     try {
       const headers = saved ? undefined : await mediaHeaders(base), burn = details.embedded.find(t => t.index === choices.current.subtitle && t.bitmap)?.index ?? null;
       const compatible = forceTranscode.current || (Platform.OS === 'ios' && item.format === 'WEBM') ? { ...details, directPlay: false } : details;
-      const source = saved ? { path: '', start: position, offset: 0 } : playbackPath(item.id, compatible, position, choices.current.audio, burn, choices.current.delay, session, choices.current.quality);
+      const { audio, delay: subtitleDelay, quality, audioDelay } = choices.current;
+      const streamOptions = { position, audio, burn, subtitleDelay, session, quality, audioDelay };
+      const source = saved ? { path: '', start: position, offset: 0 } : playbackPath(item.id, compatible, streamOptions);
       if (!mounted.current || run !== generation.current) return;
       const diskCopy = disk.current;
-      const local = saved ? { uri: saved.uri, offset: 0 } : diskCopy && position >= diskCopy.offset && diskCopy.audio === choices.current.audio && diskCopy.burn === burn && diskCopy.delay === choices.current.delay && diskCopy.quality === choices.current.quality ? diskCopy : null;
+      const local = saved ? { uri: saved.uri, offset: 0 } : diskCopy && position >= diskCopy.offset && diskCopy.audio === audio && diskCopy.burn === burn && diskCopy.delay === subtitleDelay && diskCopy.audioDelay === audioDelay && diskCopy.quality === quality ? diskCopy : null;
       const start = local ? position - local.offset : source.start;
       if (!local) { cancelDownload.current?.(); cancelDownload.current = null; disk.current = null; }
       // Native source replacements cannot be cancelled. Let an in-flight one
@@ -112,7 +114,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       if (!mounted.current || run !== generation.current) return;
       if (!local && headers) cancelDownload.current = downloadPlayback(base + source.path, headers, file => {
         if (!mounted.current || run !== generation.current) return;
-        const saved = { uri: file, offset: source.offset, audio: choices.current.audio, burn, delay: choices.current.delay, quality: choices.current.quality };
+        const saved = { uri: file, offset: source.offset, audio, burn, delay: subtitleDelay, quality, audioDelay };
         disk.current = saved; setBuffered(details.duration);
         // Keep the current decoder running. Use the completed copy on the next
         // seek/retry instead of interrupting playback when a download finishes.
@@ -240,11 +242,16 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     const next = Math.max(-60, Math.min(60, Math.round(value * 10) / 10)); choices.current.delay = next; setDelayValue(next); remember();
     if (infoRef.current?.embedded.find(t => t.index === choices.current.subtitle)?.bitmap) { if (bitmapTimer.current) clearTimeout(bitmapTimer.current); bitmapTimer.current = setTimeout(() => void load(at.current), 400); }
   };
+  // The sound offset is applied by the server's transcode, so a change reloads the stream (debounced while the buttons are tapped).
+  const setAudioDelay = (value: number) => {
+    const next = Math.max(-10, Math.min(10, Math.round(value * 10) / 10)); choices.current.audioDelay = next; setAudioDelayValue(next); remember();
+    if (bitmapTimer.current) clearTimeout(bitmapTimer.current); bitmapTimer.current = setTimeout(() => void load(at.current), 400);
+  };
   const chooseQuality = (id: string) => {
     if (id === choices.current.quality) return;
     choices.current.quality = id; setQualityValue(id); void saveQuality(id); void load(at.current);
   };
   const setSubtitleSize = (value: number) => { choices.current.size = value; setSubtitleSizeValue(value); remember(); };
   const changeSpeed = () => { const values = [.75, 1, 1.25, 1.5, 2], next = values[(values.indexOf(rateRef.current) + 1) % values.length]; rateRef.current = next; player.playbackRate = next; setRate(next); };
-  return { player, info, markers, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, subtitleSize, rate, quality, qualities: saved ? [] : qualityOptions(info?.video), chooseQuality, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setSubtitleSize, changeSpeed, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
+  return { player, info, markers, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, audioDelay, subtitleSize, rate, quality, qualities: saved ? [] : qualityOptions(info?.video), chooseQuality, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setAudioDelay, setSubtitleSize, changeSpeed, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
 }
