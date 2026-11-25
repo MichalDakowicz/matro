@@ -184,11 +184,19 @@ test('a quality tier scales the picture down, caps the bitrate and is part of th
   assert.ok(argumentsFor(options).includes('copy'));
   const tier = argumentsFor({ ...options, quality: '480p' });
   assert.equal(tier.includes('copy'), false);
-  assert.equal(tier[tier.indexOf('-vf') + 1], 'scale=-2:trunc(min(ih\\,480)/2)*2');
+  assert.equal(tier[tier.indexOf('-vf') + 1], "scale=w='min(iw,854)':h='min(ih,480)':force_original_aspect_ratio=decrease:force_divisible_by=2");
   assert.equal(tier[tier.indexOf('-maxrate') + 1], '1500k');
+  for (const name of ['h264_nvenc', 'h264_qsv', 'h264_vaapi']) {
+    const hw = argumentsFor({ ...options, quality: '480p' }, ['-c:v', name, '-global_quality', '21']);
+    assert.equal(hw[hw.indexOf('-c:v') + 1], name);
+    assert.equal(hw.includes('-global_quality'), false);
+    assert.equal(hw[hw.indexOf('-b:v') + 1], '1125k');
+    assert.equal(hw[hw.indexOf('-maxrate') + 1], '1500k');
+    assert.equal(hw[hw.indexOf('-bufsize') + 1], '3000k');
+  }
   assert.equal(argumentsFor({ ...options, quality: 'bogus' }).includes('copy'), true);
   const bitmap = argumentsFor({ ...options, quality: '720p', burn: 3 });
-  assert.match(bitmap[bitmap.indexOf('-filter_complex') + 1], /scale=-2:trunc\(min\(ih\\,720\)\/2\)\*2\[video\]$/);
+  assert.match(bitmap[bitmap.indexOf('-filter_complex') + 1], /scale=w='min\(iw,1280\)':h='min\(ih,720\)':force_original_aspect_ratio=decrease:force_divisible_by=2\[video\]$/);
 
   const encoder = process.env.MATRO_VIDEO_ENCODER; process.env.MATRO_VIDEO_ENCODER = 'software';
   t.after(() => { if (encoder === undefined) delete process.env.MATRO_VIDEO_ENCODER; else process.env.MATRO_VIDEO_ENCODER = encoder; });

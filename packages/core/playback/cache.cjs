@@ -101,7 +101,7 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
     const entry = { file: path.join(dir, key + '.part'), size: 0, done: false, readers: 0, used: Date.now(), error: null, child: null };
     entries.set(key, entry);
     const render = async () => {
-      const encoder = QUALITIES[options.quality] || canCopyVideo(options.info, options.burn, options.offset) || !options.info.video || hardwareFailures.has(key) ? SOFTWARE : await selectEncoder(ffmpeg);
+      const encoder = canCopyVideo(options.info, options.burn, options.offset, options.quality) || !options.info.video || hardwareFailures.has(key) ? SOFTWARE : await selectEncoder(ffmpeg);
       if (closed || entry.error) return;
       async function attempt(selected) {
         await fsp.rm(entry.file, { force: true }); entry.size = 0; entry.preparedSeconds = 0;
