@@ -19,6 +19,7 @@ const previews = createPreviews();
 protocol.registerSchemesAsPrivileged([{ scheme: 'matro', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 let win, streams, storage, segments, scanner, metadata, torrents, upgrades, embeddedSubtitles;
 if (!app.isPackaged && process.env.MATRO_USER_DATA) app.setPath('userData', path.resolve(process.env.MATRO_USER_DATA));
+const { editTitleLists } = require('../title-lists.cjs');
 let state = { folders: [], items: [], progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 } };
 let writeQueue = Promise.resolve();
 let scanQueue = Promise.resolve();
@@ -136,7 +137,7 @@ app.whenReady().then(async () => {
   streams = await createStreamServer({ dir: path.join(app.getPath('userData'), 'playback') });
   protocol.handle('matro', request => {
     const url = new URL(request.url);
-    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/playback-buffer.js': 'playback-buffer.js', '/recovery.js': 'recovery.js', '/core/client/watch-progress.js': '../core/client/watch-progress.js', '/icons.json': 'icons.json', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-discovery.js': 'downloads-discovery.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg', '/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
+    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/playback-buffer.js': 'playback-buffer.js', '/recovery.js': 'recovery.js', '/core/client/title-shelves.js': '../core/client/title-shelves.js', '/core/client/watch-progress.js': '../core/client/watch-progress.js', '/icons.json': 'icons.json', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-discovery.js': 'downloads-discovery.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg', '/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
     const artwork = url.hostname === 'app' && url.pathname.startsWith('/artwork/') && metadata.artworkFile(url.pathname.slice('/artwork/'.length));
     if (artwork) return net.fetch(pathToFileURL(artwork).href);
     const file = url.hostname === 'app' && files[url.pathname];
@@ -186,6 +187,13 @@ app.whenReady().then(async () => {
       return { ...item, ...(job ? { title: job.title, year: job.year, kind: job.kind } : {}) };
     });
     return downloadArtwork(items);
+  });
+  handle('library:edit-lists', async change => {
+    const old = state.lists;
+    const lists = editTitleLists(old || [], change, key => state.items.some(item => (item.kind === 'show' ? item.groupId || item.group : item.id) === key));
+    state.lists = lists;
+    try { await persist(); } catch (error) { if (state.lists === lists) state.lists = old; throw error; }
+    return lists;
   });
   handle('library:load', async () => { await metadata.loaded; return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
   handle('library:ssh', async options => {

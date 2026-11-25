@@ -202,7 +202,13 @@ export function createAdapter(session) {
   const matro = {
     chooseSource: window.matroDesktop?.chooseSource,
     recoveryScope: `account:${session.user.id}:${session.user.username}`,
-    load, inspect, prepare: inspect, subtitles, loadSubtitle, stream,
+    load,
+    get canEditLists() { return !session.offline && Array.isArray(latest?.lists); },
+    async editLists(change) {
+      const { lists } = await post('/api/lists', change);
+      if (latest) latest.lists = lists;
+      return lists;
+    }, inspect, prepare: inspect, subtitles, loadSubtitle, stream,
     offlineSave: session.offline ? null : async id => {
       const item = latest.items.find(item => item.id === id);
       if (!item) throw new Error('That title is no longer in the library.');

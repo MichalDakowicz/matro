@@ -16,7 +16,7 @@ function createApp({ dataDir = config.dataDir, tmdb: tmdbOptions, downloads: dow
   app.scanner = require('./segments').createScanner({ dataDir, db });
   app.downloads = createDownloads({ dataDir, library, tmdb: app.tmdb, ...downloadOptions });
   app.movieRequests = createMovieRequests(db, requestOptions);
-  for (const name of ['account', 'library', 'play', 'admin', 'downloads', 'movie-requests']) require(`./routes/${name}`).register(app);
+  for (const name of ['account', 'lists', 'library', 'play', 'admin', 'downloads', 'movie-requests']) require(`./routes/${name}`).register(app);
   const server = createServer({ router, publicDir: config.publicDir, authenticate: token => auth.user(token), config });
   server.on('listening', () => app.movieRequests.start());
   server.on('close', () => { app.scanner.close(); app.downloads.close(); app.movieRequests.close(); app.closePlayback?.(); });

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, BackHandler, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { changeProgress, library, mediaHeaders, request, ServerError, type Item, type Library, type MovieRequest } from '../lib/server';
+import { changeProgress, library, mediaHeaders, request, ServerError, type Item, type Library, type ListChange, type MovieRequest, type TitleList } from '../lib/server';
 import { progressRecovery, recoveryScope } from '../lib/storage';
-import { continueItems, groupLibrary, nameFor, titleKey } from '../../../../packages/core/client/library';
+import { continueItems, groupLibrary, metadataFor, nameFor, titleKey } from '../../../../packages/core/client/library';
+import { titleShelves } from '../../../../packages/core/client/title-shelves.js';
 import { dismissedProgress, normalizeProgress } from '../../../../packages/core/client/watch-progress.js';
 import { colors, dock } from '../theme';
 import { Pill, styles as t } from '../components/Matro';
@@ -216,6 +217,11 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       else { setPlaying(null); void load(); }
     }} />;
   const admin = !offline && data?.user.role === 'admin', layout = { top: insets.top + (offline ? 44 : 0), bottom: insets.bottom };
+  const list = data && tab.startsWith('list:') ? titleShelves(allGroups, data.lists, titleKey, item => metadataFor(data, item)).find(shelf => 'list:' + shelf.id === tab) : null;
+  const editLists = async (body: ListChange) => {
+    const { lists }: { lists: TitleList[] } = await request(base, '/api/lists', { method: 'POST', body });
+    setData(current => current && { ...current, lists });
+  };
   const libraryTab = ['home', 'movie', 'show', 'audio', 'folders'].includes(tab);
   const requestsLabel = !offline && data?.movieRequestsEnabled ? (data.user.role === 'admin' ? 'Movie requests' : 'Request a movie') : undefined;
   const dockTab: DockTab = tab === 'search' ? 'search' : tab === 'queue' ? 'queue' : ['server', 'offline', 'downloads', 'movie-requests'].includes(tab) ? 'server' : 'home';
@@ -247,6 +253,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     : tab === 'search' ? <SearchView {...common} data={data} groups={allGroups} />
     : tab === 'queue' ? <QueueScreen {...art} data={data} layout={layout} onPlay={playFromQueue} onQueue={setQueue} onAutoplay={setAutoplay} onBrowse={() => jump('home')} />
     : tab === 'server' ? <ServerPage base={base} data={data} offline={offline} layout={layout} requests={requestsLabel} onGo={go} onBrowseFolder={path => push('home', path)} onRefresh={load} onChangeServer={onChangeServer} notify={notify} />
+    : tab.startsWith('list:') ? <BrowseView {...common} data={data} groups={list?.groups || []} title={list?.name || 'List'} chips={null} />
     : folder ? <BrowseView {...common} data={data} groups={folderGroups} title={folder.split(/[\/]/).filter(Boolean).pop()} chips={null} />
     : ['movie', 'show', 'audio'].includes(tab) ? <BrowseView {...common} data={data} kind={tab} groups={allGroups.filter(items => items[0].kind === tab)} chips={chips} />
     : <HomeView {...common} data={data} groups={allGroups} featured={featured} continues={continues} chips={chips} onPlay={play} onRemoveContinue={removeContinue} onSeeAll={jump} onAddFolder={() => jump('folders')} />;
@@ -259,7 +266,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       <Dock active={dockTab} onChange={jump} queued={data?.queue.length || 0} hidden={keyboard} />
     </View>
     {/* The title page is an overlay, so the list underneath stays mounted and keeps its scroll position. */}
-    {detail && data && <View style={s.overlay}><TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onEnqueue={enqueue} onMark={(list, done) => void markMany(list, done)} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} savingIds={savingIds} /></View>}
+    {detail && data && <View style={s.overlay}><TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onEditLists={!offline && data.lists ? editLists : undefined} onPlay={play} onEnqueue={enqueue} onMark={(list, done) => void markMany(list, done)} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} savingIds={savingIds} /></View>}
     <Grain />
     <Toast notice={notice} bottom={toastBottom} onDismiss={dismiss} />
     <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} requests={requestsLabel} onGo={go} onRefresh={() => void load()} onAbout={() => setAbout(true)} onServer={onChangeServer} onSignOut={onSignedOut} />

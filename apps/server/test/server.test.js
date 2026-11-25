@@ -46,7 +46,7 @@ async function fakeTmdb(url) {
   if (route === '/search/movie') return json({ results: [{ id: 1, title: 'Heat', release_date: '1995-12-15', overview: 'A crew and a cop.', poster_path: '/p.jpg' }, { id: 9, title: 'Heat Wave', release_date: '2001-01-01', poster_path: '/q.jpg' }] });
   if (route === '/movie/1' && u.searchParams.get('language') === 'pl-PL') return json({ id: 1, title: 'Gorączka', original_language: 'en',
     release_date: '1995-12-15', images: { posters: [{ iso_639_1: 'pl', file_path: '/pl.jpg' }] } });
-  if (route === '/movie/1') return json({ id: 1, title: 'Heat', release_date: '1995-12-15', genres: [{ name: 'Crime' }], overview: 'A crew and a cop.', tagline: 'A Los Angeles crime saga', runtime: 170, imdb_id: 'tt0113277',
+  if (route === '/movie/1') return json({ id: 1, title: 'Heat', release_date: '1995-12-15', genres: [{ name: 'Crime' }], overview: 'A crew and a cop.', belongs_to_collection: { id: 42, name: 'Heat Collection' }, tagline: 'A Los Angeles crime saga', runtime: 170, imdb_id: 'tt0113277',
     vote_count: 100, vote_average: 8.3, poster_path: '/p.jpg', backdrop_path: '/b.jpg', credits: { cast: [{ id: 5, name: 'Al Pacino', character: 'Vincent', profile_path: '/a.jpg' }], crew: [{ job: 'Director', name: 'Michael Mann' }] } });
   if (route === '/search/tv') return json({ results: [{ id: 2, name: 'Show', first_air_date: '2020-01-01' }] });
   if (route === '/tv/2') return json({ id: 2, name: 'Show', first_air_date: '2020-01-01', genres: [], overview: 'A show.', number_of_seasons: 1, created_by: [{ name: 'Someone' }], poster_path: '/sp.jpg', external_ids: {}, credits: {} });
@@ -155,6 +155,7 @@ test('TMDB metadata is matched on the server and artwork is served to signed-in 
   for (let i = 0; i < 50; i++) { data = (await call('sam', 'GET', '/api/library')).data; if (data.metadata[film.id] && data.metadata[show.groupId]) break; await new Promise(r => setTimeout(r, 100)); }
   assert.equal(data.metadataEnabled, true);
   const heat = data.metadata[film.id];
+  assert.deepEqual(heat.collection, { id: 42, name: 'Heat Collection' });
   assert.deepEqual([heat.title, heat.year, heat.people[0], heat.cast[0].name, heat.imdbId], ['Heat', '1995', 'Michael Mann', 'Al Pacino', 'tt0113277']);
   assert.equal(heat.poster, 'artwork/movie-1-poster.jpg');
   assert.equal(data.metadata[show.groupId].episodes[1][1].name, 'Pilot');
@@ -302,6 +303,23 @@ test('any viewer can add labelled subtitles; only owner or head account can edit
   assert.equal((await call('eve', 'GET', '/api/me/subtitles')).data.subtitles.length, 0);
   assert.equal((await call('admin', 'GET', '/api/me/subtitles')).data.subtitles.length, 2);
   assert.equal((await call('admin', 'DELETE', `/api/subtitles/${id}`)).status, 200);
+});
+
+test('title lists are isolated by account and membership changes are idempotent', async () => {
+  const movie = (await catalog('sam')).items.find(item => item.kind === 'movie');
+  const create = await call('sam', 'POST', '/api/lists', { action: 'create', name: 'Weekend', titleId: movie.id });
+  assert.equal(create.status, 200);
+  const [list] = create.data.lists;
+  assert.deepEqual(list.titles, [movie.id]);
+  assert.deepEqual((await catalog('admin')).lists, []);
+  assert.equal((await call('admin', 'POST', '/api/lists', { action: 'set', listId: list.id, titleId: movie.id, present: false })).status, 400);
+  const later = { action: 'set', listId: 'watch-later', titleId: movie.id, present: true };
+  assert.equal((await call('sam', 'POST', '/api/lists', later)).status, 200);
+  assert.deepEqual((await call('sam', 'POST', '/api/lists', later)).data.lists[0].titles, [movie.id]);
+  assert.deepEqual((await catalog('sam')).lists.map(item => item.name), ['Watch Later', 'Weekend']);
+  await call('sam', 'POST', '/api/lists', { ...later, present: false });
+  await call('sam', 'POST', '/api/lists', { action: 'delete', listId: list.id });
+  assert.deepEqual((await catalog('sam')).lists, [{ id: 'watch-later', name: 'Watch Later', titles: [] }]);
 });
 
 test('watch state is saved per person and merged into the catalog they load', async () => {

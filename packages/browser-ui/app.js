@@ -1,3 +1,4 @@
+import { listChoices, titleShelves } from '../core/client/title-shelves.js';
 import icons from './icons.json' with { type: 'json' };
 import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
@@ -279,7 +280,7 @@ let footerOpen = false;
 function footer() {
   return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
 }
-const sectionGrid = (title, items, count, more) => items.length ? `<section class="section"><div class="section-heading"><h2>${title}</h2><span>${count}${more ? ` · <button class="text-button" data-tab="${more}">See all</button>` : ''}</span></div><div class="grid">${items.map(poster).join('')}</div></section>` : '';
+const sectionGrid = (title, items, count, more) => items.length ? `<section class="section"><div class="section-heading"><h2>${esc(title)}</h2><span>${count}${more ? ` · <button class="text-button" data-tab="${more}">See all</button>` : ''}</span></div><div class="grid">${items.map(poster).join('')}</div></section>` : '';
 const kinds = [['show', 'Shows', 'shows'], ['movie', 'Movies', 'titles'], ['audio', 'Music & audio', 'files']];
 function landingPage() {
   if (!library.items.length) return `<section class="welcome"><p class="show-kicker">Matro · local library</p><h1>Your collection.<br>Your kind of player.</h1><p>All your films, shows and favourite files in one quiet place. Add a folder to build your library, or drop media anywhere in this window — seasons and episodes are picked up from file names.</p><div class="show-actions"><button class="pill" data-action="ssh">${icon('network')}Connect SSH</button><button class="pill primary" data-action="folder">${icon('folder')}Add folder</button><button class="pill" data-action="files">${icon('plus')}Open files</button></div><div class="formats">${['MKV', 'MP4', 'AVI', 'MOV', 'WEBM', 'FLAC', '+ MORE'].map(f => `<span>${f}</span>`).join('')}</div></section>`;
@@ -288,6 +289,7 @@ function landingPage() {
   return `${folderFilter ? `<div class="page-head"><div><h1 class="page-title">${esc(base(folderFilter))}</h1><p class="page-sub">${esc(folderFilter)}</p></div><button class="text-button" data-action="all-folders">Show all folders</button></div>` : ''}
     ${continues.length ? `<section class="section"><div class="section-heading"><h2>Continue watching ${icon('chevron')}</h2><span>${continues.length} in progress</span></div><div class="cw-row">${continues.map(continueCard).join('')}</div></section>` : ''}
     ${featured.length ? reelMarkup(featured) : ''}
+    ${!folderFilter ? titleShelves(groupTitles(library.items), library.lists, metaKey, meta).map(shelf => sectionGrid(shelf.name, shelf.groups, shelf.groups.length + ' titles')).join('') : ''}
     ${kinds.map(([kind, title, noun]) => { const items = groups(kind); return sectionGrid(title, items, `${items.length} ${kind === 'show' ? 'shows' : noun}`, folderFilter ? '' : kind); }).join('')}`;
 }
 function browsePage(kind) {
@@ -612,7 +614,7 @@ function detail(id, focus = true) {
       <p class="detail-sub">${[...facts, selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie', selected.format].map(esc).join(' <span aria-hidden="true">·</span> ')}</p>
       ${m?.overview ? `<p class="detail-overview">${esc(m.overview)}</p>` : ''}
       <div class="detail-actions">${selected.kind === 'movie' && api.canCompareEditions !== false ? `<button class="pill" data-upgrade="${selected.id}">Find better quality / compare editions</button>` : ''}<button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
-      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}${api.offlineSave ? `<button class="pill" data-offline-save="${target.id}">${icon('download')}${selected.kind === 'show' ? 'Save episode offline' : 'Save offline'}</button>` : ''}${api.offlineSaveMany && selected.kind === 'show' ? offlineSeasonButtons(items, target) : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
+      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}${api.offlineSave ? `<button class="pill" data-offline-save="${target.id}">${icon('download')}${selected.kind === 'show' ? 'Save episode offline' : 'Save offline'}</button>` : ''}${api.offlineSaveMany && selected.kind === 'show' ? offlineSeasonButtons(items, target) : ''}${api.editLists && api.canEditLists !== false ? '<button class="pill" data-action="title-lists">' + icon('plus') + 'Add to list</button>' : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
       ${m?.rating ? `<div class="ratings"><div><p class="rating-label">TMDB</p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}</div>
     <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
       ${castPanel(m)}${productionPanel(m)}${filePanel(selected, m)}</div></div>`;
@@ -638,6 +640,58 @@ function productionPanel(m) {
     people('Music', m.music, 1), people('Cinematography', m.cinematography, 1), money(m.budget) ? ['Budget', money(m.budget), money(m.revenue) ? `${money(m.revenue)} box office` : ''] : null,
     m.countries?.length ? ['Made in', m.countries.join(', '), ''] : null].filter(Boolean);
   return facts.length ? `<section class="panel flat" aria-labelledby="production-h"><div class="panel-head"><h3 id="production-h">Production</h3></div><div class="facts">${facts.map(([label, value, sub]) => `<div><p>${esc(label)}</p><strong>${esc(value)}</strong>${sub ? `<small>${esc(sub)}</small>` : ''}</div>`).join('')}</div></section>` : '';
+}
+function openTitleLists() {
+  const titleId = metaKey(selected);
+  const dialog = document.createElement('dialog');
+  dialog.className = 'match-dialog title-lists-dialog';
+  dialog.setAttribute('aria-labelledby', 'title-lists-heading');
+  dialog.innerHTML = `<div class="section-heading"><h2 id="title-lists-heading">Add to list</h2><button class="icon-button" aria-label="Close">${icon('close')}</button></div>
+    <div class="match-results"></div>
+    <form><label>New list <input name="name" maxlength="60" required></label><button class="pill" type="submit">Create and add</button></form>
+    <p class="match-note" role="status"></p>`;
+  document.body.append(dialog);
+  const rows = dialog.querySelector('.match-results'), form = dialog.querySelector('form'), status = dialog.querySelector('[role=status]');
+  const render = () => {
+    rows.innerHTML = listChoices(library.lists).map(list => `<div class="title-list-row">
+      <button class="match-row" data-list="${esc(list.id)}" aria-pressed="${list.titles.includes(titleId)}">${esc(list.name)}</button>
+      ${list.id !== 'watch-later' ? `<button class="icon-button" data-delete-list="${esc(list.id)}" aria-label="Delete ${esc(list.name)}">${icon('trash')}</button>` : ''}
+    </div>`).join('');
+  };
+  let busy = false;
+  async function update(change) {
+    if (busy) return false;
+    busy = true;
+    try {
+      library.lists = await api.editLists(change);
+      rerender();
+      if (dialog.open) {
+        render();
+        rows.querySelector(`[data-list="${CSS.escape(change.listId || '')}"]`)?.focus();
+        status.textContent = 'Lists saved.';
+      }
+      return true;
+    } catch (error) {
+      status.textContent = error.message;
+      return false;
+    } finally { busy = false; }
+  }
+  dialog.querySelector('.section-heading button').addEventListener('click', () => dialog.close());
+  rows.addEventListener('click', event => {
+    const button = event.target.closest('button');
+    if (button?.dataset.list) void update({ action: 'set', listId: button.dataset.list, titleId, present: button.getAttribute('aria-pressed') !== 'true' });
+    if (button?.dataset.deleteList && confirm('Delete this list?')) void update({ action: 'delete', listId: button.dataset.deleteList });
+  });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (await update({ action: 'create', name: form.elements.name.value, titleId })) form.reset();
+  });
+  dialog.addEventListener('close', () => {
+    dialog.remove();
+    root.querySelector('[data-action=title-lists]')?.focus();
+  }, { once: true });
+  render();
+  dialog.showModal();
 }
 // Episodes: one season at a time behind season tabs, each episode a card with its TMDB still, summary and progress.
 let detailSeason = null;
@@ -1231,6 +1285,7 @@ const actions = {
   'all-folders': () => { folderFilter = null; renderLibrary(); }, 'close-detail': closeDetail,
   about: () => { footerOpen = !footerOpen; $('#library-footer')?.classList.toggle('open', footerOpen); $('.help-button')?.setAttribute('aria-expanded', String(footerOpen)); },
   'fix-match': () => openMatch(selected), 'open-tmdb': () => openTitlePage('tmdb'), 'open-imdb': () => openTitlePage('imdb'), 'pick-prelude': () => setPrelude(false), 'clear-prelude': () => setPrelude(true), 'close-match': () => { $('#match-dialog')?.close(); matchItem = null; },
+  'title-lists': openTitleLists,
   shortcuts: () => $('#shortcuts').showModal(), library: backToLibrary,
   toggle, backward: () => seek(offset + video.currentTime - SKIP), forward: () => seek(offset + video.currentTime + SKIP),
   previous: () => step(-1), next: () => step(1), fullscreen: () => api.window('fullscreen'),
@@ -1336,7 +1391,7 @@ document.addEventListener('keydown', event => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) && event.target.type !== 'range';
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); void attempt(actions.files); return; }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && view === 'library') { event.preventDefault(); if (tab !== 'search') goTab('search'); $('#search')?.focus(); return; }
-  if (event.key === 'Escape') { if ($('#shortcuts').open || $('#match-dialog')?.open || $('#ssh-dialog').open) return; if (footerOpen && view === 'library') { actions.about(); return; } if (fullscreenActive) { void api.window('fullscreen'); return; } if (selected) closeDetail(); else if (sidePanel) { sidePanel = null; renderTracks(); } else if (view === 'player') void attempt(backToLibrary); return; }
+  if (event.key === 'Escape') { if (document.querySelector('dialog[open]') || $('#match-dialog')?.open || $('#ssh-dialog').open) return; if (footerOpen && view === 'library') { actions.about(); return; } if (fullscreenActive) { void api.window('fullscreen'); return; } if (selected) closeDetail(); else if (sidePanel) { sidePanel = null; renderTracks(); } else if (view === 'player') void attempt(backToLibrary); return; }
   if (typing || $('#shortcuts').open || $('#ssh-dialog').open || view !== 'player') return;
   // Enter takes a visible skip (intro, recap, outro) unless a control has focus and Enter belongs to it.
   if (event.key === 'Enter' && !$('#skip-segment')?.hidden && !event.target.closest('button, a, input, select, textarea')) { event.preventDefault(); void attempt(actions['skip-segment']); return; }

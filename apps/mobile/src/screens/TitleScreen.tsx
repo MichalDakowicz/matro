@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import type { Item, Library } from '../lib/server';
-import { episodeName, formatTime, metadataFor, nameFor, resumeItem } from '../../../../packages/core/client/library';
+import type { Item, Library, ListChange } from '../lib/server';
+import { episodeName, formatTime, metadataFor, nameFor, resumeItem, titleKey } from '../../../../packages/core/client/library';
+import { listChoices } from '../../../../packages/core/client/title-shelves.js';
 import { cleanEpisodeName, plural, runtimeText } from '../lib/text';
 import { Chip, Icon, IconButton, MediaArt, Pill, ProgressBar, Row, Sheet, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
@@ -14,14 +15,24 @@ type Props = ArtProps & {
   data: Library; items: Item[]; onBack: () => void; onPlay: (item: Item, start?: number) => void; onEnqueue: (items: Item[]) => void;
   /** Marks every item watched (done) or unwatched; items already in that state are skipped. */
   onMark: (items: Item[], done: boolean) => void;
+  onEditLists?: (change: ListChange) => Promise<void>;
   onSave?: (item: Item) => void; onSaveMany?: (items: Item[]) => void; onRemoveSaved?: (items: Item[]) => void; savedIds?: Set<string>; savingIds?: Set<string>;
 };
-type Menu = null | 'save' | 'watched' | { episode: Item };
+type Menu = null | 'save' | 'watched' | 'lists' | { episode: Item };
 
-export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, onMark, onSave, onSaveMany, onRemoveSaved, savedIds, savingIds, ...art }: Props) {
+export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, onMark, onEditLists, onSave, onSaveMany, onRemoveSaved, savedIds, savingIds, ...art }: Props) {
   const item = items[0], m = metadataFor(data, item), target = resumeItem(data, items), p = data.progress[target.id], name = nameFor(data, item);
   const insets = useSafeAreaInsets(), seasons = [...new Set(items.map(i => i.season || 1))];
   const [season, setSeason] = useState(target.season || seasons[0]), [menu, setMenu] = useState<Menu>(null), [scrolled, setScrolled] = useState(false);
+  const [listName, setListName] = useState(''), [editingList, setEditingList] = useState(false), [listError, setListError] = useState('');
+  const titleId = titleKey(item);
+  const editList = async (change: ListChange) => {
+    if (editingList || !onEditLists) return;
+    setEditingList(true); setListError('');
+    try { await onEditLists(change); if (change.action === 'create') setListName(''); }
+    catch (error) { setListError(error instanceof Error ? error.message : 'Could not update the list.'); }
+    finally { setEditingList(false); }
+  };
   const resume = p?.position > 0 && !p.completed, show = item.kind === 'show';
   const done = (list: Item[]) => list.length > 0 && list.every(i => data.progress[i.id]?.completed);
   const inSeason = items.filter(i => (i.season || 1) === season);
@@ -47,6 +58,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
       </View>
       <View style={[t.row, { marginTop: 10, flexWrap: 'wrap' }]}>
         <Pill label="Add to queue" icon="plus" style={s.action} onPress={() => onEnqueue(items)} />
+        {onEditLists && <Pill label="Add to list" icon="plus" style={s.action} onPress={() => { setListError(''); setMenu('lists'); }} />}
         {show ? <Pill label="Mark watched" icon="check" style={s.action} onPress={() => setMenu('watched')} />
           : <Pill label={done(items) ? 'Mark unwatched' : 'Mark watched'} icon="check" style={s.action} onPress={() => onMark(items, !done(items))} />}
         {onSave && (show ? onSaveMany && <Pill label="Save offline" icon="download" style={s.action} onPress={() => setMenu('save')} />
@@ -77,6 +89,22 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
       }} />
     {scrolled && <TopFade />}
     <View style={[s.back, { top: insets.top + 12 }]}><IconButton name="back" label="Close details" onPress={onBack} /></View>
+    <Sheet visible={menu === 'lists'} onClose={() => setMenu(null)} title="Add to list">
+      {listChoices(data.lists).map(list => {
+        const added = list.titles.includes(titleId);
+        return <View key={list.id} style={t.row}>
+          <View style={{ flex: 1 }}><Row icon={added ? 'check' : 'plus'} label={list.name} detail={added ? 'Added · tap to remove' : undefined}
+            onPress={() => void editList({ action: 'set', listId: list.id, titleId, present: !added })} /></View>
+          {list.id !== 'watch-later' && <IconButton name="trash" label={`Delete ${list.name}`} onPress={() => Alert.alert('Delete list?', list.name, [
+            { text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => void editList({ action: 'delete', listId: list.id }) },
+          ])} />}
+        </View>;
+      })}
+      <TextInput accessibilityLabel="New list" placeholder="New list" placeholderTextColor={colors.dim} maxLength={60}
+        value={listName} onChangeText={setListName} style={s.listInput} />
+      <Pill label="Create and add" disabled={!listName.trim() || editingList} onPress={() => void editList({ action: 'create', name: listName, titleId })} />
+      {listError ? <Text accessibilityLiveRegion="polite" style={t.muted}>{listError}</Text> : null}
+    </Sheet>
     <Sheet visible={menu === 'watched'} onClose={() => setMenu(null)} title="Mark as watched">
       <Row icon="check" label={done(inSeason) ? `Season ${season} as unwatched` : `Season ${season}`} detail={plural(inSeason.length, 'episode')} onPress={() => close(() => onMark(inSeason, !done(inSeason)))} />
       <Row icon="check" label={done(items) ? 'Whole show as unwatched' : 'Whole show'} detail={plural(items.length, 'episode')} last onPress={() => close(() => onMark(items, !done(items)))} />
@@ -96,6 +124,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
   </View>;
 }
 const s = StyleSheet.create({
+  listInput: { minHeight: 44, color: colors.text, borderColor: colors.hairlineStrong, borderWidth: 1, borderRadius: radius.poster, paddingHorizontal: 12, marginVertical: 12 },
   fill: { flex: 1, backgroundColor: colors.ground }, circleAction: { borderRadius: radius.pill, borderWidth: 1, borderColor: colors.hairlineStrong }, action: { height: 44, paddingHorizontal: 16 },
   back: { position: 'absolute', left: 14, borderRadius: radius.pill, backgroundColor: colors.glass, borderWidth: 1, borderColor: colors.hairlineStrong, zIndex: 20 },
   ratings: { marginTop: 26, paddingLeft: 12, borderLeftWidth: 1, borderColor: colors.hairlineStrong }, score: { color: colors.text, fontSize: 22, fontFamily: fonts.medium },
