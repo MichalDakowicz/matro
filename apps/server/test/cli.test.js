@@ -120,3 +120,29 @@ test('back up live state and restore it offline while keeping the replaced state
   assert.equal(migrated.status, 0, migrated.stderr);
   assert.ok(fs.existsSync(path.join(fresh, 'matro.db')));
 });
+
+test('a backup records its versions and a newer one is refused before anything changes', () => {
+  const dir = path.join(root, 'version-data'), dest = path.join(root, 'version-backup'), target = path.join(root, 'version-target');
+  const made = cli(['setup', '--username', 'owner', '--library', path.join(root, 'films')], 'correct horse battery', dir); assert.equal(made.status, 0, made.stderr);
+  const saved = cli(['backup', dest], undefined, dir);
+  assert.equal(saved.status, 0, saved.stderr);
+  const manifest = JSON.parse(fs.readFileSync(path.join(dest, 'backup.json'), 'utf8'));
+  assert.equal(manifest.version, require('../../../package.json').version);
+  assert.equal(manifest.schema, 0);
+  assert.equal(cli(['restore', dest], undefined, target).status, 0);
+
+  fs.writeFileSync(path.join(dest, 'backup.json'), JSON.stringify({ ...manifest, version: '99.0.0' }));
+  const tooNew = cli(['restore', dest], undefined, path.join(root, 'newer-app'));
+  assert.equal(tooNew.status, 1);
+  assert.match(tooNew.stderr, /newer Matro/);
+  assert.equal(fs.existsSync(path.join(root, 'newer-app', 'matro.db')), false);
+
+  fs.writeFileSync(path.join(dest, 'backup.json'), JSON.stringify(manifest));
+  const db = new DatabaseSync(path.join(dest, 'matro.db'));
+  db.exec('PRAGMA user_version = 7');
+  db.close();
+  const newSchema = cli(['restore', dest], undefined, path.join(root, 'newer-schema'));
+  assert.equal(newSchema.status, 1);
+  assert.match(newSchema.stderr, /newer Matro/);
+  assert.equal(fs.existsSync(path.join(root, 'newer-schema', 'matro.db')), false);
+});

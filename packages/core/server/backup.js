@@ -1,10 +1,18 @@
-﻿const fs = require('node:fs');
+const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { lockData } = require('./db');
 
 // Uploaded subtitle text and manual markers are stored in matro.db.
-const SIDE_FILES = ['segments.json', 'downloads.json', 'downloads.key', 'download-jobs.json', '.env', path.join('tmdb', 'metadata.json')];
+const SIDE_FILES = ['segments.json', 'downloads.json', 'downloads.key', 'download-jobs.json', '.env', 'opensubtitles.key', path.join('tmdb', 'metadata.json')];
+// Every backup records the app version and the database's PRAGMA user_version. Restoring refuses anything newer than this server,
+// whose schema is still created in place (user_version 0): raise SCHEMA when a migration starts setting user_version.
+const MANIFEST = 'backup.json', SCHEMA = 0, VERSION = require('../../../package.json').version;
+const newer = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+function userVersion(file) {
+  const db = new DatabaseSync(file, { readOnly: true });
+  try { return db.prepare('PRAGMA user_version').get().user_version; } finally { db.close(); }
+}
 const stamp = () => new Date().toISOString().replace(/[-:.]/g, '').replace('T', '-');
 const dbFile = dir => path.join(dir, 'matro.db');
 
@@ -38,6 +46,7 @@ function backup(dataDir, dest) {
   try {
     // Write the database last so an interrupted copy cannot look like a complete backup.
     const files = copySideFiles(dataDir, dest);
+    fs.writeFileSync(path.join(dest, MANIFEST), JSON.stringify({ version: VERSION, schema: userVersion(dbFile(dataDir)), created: new Date().toISOString() }, null, 2) + '\n', { mode: 0o600 });
     snapshot(dbFile(dataDir), path.join(dest, 'matro.db.tmp'));
     fs.renameSync(path.join(dest, 'matro.db.tmp'), dbFile(dest));
     return ['matro.db', ...files];
@@ -104,6 +113,12 @@ function replaceFiles(dataDir, staged) {
 
 function restore(dataDir, from) {
   if (!fs.existsSync(dbFile(from))) throw new Error(`${from} is not a Matro backup (it has no matro.db).`);
+  let manifest = {};
+  try { manifest = JSON.parse(fs.readFileSync(path.join(from, MANIFEST), 'utf8')); } catch { /* Backups made before manifests existed restore as before. */ }
+  const schema = Math.max(Number(manifest.schema) || 0, (() => { try { return userVersion(dbFile(from)); } catch { return 0; } })());
+  if ((manifest.version && newer(manifest.version, VERSION)) || schema > SCHEMA) {
+    throw new Error(`This backup was made by a newer Matro (${manifest.version || 'unknown version'}, database version ${schema}); this server is ${VERSION}, database version ${SCHEMA}. Update Matro, then restore.`);
+  }
   if (fs.existsSync(dataDir) && path.relative(fs.realpathSync(from), fs.realpathSync(dataDir)) === '') {
     throw new Error('The backup folder must differ from the active data folder.');
   }
@@ -139,4 +154,4 @@ function restore(dataDir, from) {
   }
 }
 
-module.exports = { backup, restore, stamp };
+module.exports = { backup, restore, stamp, MANIFEST };
