@@ -17,8 +17,11 @@ export function candidates(input: string): string[] {
 
 export class ServerError extends Error {
   status?: number;
-  constructor(message: string, status?: number) { super(message); this.status = status; }
+  code?: string;
+  constructor(message: string, status?: number, code?: string) { super(message); this.status = status; this.code = code; }
 }
+/** A 401, or the server saying the signed-in account differs from the one this client opened. Other 409s are ordinary refusals. */
+export const accountChanged = (error: unknown) => error instanceof ServerError && (error.status === 401 || error.status === 409 && error.code === 'account-changed');
 
 let tokenStorage: { get: (base: string) => Promise<string | null>; set: (base: string, token: string | null) => Promise<void> } | null = null;
 export function configureTokenStorage(storage: NonNullable<typeof tokenStorage>) { tokenStorage = storage; }
@@ -44,7 +47,7 @@ export async function request(base: string, path: string, init: { method?: strin
       body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
     });
     const json = await res.json().catch(() => null);
-    if (!res.ok) throw new ServerError(json?.error ?? `Server answered ${res.status}.`, res.status);
+    if (!res.ok) throw new ServerError(json?.error ?? `Server answered ${res.status}.`, res.status, json?.code);
     if (json?.token) await tokenStorage?.set(base, json.token);
     return json;
   } finally {

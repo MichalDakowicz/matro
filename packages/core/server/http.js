@@ -4,7 +4,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { pipeline } = require('node:stream');
 
-class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
+class HttpError extends Error { constructor(status, message, code) { super(message); this.status = status; this.code = code; } }
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml',
   '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json',
   '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/mp4', '.webm': 'video/webm' };
@@ -125,7 +125,7 @@ function createServer({ router, publicDir, authenticate, config }) {
       const { route, params } = found;
       if (route.auth !== 'none' && !user) throw new HttpError(401, 'Sign in first.');
       const account = req.headers['x-matro-account'];
-      if (account !== undefined && (!user || account !== String(user.id))) throw new HttpError(409, 'The signed-in account changed. Open Matro again.');
+      if (account !== undefined && (!user || account !== String(user.id))) throw new HttpError(409, 'The signed-in account changed. Open Matro again.', 'account-changed');
       if (route.auth === 'admin' && user.role !== 'admin') throw new HttpError(403, 'Only the head account can do that.');
       if (route.auth === 'viewer' && user.role !== 'viewer') throw new HttpError(403, 'Only viewer accounts can request movies.');
       const forwarded = config.trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
@@ -140,7 +140,7 @@ function createServer({ router, publicDir, authenticate, config }) {
       const status = error instanceof HttpError || (Number.isInteger(error.status) && error.status >= 400 && error.status < 600) ? error.status : 500;
       if (status === 500) console.error(error);
       if (res.headersSent) { res.destroy(); return; }
-      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : error.message });
+      sendJson(res, status, { error: status === 500 ? 'Something went wrong on the server.' : error.message, ...(error instanceof HttpError && error.code ? { code: error.code } : {}) });
     }
   });
 }

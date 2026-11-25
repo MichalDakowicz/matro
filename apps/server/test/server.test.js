@@ -409,7 +409,9 @@ test('watch state uses account-bound operations and ignores invalid or stale che
   const movie = groups[0][0].id;
   const headers = { 'x-matro-account': String(user.id) };
   const put = body => call('state-viewer', 'PUT', '/api/state', body, headers);
-  assert.equal((await call('eve', 'PUT', '/api/state', { queue: [] }, headers)).status, 409);
+  const mismatch = await call('eve', 'PUT', '/api/state', { queue: [] }, headers);
+  assert.equal(mismatch.status, 409);
+  assert.equal(mismatch.data.code, 'account-changed');
   assert.equal((await call('eve', 'PATCH', `/api/items/${first.id}/progress`, { dismiss: true }, headers)).status, 409);
   assert.equal((await call('eve', 'GET', '/api/library', undefined, headers)).status, 409);
 

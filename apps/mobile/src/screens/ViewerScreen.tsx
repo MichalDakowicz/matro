@@ -56,7 +56,12 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     const check = async () => {
       const before = revision.current;
       if (closed || checking || AppState.currentState === 'background') return;
-      if (offline) { await load(); return; }
+      if (offline) { // Probe cheaply: a full load() flashes the spinner and clears errors on every failed try.
+        checking = true;
+        try { await request(base, '/api/status', {}, 4000); } catch { return; } finally { checking = false; }
+        if (!closed) await load();
+        return;
+      }
       const accountId = dataRef.current?.user.id;
       if (!before || accountId === undefined) return;
       checking = true;

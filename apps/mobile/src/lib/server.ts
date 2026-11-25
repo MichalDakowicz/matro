@@ -1,9 +1,7 @@
 export * from '../../../../packages/core/client/server';
-import { changeProgress, library as loadLibrary, ServerError, writeWatchState, type MatroUser, type Progress } from '../../../../packages/core/client/server';
+import { accountChanged, changeProgress, library as loadLibrary, ServerError, writeWatchState, type MatroUser, type Progress } from '../../../../packages/core/client/server';
 import type { Dismissal } from '../../../../packages/core/client/recovery';
 import { progressRecovery, recoveryScope, rememberLibrary, rememberProgress } from './storage';
-
-export const accountChanged = (error: unknown) => error instanceof ServerError && (error.status === 401 || error.status === 409);
 
 const updates = new Map<string, Promise<unknown>>();
 export function updateWatchOptions(base: string, user: MatroUser, patch: Pick<Parameters<typeof writeWatchState>[2], 'queueChange' | 'preferences'>) {
