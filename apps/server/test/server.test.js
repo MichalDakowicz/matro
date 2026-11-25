@@ -354,6 +354,31 @@ test('online subtitle search is off until the head account adds a key, and the k
   assert.equal((await call('sam', 'DELETE', `/api/subtitles/${saved.data.subtitle.id}`)).status, 200);
 });
 
+test('online subtitle search limits each account so one viewer cannot spend the shared OpenSubtitles quota', async () => {
+  const movie = (await catalog('sam')).groups[0][0], url = `/api/items/${movie.id}/subtitle-search`;
+  assert.equal((await call('admin', 'PUT', '/api/admin/subtitle-search', { key: 'secret-key-123' })).status, 200);
+  try {
+    const calls = openSubtitlesCalls.length;
+    for (let n = 0; n < 10; n++) assert.equal((await call('eve', 'GET', `${url}?language=pl`)).status, 200);
+    assert.equal(openSubtitlesCalls[calls].headers['User-Agent'], `Matro v${require('../../../package.json').version}`);
+    const blocked = await call('eve', 'GET', `${url}?language=pl`);
+    assert.equal(blocked.status, 429);
+    assert.match(JSON.stringify(blocked.data), /Too many subtitle searches/);
+    assert.equal(openSubtitlesCalls.length, calls + 10, 'a refused search never reaches OpenSubtitles');
+    const found = await call('admin', 'GET', `${url}?language=pl`);
+    assert.equal(found.status, 200, 'another account keeps its own allowance');
+
+    const token = found.data.results[0].token;
+    for (let n = 0; n < 20; n++) assert.equal((await call('admin', 'POST', url, { token })).status, 200);
+    const spent = openSubtitlesCalls.length, capped = await call('admin', 'POST', url, { token });
+    assert.equal(capped.status, 429);
+    assert.match(JSON.stringify(capped.data), /downloads today/);
+    assert.equal(openSubtitlesCalls.length, spent);
+  } finally {
+    assert.deepEqual((await call('admin', 'PUT', '/api/admin/subtitle-search', { key: '' })).data, { enabled: false });
+  }
+});
+
 test('watch state is saved per person and merged into the catalog they load', async () => {
   const { groups } = await catalog('sam');
   const episode = groups[1][0];

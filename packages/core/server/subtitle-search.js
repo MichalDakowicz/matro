@@ -8,6 +8,9 @@ const { MAX_UPLOAD } = require('./subtitles');
 const API = 'https://api.opensubtitles.com/api/v1/';
 const DOWNLOAD_HOSTS = new Set(['api.opensubtitles.com', 'www.opensubtitles.com', 'dl.opensubtitles.com']);
 const TTL = 10 * 60 * 1000;
+const USER_AGENT = `Matro v${require('../../../package.json').version}`;
+// Every account shares the head account's OpenSubtitles quota, so each one is held to its own share.
+const LIMITS = { searches: 10, searchWindow: 60 * 1000, downloads: 20, downloadWindow: 24 * 60 * 60 * 1000 };
 
 async function bytes(response, limit) {
   const reader = response.body?.getReader();
@@ -25,9 +28,20 @@ async function bytes(response, limit) {
   } finally { await reader.cancel().catch(() => {}); }
 }
 
-function createSubtitleSearch({ dir, secure, fetch = globalThis.fetch }) {
+function createSubtitleSearch({ dir, secure, fetch = globalThis.fetch, limits = {}, now = Date.now }) {
   const file = path.join(dir, 'opensubtitles.key');
   const matches = new Map();
+  const max = { ...LIMITS, ...limits }, hits = new Map();
+  // Spend one use of a per-user allowance, or refuse with 429 and when it frees up.
+  function spend(user, kind, count, windowMs, what) {
+    const id = `${kind}:${user}`, since = now() - windowMs, recent = (hits.get(id) || []).filter(at => at > since);
+    if (recent.length >= count) {
+      hits.set(id, recent);
+      const wait = Math.ceil((recent[0] + windowMs - now()) / 1000);
+      throw new HttpError(429, `Too many ${what}. Try again in ${wait >= 3600 ? Math.ceil(wait / 3600) + ' hours' : wait >= 60 ? Math.ceil(wait / 60) + ' minutes' : wait + ' seconds'}.`);
+    }
+    hits.set(id, [...recent, now()]);
+  }
   async function key() {
     try {
       const raw = await fs.readFile(file);
@@ -62,7 +76,7 @@ function createSubtitleSearch({ dir, secure, fetch = globalThis.fetch }) {
   }
   async function api(endpoint, secret, data) {
     const response = await request(new URL(endpoint, API), {
-      headers: { 'Api-Key': secret, 'User-Agent': 'Matro v0.7.12', Accept: 'application/json', ...(data ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { 'Api-Key': secret, 'User-Agent': USER_AGENT, Accept: 'application/json', ...(data ? { 'Content-Type': 'application/json' } : {}) },
       ...(data ? { method: 'POST', body: JSON.stringify(data) } : {})
     });
     if (!response.ok) {
@@ -77,6 +91,7 @@ function createSubtitleSearch({ dir, secure, fetch = globalThis.fetch }) {
     const secret = await apiKey();
     const lang = normalize(language);
     if (lang === 'und') throw new HttpError(400, 'Choose a subtitle language.');
+    spend(scope, 'search', max.searches, max.searchWindow, 'subtitle searches');
     const show = item.kind === 'show';
     const title = String(show ? item.group_title || item.group : item.title).slice(0, 200);
     const query = new URLSearchParams({ query: title, languages: lang, type: show ? 'episode' : 'movie' });
@@ -104,6 +119,7 @@ function createSubtitleSearch({ dir, secure, fetch = globalThis.fetch }) {
   async function download(item, token, scope) {
     const secret = await apiKey(), result = matches.get(token);
     if (!result || result.expires <= Date.now() || result.itemId !== item.id || result.scope !== scope) throw new HttpError(404, 'Search again to refresh subtitle results.');
+    spend(scope, 'download', max.downloads, max.downloadWindow, 'subtitle downloads today');
     const payload = await api('download', secret, { file_id: result.fileId, sub_format: 'srt' });
     let link;
     try { link = new URL(payload.link); } catch { throw new HttpError(502, 'OpenSubtitles returned an invalid download link.'); }
