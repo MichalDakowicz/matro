@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
-import { FlatList, Text, View, useWindowDimensions } from 'react-native';
+import { Alert, FlatList, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { activeDownloads, isSaved, pauseOffline, removeOffline, savedBytes, savedTitles, watchOffline, type OfflineRecord } from '../lib/offline';
+import { activeDownloads, cancelBatch, isSaved, pauseBatch, pauseOffline, removeOffline, resumeBatch, savedBytes, savedTitles, watchOffline, type OfflineRecord } from '../lib/offline';
 import type { Item, Library } from '../lib/server';
-import { groupLibrary } from '../../../../packages/core/client/library';
+import { groupLibrary, nameFor, titleKey } from '../../../../packages/core/client/library';
+import { batchesOf, type SmartSettings } from '../lib/smart-plan';
+import { SmartSaves } from '../components/SmartSaves';
 import { Pill, ProgressBar, styles as t } from '../components/Matro';
 import { PosterCard, type ArtProps } from '../components/LibraryParts';
 
 const size = (bytes: number) => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 const shelvesOf = [{ kind: 'show', title: 'Shows' }, { kind: 'movie', title: 'Movies' }];
-export default function OfflineScreen({ data, offline, onResume, onOpenTitle, onRemoved, ...art }: ArtProps & {
-  data: Library & { catalogIds?: string[] }; offline: boolean; onResume: (id: string) => void; onOpenTitle: (items: Item[]) => void; onRemoved: () => void;
+export default function OfflineScreen({ data, offline, smart, onResume, onOpenTitle, onRemoved, ...art }: ArtProps & {
+  data: Library & { catalogIds?: string[] }; offline: boolean; smart: { settings: SmartSettings; capped: number; onCap: (bytes: number | null) => void; onStop: (key: string) => void }; onResume: (id: string) => void; onOpenTitle: (items: Item[]) => void; onRemoved: () => void;
 }) {
   const base = art.base, user = data.user;
   const insets = useSafeAreaInsets(), { width } = useWindowDimensions(), columns = Math.max(3, Math.floor((width - 24) / 108)), cardWidth = (width - 36 - (columns - 1) * 12) / columns;
@@ -44,10 +46,15 @@ export default function OfflineScreen({ data, offline, onResume, onOpenTitle, on
   const unavailableIds = new Set(unavailable.map(record => record.id));
   const rows = [...new Set([...active.keys(), ...records.filter(record => !record.complete).map(record => record.id)])]
     .filter(id => !unavailableIds.has(id));
+  const names = useMemo(() => Object.fromEntries(groupLibrary(data.items).filter(group => group[0].kind === 'show').map(group => [titleKey(group[0]), nameFor(data, group[0])])), [data.items, data.metadata]);
+  const fail = (e: unknown) => setError(e instanceof Error ? e.message : 'Could not change this batch.');
+  const cancel = (id: string) => Alert.alert('Cancel this batch?', 'Downloads that have not finished are removed from this device. Titles already saved stay.', [
+    { text: 'Keep going', style: 'cancel' }, { text: 'Cancel all', style: 'destructive', onPress: () => void cancelBatch(base, user, id).then(onRemoved).catch(fail) },
+  ]);
   const remove = (id: string) => void removeOffline(base, user, id).then(onRemoved).catch(e => setError(e.message));
   const shelves = shelvesOf.map(shelf => ({ ...shelf, groups: saved.filter(items => items[0].kind === shelf.kind) })).filter(shelf => shelf.groups.length);
   return <FlatList data={rows} keyExtractor={id => id} contentContainerStyle={{ paddingTop: insets.top + 74, paddingBottom: insets.bottom + 100, paddingHorizontal: 18, gap: 14 }}
-    ListHeaderComponent={<View style={{ gap: 8 }}><Text style={t.heading}>Saved for offline</Text><Text style={t.dim}>{done.size} saved · {size(bytes)} on this device</Text>{error ? <Text style={t.text}>{error}</Text> : null}</View>}
+    ListHeaderComponent={<View style={{ gap: 8 }}><Text style={t.heading}>Saved for offline</Text><Text style={t.dim}>{done.size} saved · {size(bytes)} on this device</Text>{error ? <Text style={t.text}>{error}</Text> : null}{smart.capped > 0 && !offline ? <Text style={t.dim}>Storage cap reached: {smart.capped} {smart.capped === 1 ? 'episode was' : 'episodes were'} not saved. Free space or raise the cap.</Text> : null}<SmartSaves settings={smart.settings} names={names} batches={batchesOf(records)} offline={offline} onCap={smart.onCap} onStop={smart.onStop} onPause={id => void pauseBatch(base, user, id).catch(fail)} onResume={id => void resumeBatch(base, user, id).catch(fail)} onCancel={cancel} /></View>}
     ListFooterComponent={<View style={{ gap: 26, marginTop: 14 }}>
       {shelves.map(shelf => <View key={shelf.kind}>
         <View style={t.sectionHeading}><Text style={t.sectionTitle}>{shelf.title}</Text><Text style={t.dim}>{shelf.groups.length}</Text></View>

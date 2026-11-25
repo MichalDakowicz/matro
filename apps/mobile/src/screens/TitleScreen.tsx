@@ -6,9 +6,11 @@ import type { Item, Library } from '../lib/server';
 import { episodeName, formatTime, metadataFor, nameFor, resumeItem } from '../../../../packages/core/client/library';
 import { Icon, IconButton, MediaArt, Pill, ProgressBar, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
+import { SmartKeep } from '../components/SmartSaves';
+import type { SmartRule } from '../lib/smart-plan';
 import { colors, fonts } from '../theme';
 
-export default function TitleScreen({ data, items, onBack, onPlay, onComplete, onEnqueue, onSave, onSaveMany, onRemoveSaved, savedIds, ...art }: ArtProps & { data: Library; items: Item[]; onBack: () => void; onPlay: (item: Item, start?: number) => void; onComplete: (item: Item) => void; onEnqueue: (items: Item[]) => void; onSave?: (item: Item) => void; onSaveMany?: (items: Item[]) => void; onRemoveSaved?: (items: Item[]) => void; savedIds?: Set<string> }) {
+export default function TitleScreen({ data, items, onBack, onPlay, onComplete, onEnqueue, onSave, onSaveMany, onRemoveSaved, savedIds, smart, ...art }: ArtProps & { data: Library; items: Item[]; onBack: () => void; onPlay: (item: Item, start?: number) => void; onComplete: (item: Item) => void; onEnqueue: (items: Item[]) => void; onSave?: (item: Item) => void; onSaveMany?: (items: Item[]) => void; onRemoveSaved?: (items: Item[]) => void; savedIds?: Set<string>; /** Keep the next unwatched episodes saved. Only offered while online. */ smart?: { rule?: SmartRule; onChange: (rule: SmartRule | null) => void } }) {
   const item = items[0], m = metadataFor(data, item), target = resumeItem(data, items), p = data.progress[target.id];
   const insets = useSafeAreaInsets(), seasons = [...new Set(items.map(i => i.season || 1))];
   const [season, setSeason] = useState(target.season || seasons[0]);
@@ -34,6 +36,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onComplete, o
     {m.rating ? <View style={s.ratings}><Text style={[t.mono, { marginBottom: 6 }]}>TMDB</Text><View style={[t.row, { alignItems: 'baseline', gap: 5 }]}><Text style={s.score}>{m.rating.toFixed(1)}</Text><Text style={t.dim}>/10{m.votes ? ` · ${m.votes.toLocaleString()} votes` : ''}</Text></View></View> : null}
     {item.kind === 'show' && <View style={{ marginTop: 28 }}><View style={t.sectionHeading}><Text style={t.sectionTitle}>Episodes</Text><Text style={t.dim}>{items.filter(i => data.progress[i.id]?.completed).length} / {items.length} watched</Text></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 14 }}>{seasons.map(value => <Pill key={value} compact label={`Season ${value}`} style={season === value ? { backgroundColor: '#ffffff18' } : undefined} onPress={() => setSeason(value)} />)}</ScrollView></View>}
     {onSaveMany && item.kind === 'show' && <View style={[t.row, { flexWrap: 'wrap', gap: 8, marginBottom: 14 }]}><Pill label={`Save season ${season} offline`} icon="download" compact onPress={() => onSaveMany(inSeason)} />{rest.length > 1 && <Pill label={`Save from S${target.season || 1} E${target.episode} to season end`} icon="download" compact onPress={() => onSaveMany(rest)} />}</View>}
+    {smart && item.kind === 'show' && <SmartKeep rule={smart.rule} onChange={smart.onChange} />}
   </View>;
   const footer = <View style={{ gap: 28, marginTop: 28 }}>
     {!!m.cast?.length && <View><Text style={[t.sectionTitle, { marginBottom: 18 }]}>Cast</Text><View style={s.castGrid}>{m.cast.map(person => <View key={person.name} style={s.castMember}><MediaArt {...art} path={person.photo} title={person.name} style={{ width: '100%', aspectRatio: 2 / 3, borderRadius: 6 }} /><Text numberOfLines={2} style={[t.text, { fontSize: 12.5, fontFamily: fonts.medium, marginTop: 8 }]}>{person.name}</Text><Text numberOfLines={2} style={[t.dim, { fontSize: 11, marginTop: 3 }]}>{person.role}</Text></View>)}</View></View>}

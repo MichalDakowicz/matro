@@ -15,6 +15,8 @@ import FoldersScreen from './FoldersScreen';
 import OfflineScreen from './OfflineScreen';
 import MovieRequestsScreen from './MovieRequestsScreen';
 import { useMovieRequestAlerts } from '../lib/movie-request-alerts';
+import { loadSmart, reconcileSmart, saveSmart } from '../lib/smart-offline';
+import { NO_SMART, type SmartRule, type SmartSettings } from '../lib/smart-plan';
 import { isSaved, offlineLibrary, rememberLibrary, removeOffline, resumeInterrupted, retryInterrupted, savedTitle, savedTitles, saveOffline, saveOfflineBatch, watchOffline, type SavedMedia } from '../lib/offline';
 
 type Props = { base: string; onSignedOut: () => void; onChangeServer: () => void };
@@ -112,6 +114,20 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     const stop = watchOffline(refresh);
     return () => { run++; stop(); };
   }, [base, data?.user.id]);
+  // "Keep the next episodes saved": settings per account, applied whenever the server's library arrives or something is watched.
+  const [smart, setSmart] = useState<SmartSettings>(NO_SMART), [capped, setCapped] = useState(0);
+  useEffect(() => { if (data) void loadSmart(base, data.user).then(setSmart); }, [base, data?.user.id]);
+  const watchedMarker = data ? `${data.items.length}:${Object.values(data.progress).filter(progress => progress.completed).length}` : '';
+  useEffect(() => {
+    if (!data || offline || !Object.keys(smart.rules).length) { setCapped(0); return; }
+    void reconcileSmart(base, data, smart).then(result => setCapped(result.capped)).catch(() => {});
+  }, [watchedMarker, offline, smart]);
+  const changeSmart = (next: SmartSettings) => { setSmart(next); if (data) void saveSmart(base, data.user, next).catch(() => {}); };
+  const keepRule = (items: Item[], rule: SmartRule | null) => {
+    const rules = { ...smart.rules }, key = titleKey(items[0]);
+    if (rule) rules[key] = rule; else delete rules[key];
+    changeSmart({ ...smart, rules });
+  };
   const found = allGroups.find(items => titleKey(items[0]) === selected);
   const detail = savedOnly ? found?.filter(item => savedIds.has(item.id)) : found;
   const art = { base, headers };
@@ -199,7 +215,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       if (next && data.preferences.autoplay !== false) void startPlayback(next, playing.queue);
       else { setPlaying(null); void load(); }
     }} />;
-  if (detail && data) return <TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onComplete={complete} onEnqueue={enqueue} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} />;
+  if (detail && data) return <TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onComplete={complete} onEnqueue={enqueue} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} smart={offline || savedOnly ? undefined : { rule: smart.rules[titleKey(detail[0])], onChange: rule => keepRule(detail, rule) }} />;
   const contentStyle = { paddingTop: insets.top + 76, paddingBottom: insets.bottom + 104, paddingHorizontal: 18 };
   const search = tab === 'search';
   const matches = (items: Item[]) => !search || `${nameFor(data!, items[0])} ${metadataFor(data!, items[0]).people?.join(' ')} ${items.map(i => i.title + ' ' + i.path).join(' ')}`.toLowerCase().includes(query.toLowerCase().trim());
@@ -216,7 +232,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const browse = data && kinds.some(kind => kind.kind === tab), allBrowse = browse ? groups.filter(items => items[0].kind === tab) : [];
   const browseItems = browse ? allBrowse.filter(items => filter === 'all' || statusOf(data!, items) === filter) : [];
   return <View style={s.fill}>
-    {tab === 'offline' && data ? <OfflineScreen {...art} data={data} offline={offline}
+    {tab === 'offline' && data ? <OfflineScreen {...art} data={data} offline={offline} smart={{ settings: smart, capped, onCap: capBytes => changeSmart({ ...smart, capBytes }), onStop: key => { const rules = { ...smart.rules }; delete rules[key]; changeSmart({ ...smart, rules }); } }}
       onOpenTitle={items => { setSavedOnly(true); setSelected(titleKey(items[0])); }}
       onResume={id => { const item = data.items.find(item => item.id === id); if (item) save(item); }}
       onRemoved={() => { if (offline) void load(); }} /> :
