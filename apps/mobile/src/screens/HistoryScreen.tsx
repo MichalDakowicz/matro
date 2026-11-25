@@ -19,7 +19,7 @@ export default function HistoryScreen({ data, layout, onOpen, ...art }: Props) {
   let last = '';
   return <ScrollView contentContainerStyle={{ paddingTop: layout.top + 76, paddingBottom: layout.bottom + 120, paddingHorizontal: 18 }} showsVerticalScrollIndicator={false}>
     <Text accessibilityRole="header" style={t.heading}>Watch history</Text>
-    <Text style={[t.muted, { marginTop: 2 }]}>{rows.length ? plural(rows.length, 'title') : 'Nothing watched in this period'}</Text>
+    {rows.length > 0 && <Text style={[t.muted, { marginTop: 2 }]}>{plural(rows.length, 'item')} played</Text>}
     <View style={[t.row, { gap: 8, marginTop: 16 }]}>{PERIODS.map(([value, label]) => <Chip key={value} small label={label} selected={days === value} onPress={() => setDays(value)} />)}</View>
     {rows.map(({ item, entry, at }) => {
       const label = dayLabel(at), heading = label !== last ? <SectionLabel>{label}</SectionLabel> : null; last = label;
@@ -37,7 +37,7 @@ export default function HistoryScreen({ data, layout, onOpen, ...art }: Props) {
         </Pressable>
       </View>;
     })}
-    {!rows.length && <View style={s.empty}><Text style={[t.muted, { textAlign: 'center' }]}>Titles show up here once you play them. Try a longer period.</Text></View>}
+    {!rows.length && <View style={s.empty}><Text style={[t.muted, { textAlign: 'center' }]}>{days ? 'Nothing played in this period.' : 'Your watch history is empty.'}</Text></View>}
   </ScrollView>;
 }
 const s = StyleSheet.create({

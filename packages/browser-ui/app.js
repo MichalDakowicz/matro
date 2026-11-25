@@ -687,7 +687,7 @@ function renderHistory() {
   }).join('');
   box.innerHTML = `<div class="section-heading"><h2 id="history-title">Watch history</h2><button class="icon-button" data-action="close-history" aria-label="Close">×</button></div>
     <div class="chip-row" role="group" aria-label="Period">${[[7, 'Last 7 days'], [30, 'Last 30 days'], [0, 'All time']].map(([days, text]) => `<button class="chip" data-history-days="${days}" aria-pressed="${historyDays === days}">${text}</button>`).join('')}</div>
-    <div class="match-results" aria-live="polite">${list || '<p class="match-note">Nothing watched in this period.</p>'}</div>`;
+    <div class="match-results" aria-live="polite"><p class="match-note">${rows.length ? `${rows.length} ${rows.length === 1 ? 'item' : 'items'} played` : historyDays ? 'Nothing played in this period.' : 'Your watch history is empty.'}</p>${list}</div>`;
 }
 document.addEventListener('matro:history', openHistory);
 // Manual TMDB matching: search, then pin a result (or none) to the title.

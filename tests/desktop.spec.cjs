@@ -800,9 +800,11 @@ test('watch history lists what was played with dates and opens the title', async
     const dialog = page.getByRole('dialog', { name: 'Watch history' });
     await expect(dialog.getByRole('heading', { name: 'Today' })).toBeVisible();
     await expect(dialog.locator('[data-history-item]')).toHaveCount(1);
+    await expect(dialog.getByText('1 item played', { exact: true })).toBeVisible();
     await expect(dialog).toContainText('Stopped at 0:05 of 0:12');
     await dialog.getByRole('button', { name: 'Last 30 days' }).click();
     await expect(dialog.locator('[data-history-item]')).toHaveCount(2);
+    await expect(dialog.getByText('2 items played', { exact: true })).toBeVisible();
     await expect(dialog).toContainText('Finished');
     // A title that was only marked watched has no played position, so it is not history.
     await expect(dialog.locator(`[data-history-item="${three.id}"]`)).toHaveCount(0);
