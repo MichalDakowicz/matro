@@ -1,5 +1,6 @@
 import { memo, useMemo, useRef, useState } from 'react';
-import { Animated, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Animated, FlatList, Modal, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { FocusPressable as Pressable, isAndroidTv } from './TvFocus';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { Item, Library } from '../lib/server';
@@ -10,7 +11,7 @@ export type ArtProps = { base: string; headers: Record<string, string> };
 
 export const PosterCard = memo(function PosterCard({ data, items, width, onPress, ...art }: ArtProps & { data: Library; items: Item[]; width: number; onPress: () => void }) {
   const item = items[0], m = metadataFor(data, item), status = statusOf(data, items), target = resumeItem(data, items), progress = data.progress[target.id];
-  return <Pressable accessibilityRole="button" accessibilityLabel={`Open ${nameFor(data, item)}`} onPress={onPress} style={({ pressed }) => [{ width, marginBottom: 22 }, pressed && { opacity: .7 }]}>
+  return <Pressable accessibilityRole="button" accessibilityLabel={`Open ${nameFor(data, item)}`} onPress={onPress} style={({ pressed }) => [{ width, marginBottom: 22 }, isAndroidTv && { borderRadius: 8 }, pressed && { opacity: .7 }]}>
     <MediaArt {...art} path={m.poster} title={nameFor(data, item)} style={{ width, height: width * 1.5, borderRadius: 8 }}>
       {status === 'done' && <View style={s.watched}><Icon name="check" size={13} /></View>}
       {status === 'progress' && progress?.duration > 0 && <View style={s.posterProgress}><ProgressBar value={progress.position / progress.duration} /></View>}
@@ -19,6 +20,16 @@ export const PosterCard = memo(function PosterCard({ data, items, width, onPress
     <Text numberOfLines={1} style={s.cardMeta}>{item.kind === 'show' ? `${new Set(items.map(i => i.season)).size} seasons · ${items.length} episodes` : `${m.year ? m.year + ' · ' : ''}${item.format} · ${item.kind === 'audio' ? 'Audio' : 'Movie'}`}</Text>
   </Pressable>;
 });
+
+export function FeaturedShelf({ data, groups, onDetail, ...art }: ArtProps & { data: Library; groups: Item[][]; onDetail: (item: Item) => void }) {
+  if (!groups.length) return null;
+  return <View style={t.section}>
+    <Text style={[t.sectionTitle, { marginBottom: 16 }]}>Featured from your library</Text>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.shelf} contentContainerStyle={s.shelfContent}>
+      {groups.map(items => <PosterCard key={items[0].id} {...art} data={data} items={items} width={156} onPress={() => onDetail(items[0])} />)}
+    </ScrollView>
+  </View>;
+}
 
 export function FeaturedReel({ data, groups, onPlay, onDetail, ...art }: ArtProps & { data: Library; groups: Item[][]; onPlay: (item: Item) => void; onDetail: (item: Item) => void }) {
   const { width } = useWindowDimensions(), reelScale = Math.max(.62, Math.min(1.1, (width - 1) / 1040)) * 1.08, posterWidth = 340 * reelScale, stride = posterWidth * .74065, start = groups.length > 1 ? groups.length : 0;
@@ -57,11 +68,11 @@ export function FeaturedReel({ data, groups, onPlay, onDetail, ...art }: ArtProp
 export function ContinueRow({ data, items, onPlay, onRemove, ...art }: ArtProps & { data: Library; items: Item[]; onPlay: (item: Item) => void; onRemove: (item: Item) => void }) {
   if (!items.length) return null;
   return <View style={t.section}><View style={t.sectionHeading}><View style={t.row}><Text style={t.sectionTitle}>Continue watching</Text><Icon name="chevron" size={16} /></View><Text style={t.dim}>{items.length} in progress</Text></View>
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -18 }} contentContainerStyle={{ paddingHorizontal: 18, gap: 12 }}>
-      {items.map(item => { const m = metadataFor(data, item), progress = data.progress[item.id]; return <View key={item.id} style={{ width: 240 }}><Pressable accessibilityLabel={`Resume ${nameFor(data, item)}`} onPress={() => onPlay(item)}><MediaArt {...art} path={m.backdrop || m.poster} title={nameFor(data, item)} style={{ width: 240, height: 138, borderRadius: 12 }}>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.shelf} contentContainerStyle={[s.shelfContent, isAndroidTv && { gap: 18 }]}>
+      {items.map((item, index) => { const m = metadataFor(data, item), progress = data.progress[item.id]; return <View key={item.id} style={isAndroidTv ? s.tvContinue : { width: 240 }}><Pressable hasTVPreferredFocus={isAndroidTv && index === 0} style={isAndroidTv ? { borderRadius: 12 } : undefined} accessibilityLabel={`Resume ${nameFor(data, item)}`} onPress={() => onPlay(item)}><MediaArt {...art} path={m.backdrop || m.poster} title={nameFor(data, item)} style={{ width: 240, height: 138, borderRadius: 12 }}>
         <LinearGradient colors={['transparent', '#000000e8']} style={StyleSheet.absoluteFill} />
         <View style={s.cwPlay}><Icon name="play" size={19} /></View><View style={s.cwText}><Text numberOfLines={1} style={[t.text, { fontSize: 13, fontFamily: fonts.medium }]}>{nameFor(data, item)}{item.kind === 'show' ? ` · S${item.season} E${item.episode}` : ''}</Text><Text style={[t.dim, { fontSize: 11 }]}>{progress?.duration ? `${formatTime(progress.duration - progress.position)} left` : 'Up next'}</Text><ProgressBar value={progress?.duration ? progress.position / progress.duration : 0} /></View>
-      </MediaArt></Pressable><Pressable accessibilityLabel={`Remove ${nameFor(data, item)} from Continue watching`} onPress={() => onRemove(item)} style={s.remove}><Icon name="close" size={14} /></Pressable></View>; })}
+      </MediaArt></Pressable><Pressable accessibilityLabel={`Remove ${nameFor(data, item)} from Continue watching`} onPress={() => onRemove(item)} style={isAndroidTv ? s.tvRemove : s.remove}><Icon name="close" size={14} /></Pressable></View>; })}
     </ScrollView>
   </View>;
 }
@@ -79,10 +90,10 @@ export function Dock({ tab, onChange, audio, requests }: { tab: string; onChange
 export function AccountSheet({ visible, onClose, data, base, offline, onGo, onRefresh, onServer, onSignOut }: { visible: boolean; onClose: () => void; data: Library | null; base: string; offline: boolean; onGo: (tab: string) => void; onRefresh: () => void; onServer: () => void; onSignOut: () => void }) {
   const insets = useSafeAreaInsets();
   const go = (tab: string) => { onClose(); onGo(tab); };
-  return <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-    <Pressable style={s.scrim} onPress={onClose} accessibilityLabel="Close profile" />
+  return <Modal transparent visible={visible} animationType={isAndroidTv ? 'none' : 'fade'} onRequestClose={onClose}>
+    <Pressable focusable={isAndroidTv ? false : undefined} style={s.scrim} onPress={onClose} accessibilityLabel="Close profile" />
     <View style={[s.sheet, { paddingBottom: insets.bottom + 24 }]}>
-      <View style={t.sectionHeading}><Text style={[t.heading, { fontSize: 28 }]}>Your profile</Text><IconButton name="close" label="Close profile" onPress={onClose} /></View>
+      <View style={t.sectionHeading}><Text style={[t.heading, { fontSize: 28 }]}>Your profile</Text><IconButton name="close" label="Close profile" preferredFocus={isAndroidTv} onPress={onClose} /></View>
       <Text style={[t.text, { fontSize: 20 }]}>{data?.user.username}</Text>
       <Text style={t.muted}>{offline ? 'Offline' : data?.user.role === 'admin' ? 'Head account' : 'Viewer'} · {base.replace(/^https?:\/\//, '')}</Text>
       <View style={[t.row, { marginVertical: 24, gap: 36 }]}>
@@ -108,6 +119,9 @@ const s = StyleSheet.create({
   dots: { position: 'absolute', top: 408, alignSelf: 'center', flexDirection: 'row', gap: 7, alignItems: 'center' }, dot: { width: 5, height: 5, borderRadius: 9, backgroundColor: '#ffffff33' }, kicker: { color: colors.dim, fontSize: 13, fontFamily: fonts.medium, marginBottom: 12 },
   metaList: { borderTopColor: '#ffffff33', borderTopWidth: 1, paddingTop: 5 }, metaRow: { paddingVertical: 7, flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 16 },
   cwPlay: { position: 'absolute', top: 48, left: 108 }, cwText: { position: 'absolute', left: 12, right: 12, bottom: 12, gap: 5 }, remove: { position: 'absolute', top: 7, right: 7, backgroundColor: '#0a0a0b99', borderRadius: 99, width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
+  shelf: { marginHorizontal: -18 }, shelfContent: { paddingHorizontal: 18, gap: 12 },
+  tvContinue: { alignItems: 'center', gap: 7, paddingVertical: 5 },
+  tvRemove: { borderRadius: 99, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.panel },
   corner: { position: 'absolute', left: 14, right: 14, height: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', zIndex: 20 }, help: { width: 40, height: 40, borderRadius: 99, borderWidth: 1, borderColor: colors.hairline, backgroundColor: '#1a1a1c99', alignItems: 'center', justifyContent: 'center' },
   avatar: { width: 36, height: 36, borderRadius: 99, borderWidth: 1, borderColor: '#ffffff26', backgroundColor: '#1a1a1c99', justifyContent: 'center', alignItems: 'center' },
   dockWrap: { position: 'absolute', left: 14, right: 14, alignItems: 'center', zIndex: 30 }, dock: { width: '100%', maxWidth: 420, height: 56, padding: 4, borderRadius: 99, borderWidth: 1, borderColor: colors.hairline, backgroundColor: '#171719f5', flexDirection: 'row', gap: 2, elevation: 12, boxShadow: '0 10px 30px #0006' }, dockItem: { flex: 1, height: 46, borderRadius: 99, justifyContent: 'center', alignItems: 'center' },

@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FlatList, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FocusPressable as Pressable, isAndroidTv } from '../components/TvFocus';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { Item, Library } from '../lib/server';
@@ -41,16 +42,16 @@ export default function TitleScreen({ data, items, onBack, onPlay, onComplete, o
   </View>;
   return <View style={s.fill}>
     <MediaArt {...art} path={m.backdrop || m.poster} title={nameFor(data, item)} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 420 + insets.top }}><LinearGradient colors={['#0a0a0b4d', 'transparent', '#0a0a0b8c', colors.ground]} locations={[0, .24, .64, .96]} style={StyleSheet.absoluteFill} /></MediaArt>
-    <FlatList data={item.kind === 'show' ? items.filter(i => (i.season || 1) === season) : []} keyExtractor={i => i.id} contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: insets.bottom + 40 }} ListHeaderComponent={header} ListFooterComponent={footer} showsVerticalScrollIndicator={false}
+    <FlatList removeClippedSubviews={isAndroidTv ? false : undefined} data={item.kind === 'show' ? items.filter(i => (i.season || 1) === season) : []} keyExtractor={i => i.id} contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: insets.bottom + 40 }} ListHeaderComponent={header} ListFooterComponent={footer} showsVerticalScrollIndicator={false}
       renderItem={({ item: episode }) => {
         const e = metadataFor(data, episode).episodes?.[String(episode.season)]?.[String(episode.episode)], progress = data.progress[episode.id], done = progress?.completed;
-        return <View style={s.episodeEntry}><Pressable onPress={() => onPlay(episode)} accessibilityLabel={`Play ${episodeName(data, episode)}`} style={s.episodeRow}>
+        return <View style={s.episodeEntry}><View style={isAndroidTv ? t.row : undefined}><Pressable onPress={() => onPlay(episode)} accessibilityLabel={`Play ${episodeName(data, episode)}`} style={[s.episodeRow, isAndroidTv && { flex: 1, borderRadius: 7 }]}>
           <MediaArt {...art} path={e?.still} style={s.episodeStill}><LinearGradient colors={['transparent', '#000a']} style={StyleSheet.absoluteFill} /><Text style={s.episodeCode}>S{episode.season} E{episode.episode}</Text>{progress?.duration > 0 && !done && <View style={s.episodeProgress}><ProgressBar value={progress.position / progress.duration} /></View>}</MediaArt>
           <View style={{ flex: 1, gap: 4 }}><Text style={[t.text, { fontFamily: fonts.medium, lineHeight: 20 }]} numberOfLines={2}>{episode.episode}. {episodeName(data, episode)}</Text><Text style={[t.dim, { fontSize: 11 }]}>{[e?.runtime ? e.runtime + 'm' : '', episode.format, done ? 'Watched' : progress?.position ? formatTime(progress.position) + ' watched' : ''].filter(Boolean).join(' · ')}</Text>{e?.overview && <Text numberOfLines={2} style={[t.dim, { fontSize: 11, lineHeight: 17 }]}>{e.overview}</Text>}</View>
-        </Pressable><Pressable onPress={() => onComplete(episode)} accessibilityLabel={`${done ? 'Mark incomplete' : 'Mark complete'} ${episodeName(data, episode)}`} style={[s.episodeCheck, done && { backgroundColor: colors.primary }]}><Icon name="check" size={13} color={done ? colors.onPrimary : colors.text} /></Pressable>
+        </Pressable><Pressable onPress={() => onComplete(episode)} accessibilityLabel={`${done ? 'Mark incomplete' : 'Mark complete'} ${episodeName(data, episode)}`} style={[s.episodeCheck, isAndroidTv && { position: 'relative', left: undefined, top: undefined }, done && { backgroundColor: colors.primary }]}><Icon name="check" size={13} color={done ? colors.onPrimary : colors.text} /></Pressable></View>
         {onSave && <View style={{ alignSelf: 'flex-end', marginTop: 6 }}><Pill label={savedIds?.has(episode.id) ? 'Saved offline' : 'Save episode offline'} icon="download" compact disabled={savedIds?.has(episode.id)} onPress={() => onSave(episode)} /></View>}</View>;
       }} />
-    <View style={{ position: 'absolute', top: insets.top + 12, left: 14, borderRadius: 999, backgroundColor: '#171719aa', borderWidth: 1, borderColor: colors.hairline }}><IconButton name="back" label="Close details" onPress={onBack} /></View>
+    <View style={{ position: 'absolute', top: insets.top + 12, left: 14, borderRadius: 999, backgroundColor: '#171719aa', borderWidth: 1, borderColor: colors.hairline }}><IconButton name="back" label="Close details" preferredFocus={isAndroidTv} onPress={onBack} /></View>
   </View>;
 }
 const s = StyleSheet.create({

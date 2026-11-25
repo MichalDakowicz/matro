@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, AppState, BackHandler, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Animated, AppState, BackHandler, FlatList, Modal, Platform, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { FocusPressable as Pressable, isAndroidTv } from '../components/TvFocus';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { VideoView } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -10,7 +11,7 @@ import { NavigationBar } from 'expo-navigation-bar';
 import type { Item, Library } from '../lib/server';
 import { episodeName, formatTime, languageName, metadataFor, nameFor } from '../../../../packages/core/client/library';
 import { usePlayback } from '../player/usePlayback';
-import { Icon, IconButton, MediaArt, Pill, SkipIcon, styles as t } from '../components/Matro';
+import { Icon, IconButton, MediaArt, Pill, ProgressBar, SkipIcon, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
 import { colors, fonts } from '../theme';
 import type { SavedMedia } from '../lib/offline';
@@ -38,6 +39,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
     return () => { subscription.remove(); setStatusBarHidden(false, 'fade'); if (Platform.OS === 'android') NavigationBar.setHidden(false); };
   }, [landscape]);
   useEffect(() => {
+    if (isAndroidTv) return;
     // Unlocking alone leaves Android in the last forced orientation when the
     // user's system rotation lock is enabled. Restore the entry orientation first.
     const entry = Promise.all([ScreenOrientation.getOrientationAsync(), ScreenOrientation.getOrientationLockAsync()]);
@@ -53,11 +55,11 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
     };
   }, []);
   useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => { if (landscape) toggleFullscreen(); else void leave(); return true; });
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => { if (landscape && !isAndroidTv) toggleFullscreen(); else void leave(); return true; });
     return () => sub.remove();
   }, [landscape, p.persist]);
-  useEffect(() => { Animated.timing(opacity, { toValue: controls ? 1 : 0, duration: 180, useNativeDriver: true }).start(); }, [controls, opacity]);
-  useEffect(() => { if (!p.playing || p.busy || sheet || scrub !== null || !controls) return; const timer = setTimeout(() => setControls(false), 3200); return () => clearTimeout(timer); }, [p.playing, p.busy, controls, sheet, scrub]);
+  useEffect(() => { Animated.timing(opacity, { toValue: controls ? 1 : 0, duration: isAndroidTv ? 0 : 180, useNativeDriver: true }).start(); }, [controls, opacity]);
+  useEffect(() => { if (isAndroidTv || !p.playing || p.busy || sheet || scrub !== null || !controls) return; const timer = setTimeout(() => setControls(false), 3200); return () => clearTimeout(timer); }, [p.playing, p.busy, controls, sheet, scrub]);
   useEffect(() => { if (!p.playing || p.busy || p.error) setControls(true); }, [p.playing, p.busy, p.error]);
   const select = async (next: Item) => { setSheet(null); await p.persist().catch(() => {}); p.player.pause(); onSelect(next); };
   const skip = (delta: number) => { setControls(true); p.seek(p.position + delta); };
@@ -67,7 +69,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
   const transport = <View style={[s.transport, landscape && { gap: 4 }]}>
     <IconButton name="prev" label="Previous in queue" disabled={!hasPrevious} size={landscape ? 40 : 46} onPress={() => void select(queue[queueIndex - 1])} />
     <IconButton label="Back 5 seconds" size={landscape ? 40 : 46} onPress={() => skip(-5)}><SkipIcon back /></IconButton>
-    <IconButton name={p.playing ? 'pause' : 'play'} label={p.playing ? 'Pause' : 'Play'} size={landscape ? 48 : 60} onPress={() => { setControls(true); p.toggle(); }} />
+    <IconButton name={p.playing ? 'pause' : 'play'} label={p.playing ? 'Pause' : 'Play'} size={landscape ? 48 : 60} preferredFocus={isAndroidTv} onPress={() => { setControls(true); p.toggle(); }} />
     <IconButton label="Forward 5 seconds" size={landscape ? 40 : 46} onPress={() => skip(5)}><SkipIcon /></IconButton>
     <IconButton name="next" label="Next in queue" disabled={!hasNext} size={landscape ? 40 : 46} onPress={() => void select(queue[queueIndex + 1])} />
   </View>;
@@ -75,14 +77,16 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
     <Pressable accessibilityLabel="Change playback speed" onPress={() => { setControls(true); p.changeSpeed(); }} style={s.speed}><Text style={t.text}>{p.rate}×</Text></Pressable>
     <IconButton name="tracks" label="Audio and subtitles" active={sheet === 'tracks'} onPress={() => { setControls(true); setSheet('tracks'); }} />
     <IconButton name="queue" label="Queue" active={sheet === 'queue'} onPress={() => { setControls(true); setSheet('queue'); }} />
-    <IconButton name="fullscreen" label={landscape ? 'Exit fullscreen' : 'Fullscreen'} onPress={toggleFullscreen} />
+    {isAndroidTv ? <Pill label="Hide controls" compact onPress={() => setControls(false)} />
+      : <IconButton name="fullscreen" label={landscape ? 'Exit fullscreen' : 'Fullscreen'} onPress={toggleFullscreen} />}
   </View>;
   return <View style={s.fill}>
-    <VideoView player={p.player} nativeControls={false} contentFit="contain" fullscreenOptions={{ enable: false }} style={StyleSheet.absoluteFill} />
-    <Pressable style={StyleSheet.absoluteFill} onPress={() => setControls(!controls)} accessibilityLabel="Show or hide playback controls" />
+    <VideoView player={p.player} nativeControls={false} contentFit="contain" fullscreenOptions={{ enable: false }} focusable={isAndroidTv ? false : undefined} style={StyleSheet.absoluteFill} />
+    {isAndroidTv ? (!controls && <View style={[s.showControls, { bottom: Math.max(16, insets.bottom) }]}><Pill label="Show controls" compact preferredFocus onPress={() => setControls(true)} /></View>)
+      : <Pressable style={StyleSheet.absoluteFill} onPress={() => setControls(!controls)} accessibilityLabel="Show or hide playback controls" />}
     {p.caption ? <Text pointerEvents="none" style={[s.caption, { bottom: captionBottom, fontSize: 20 * p.subtitleSize, lineHeight: 27 * p.subtitleSize, maxWidth: landscape ? '80%' : '92%' }]}>{p.caption}</Text> : null}
     {p.busy || p.error ? <View pointerEvents="box-none" style={s.message}>{p.error ? <><Text style={[t.sectionTitle, { textAlign: 'center' }]}>Couldn’t play this file.</Text><Text style={[t.muted, { textAlign: 'center' }]}>{p.error}</Text><Pill label="Try again" onPress={p.retry} /></> : <><ActivityIndicator color={colors.text} /><Text style={t.dim}>Getting your file ready</Text><Text style={t.muted}>Preparing playback…</Text></>}</View> : null}
-    <Animated.View pointerEvents={controls ? 'box-none' : 'none'} style={[StyleSheet.absoluteFill, { opacity }]}>
+    {(!isAndroidTv || controls) && <Animated.View pointerEvents={controls ? 'box-none' : 'none'} style={[StyleSheet.absoluteFill, { opacity }]}>
       <LinearGradient pointerEvents="none" colors={['#000c', 'transparent']} style={[s.topFade, { height: insets.top + 140 }]} />
       <View style={[s.top, { top: landscape ? 8 : insets.top + 12, left: Math.max(14, insets.left), right: Math.max(14, insets.right) }]}>
         <IconButton name="back" label="Back to library" onPress={() => void leave()} />
@@ -90,20 +94,24 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
       </View>
       <LinearGradient pointerEvents="none" colors={['transparent', '#000e']} style={[s.bottomFade, { height: landscape ? 180 : 300 + insets.bottom }]} />
       <View style={[s.controls, { left: Math.max(14, insets.left), right: Math.max(14, insets.right), bottom: landscape ? Math.max(6, insets.bottom) : insets.bottom + 12 }]}>
-        <View style={{ height: 34, justifyContent: 'center' }}>
+        {isAndroidTv ? <View style={t.row}>
+          <Pill label="−30 s" compact disabled={!duration} onPress={() => skip(-30)} />
+          <View style={{ flex: 1 }}><ProgressBar value={duration ? shownPosition / duration : 0} /></View>
+          <Pill label="+30 s" compact disabled={!duration} onPress={() => skip(30)} />
+        </View> : <View style={{ height: 34, justifyContent: 'center' }}>
           <View pointerEvents="none" style={s.bufferTrack}><View style={{ height: 3, width: `${duration ? Math.min(100, p.buffered / duration * 100) : 0}%`, backgroundColor: '#ffffff40' }} /></View>
           <Slider accessibilityLabel="Seek" minimumValue={0} maximumValue={duration || 1} value={shownPosition} minimumTrackTintColor={colors.primary} maximumTrackTintColor="#ffffff24" thumbTintColor={colors.primary} step={.1} style={{ height: 34, marginHorizontal: -13 }}
             onSlidingStart={value => { dragging.current = true; setControls(true); setScrub(value); }} onValueChange={value => { if (dragging.current) setScrub(value); }} onSlidingComplete={value => { dragging.current = false; setScrub(null); p.seek(value); }} />
-        </View>
+        </View>}
         <Text style={s.time}>{formatTime(shownPosition)}<Text style={{ color: '#ffffff4d' }}> / </Text>{formatTime(duration)}</Text>
         <View style={[s.controlRows, landscape && { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>{transport}{utilities}</View>
       </View>
-    </Animated.View>
+    </Animated.View>}
     {segment && <View style={{ position: 'absolute', right: Math.max(18, insets.right), bottom: controls ? (landscape ? 140 : 290 + insets.bottom) : insets.bottom + 24 }}><Pill label={`Skip ${segment.type}`} onPress={() => { setControls(true); p.seek(segment.end); }} /></View>}
-    <Modal visible={!!sheet} transparent animationType="slide" supportedOrientations={['portrait', 'landscape']} presentationStyle="overFullScreen" onRequestClose={() => setSheet(null)}>
-      <Pressable style={s.scrim} onPress={() => setSheet(null)} accessibilityLabel="Close player panel" />
+    <Modal visible={!!sheet} transparent animationType={isAndroidTv ? 'none' : 'slide'} supportedOrientations={['portrait', 'landscape']} presentationStyle="overFullScreen" onRequestClose={() => setSheet(null)}>
+      <Pressable focusable={isAndroidTv ? false : undefined} style={s.scrim} onPress={() => setSheet(null)} accessibilityLabel="Close player panel" />
       <View style={[s.sheet, { paddingBottom: Math.max(16, insets.bottom + 12), maxHeight: landscape ? height - 20 : height * .78 }, landscape && { width: 360, left: undefined, top: 0, bottom: 0, maxHeight: height, borderTopRightRadius: 0 }]}>
-        <View style={t.sectionHeading}><Text style={t.sectionTitle}>{sheet === 'tracks' ? 'Audio and subtitles' : 'Queue'}</Text><IconButton name="close" label={sheet === 'tracks' ? 'Close audio and subtitles' : 'Close queue'} onPress={() => setSheet(null)} /></View>
+        <View style={t.sectionHeading}><Text style={t.sectionTitle}>{sheet === 'tracks' ? 'Audio and subtitles' : 'Queue'}</Text><IconButton name="close" label={sheet === 'tracks' ? 'Close audio and subtitles' : 'Close queue'} preferredFocus={isAndroidTv} onPress={() => setSheet(null)} /></View>
         {sheet === 'tracks' ? <ScrollView showsVerticalScrollIndicator={false}>
           <Text style={s.panelLabel}>Audio</Text>
           {p.info?.audio.map(track => <Pressable key={track.index} onPress={() => p.chooseAudio(track.index)} accessibilityRole="radio" accessibilityState={{ checked: p.audio === track.index }} style={[s.track, p.audio === track.index && s.selectedTrack]}><View style={{ flex: 1 }}><Text style={[t.text, { fontFamily: fonts.medium }]}>{languageName(track.language)}</Text>{track.title ? <Text style={[t.dim, { marginTop: 3 }]}>{track.title}</Text> : null}<Text style={[t.dim, { fontSize: 11, marginTop: 4 }]}>{[track.codec?.toUpperCase(), track.channels ? `${track.channels} channels` : ''].filter(Boolean).join(' · ')}</Text></View>{p.audio === track.index && <Icon name="check" size={18} />}</Pressable>)}
@@ -111,13 +119,18 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
           <Pressable onPress={() => p.chooseSubtitle(null)} accessibilityRole="radio" accessibilityState={{ checked: p.subtitle === null }} style={[s.track, p.subtitle === null && s.selectedTrack]}><Text style={[t.text, { flex: 1 }]}>Off</Text>{p.subtitle === null && <Icon name="check" size={18} />}</Pressable>
           {allSubs.map(track => <Pressable key={track.index} onPress={() => p.chooseSubtitle(track.index)} accessibilityRole="radio" accessibilityState={{ checked: p.subtitle === track.index }} style={[s.track, p.subtitle === track.index && s.selectedTrack]}><View style={{ flex: 1 }}><Text style={[t.text, { fontFamily: fonts.medium }]}>{languageName(track.language)}</Text>{track.title ? <Text style={[t.dim, { marginTop: 3 }]}>{track.title}</Text> : null}<Text style={[t.dim, { fontSize: 11, marginTop: 4 }]}>{track.codec?.toUpperCase()}</Text></View>{p.subtitle === track.index && <Icon name="check" size={18} />}</Pressable>)}
           <View style={[s.setting, { marginTop: 18 }]}><Text style={t.muted}>Subtitle delay</Text><View style={t.row}><IconButton label="Subtitles earlier" onPress={() => p.setDelay(p.delay - .1)}><Text style={t.text}>−</Text></IconButton><Text style={[t.mono, { minWidth: 50, textAlign: 'center' }]}>{p.delay >= 0 ? '+' : ''}{p.delay.toFixed(1)} s</Text><IconButton label="Subtitles later" onPress={() => p.setDelay(p.delay + .1)}><Text style={t.text}>+</Text></IconButton></View></View>
-          <View style={[s.setting, { marginBottom: 18 }]}><Text style={t.muted}>Text size</Text><Slider accessibilityLabel="Subtitle size" style={{ width: 170, height: 40 }} minimumValue={.6} maximumValue={1.8} value={p.subtitleSize} minimumTrackTintColor={colors.primary} maximumTrackTintColor="#ffffff24" thumbTintColor={colors.primary} onSlidingComplete={p.setSubtitleSize} /></View>
-        </ScrollView> : <FlatList data={queue} keyExtractor={entry => entry.id} showsVerticalScrollIndicator={false} renderItem={({ item: entry, index }) => <View>{entry.kind === 'show' && (index === 0 || queue[index - 1].season !== entry.season) ? <Text style={[s.panelLabel, { marginTop: 14 }]}>Season {entry.season}</Text> : null}<Pressable accessibilityLabel={`Play ${episodeName(data, entry)}`} onPress={() => void select(entry)} style={[s.queueRow, entry.id === item.id && s.selectedTrack]}><MediaArt base={base} headers={headers} path={metadataFor(data, entry).episodes?.[String(entry.season)]?.[String(entry.episode)]?.still || metadataFor(data, entry).backdrop || metadataFor(data, entry).poster} style={{ width: 88, height: 50, borderRadius: 6 }} /><View style={{ flex: 1, gap: 4 }}><Text style={[t.text, { fontSize: 13 }]} numberOfLines={2}>{entry.kind === 'show' ? `${entry.episode}. ${episodeName(data, entry)}` : nameFor(data, entry)}</Text><Text style={[t.dim, { fontSize: 11 }]}>{entry.id === item.id ? 'Now playing' : data.progress[entry.id]?.completed ? 'Watched' : entry.format}</Text></View>{entry.id === item.id && <Icon name="play" size={16} />}</Pressable></View>} />}
+          <View style={[s.setting, { marginBottom: 18 }]}><Text style={t.muted}>Text size</Text>{isAndroidTv ? <View style={t.row}>
+            <IconButton label="Decrease subtitle size" onPress={() => p.setSubtitleSize(Math.max(.6, p.subtitleSize - .1))}><Text style={t.text}>−</Text></IconButton>
+            <Text style={t.mono}>{Math.round(p.subtitleSize * 100)}%</Text>
+            <IconButton label="Increase subtitle size" onPress={() => p.setSubtitleSize(Math.min(1.8, p.subtitleSize + .1))}><Text style={t.text}>+</Text></IconButton>
+          </View> : <Slider accessibilityLabel="Subtitle size" style={{ width: 170, height: 40 }} minimumValue={.6} maximumValue={1.8} value={p.subtitleSize} minimumTrackTintColor={colors.primary} maximumTrackTintColor="#ffffff24" thumbTintColor={colors.primary} onSlidingComplete={p.setSubtitleSize} />}</View>
+        </ScrollView> : <FlatList removeClippedSubviews={isAndroidTv ? false : undefined} data={queue} keyExtractor={entry => entry.id} showsVerticalScrollIndicator={false} renderItem={({ item: entry, index }) => <View>{entry.kind === 'show' && (index === 0 || queue[index - 1].season !== entry.season) ? <Text style={[s.panelLabel, { marginTop: 14 }]}>Season {entry.season}</Text> : null}<Pressable accessibilityLabel={`Play ${episodeName(data, entry)}`} onPress={() => void select(entry)} style={[s.queueRow, entry.id === item.id && s.selectedTrack]}><MediaArt base={base} headers={headers} path={metadataFor(data, entry).episodes?.[String(entry.season)]?.[String(entry.episode)]?.still || metadataFor(data, entry).backdrop || metadataFor(data, entry).poster} style={{ width: 88, height: 50, borderRadius: 6 }} /><View style={{ flex: 1, gap: 4 }}><Text style={[t.text, { fontSize: 13 }]} numberOfLines={2}>{entry.kind === 'show' ? `${entry.episode}. ${episodeName(data, entry)}` : nameFor(data, entry)}</Text><Text style={[t.dim, { fontSize: 11 }]}>{entry.id === item.id ? 'Now playing' : data.progress[entry.id]?.completed ? 'Watched' : entry.format}</Text></View>{entry.id === item.id && <Icon name="play" size={16} />}</Pressable></View>} />}
       </View>
     </Modal>
   </View>;
 }
 const s = StyleSheet.create({
+  showControls: { position: 'absolute', alignSelf: 'center', backgroundColor: colors.inputFill, borderRadius: 999, zIndex: 2 },
   fill: { flex: 1, backgroundColor: '#000' }, topFade: { position: 'absolute', top: 0, left: 0, right: 0 }, top: { position: 'absolute', flexDirection: 'row', alignItems: 'center', gap: 8 }, playerTitle: { color: colors.text, fontFamily: fonts.medium, fontSize: 15, lineHeight: 21 }, playerSubtitle: { color: colors.dim, fontFamily: fonts.regular, fontSize: 12 },
   bottomFade: { position: 'absolute', bottom: 0, left: 0, right: 0 }, controls: { position: 'absolute' }, bufferTrack: { position: 'absolute', left: 0, right: 0, height: 3, backgroundColor: '#ffffff18' }, time: { fontSize: 12, fontFamily: fonts.mono, color: colors.muted, fontVariant: ['tabular-nums'], marginTop: 1 },
   controlRows: { gap: 4, marginTop: 4 }, transport: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 }, utilities: { flexDirection: 'row', width: '100%', justifyContent: 'space-between', alignItems: 'center' }, speed: { minWidth: 46, height: 44, justifyContent: 'center', alignItems: 'center' },
