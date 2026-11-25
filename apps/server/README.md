@@ -35,8 +35,10 @@ the head password is lost) and signs that account out everywhere.
 From then on it is all in the browser:
 
 - **Folders** (the dock's Folders page) – folders on the server machine, or files sent from your
-  browser. One video in a title folder is a film, several are a show; `S01`/`Season 1` folders stay seasons.
-  Rescans run every 30 minutes and on demand. Removing a folder only forgets it; files are never touched.
+  browser. Numbered episodes make a show, and `S01`/`Season 1` folders stay seasons. Scans skip samples, trailers, and extras.
+  Rescans run every 30 minutes and on demand. Unreadable or empty sources keep their catalog. A scan that would drop more
+  than 25% of a folder also keeps its existing titles. If you intentionally removed that much media, remove and re-add
+  the folder to refresh it. Media files and uploaded subtitles are kept. Library folders cannot overlap.
 - **People** (your profile page) – new accounts are made by the person joining: press **Create invite code**
   and send them the code (or the link next to it). It works once, expires after 7 days, and is shown only
   at that moment (the server keeps just a hash). They open the sign-in page, choose **Have an invite

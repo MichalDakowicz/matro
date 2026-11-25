@@ -126,6 +126,19 @@ test('an open web library picks up a catalog change without a reload', async () 
     await library.rescanAll();
     await expect(newTitle).toBeVisible({ timeout: 12000 });
     expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
+
+    await page.getByRole('button', { name: 'Folders', exact: true }).press('Enter');
+    const note = page.getByText(/Uploaded subtitles are kept too/);
+    await page.evaluate(() => window.matroTheme.set('dark'));
+    await expect(note).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.evaluate(() => window.matroTheme.set('light'));
+    await expect(note).toBeVisible();
+    await fs.rename(media, path.join(root, 'disconnected'));
+    await fs.mkdir(media);
+    await page.getByRole('button', { name: 'Rescan folders', exact: true }).press('Enter');
+    await expect(page.locator('#toast')).toContainText('No media files were found. Existing titles were kept.');
+    await expect(page.locator('.source-count')).toHaveText('2 items');
   } finally {
     await browser?.close();
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();

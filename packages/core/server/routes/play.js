@@ -39,9 +39,7 @@ function register(app) {
 
   router.add('GET', '/api/items/:id/info', async ctx => {
     const item = find(ctx.params.id);
-    let info;
-    try { info = await library.info(item); } catch { throw new HttpError(422, 'This file could not be read. It may be damaged or unsupported.'); }
-    if (info.broken) throw new HttpError(422, 'This file could not be read. It may be damaged or unsupported.');
+    const info = await library.info(item);
     return {
       id: item.id, groupId: item.group_id, title: item.title, groupTitle: item.group_title, kind: item.kind, season: item.season, episode: item.episode,
       duration: info.duration, video: info.video, directPlay: canDirectPlay(item.path, info), chapters: info.chapters,
@@ -59,7 +57,6 @@ function register(app) {
 
   async function offline(ctx) {
     const item = find(ctx.params.id), info = await library.info(item);
-    if (info.broken) throw new HttpError(422, 'This file could not be prepared for offline playback.');
     const audio = ctx.query.has('audio') ? Number(ctx.query.get('audio')) : null;
     if (audio !== null && !info.audio.some(track => track.index === audio)) throw new HttpError(400, 'Unknown audio track.');
     const original = await fs.stat(item.path);

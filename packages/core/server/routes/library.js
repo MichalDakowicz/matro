@@ -24,9 +24,9 @@ function dismissMarker(state, id, marker, legacyOnly = false) {
 function register(app) {
   const { router, db, library, tmdb, scanner } = app;
   const q = {
-    items: db.prepare('SELECT i.id, i.path, i.title, i.group_id, i.group_title, i.kind, i.season, i.episode, i.added, f.path AS folder FROM items i JOIN folders f ON f.id = i.folder_id ORDER BY i.path'),
-    episodes: db.prepare("SELECT id FROM items WHERE kind = 'show' AND group_id = ?"),
-    folders: db.prepare('SELECT path FROM folders ORDER BY path'),
+    items: db.prepare('SELECT i.id, i.path, i.title, i.group_id, i.group_title, i.kind, i.season, i.episode, i.added, f.path AS folder FROM active_items i JOIN active_folders f ON f.id = i.folder_id ORDER BY i.path'),
+    episodes: db.prepare("SELECT id FROM active_items WHERE kind = 'show' AND group_id = ?"),
+    folders: db.prepare('SELECT path FROM active_folders ORDER BY path'),
     get: db.prepare('SELECT data FROM user_state WHERE user_id = ?'),
     set: db.prepare('INSERT INTO user_state (user_id, data, updated) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated = excluded.updated')
   };

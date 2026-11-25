@@ -64,6 +64,25 @@ function open(file) {
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   db.exec(schema);
+  tx(db, () => {
+    const additions = {
+      folders: { removed: 'INTEGER NOT NULL DEFAULT 0', canonical_path: 'TEXT' },
+      items: { removed: 'INTEGER NOT NULL DEFAULT 0', fingerprint: 'TEXT', probe_failures: 'INTEGER NOT NULL DEFAULT 0',
+        probe_error: 'TEXT', probed_at: 'INTEGER', retry_probe_after: 'INTEGER' }
+    };
+    for (const [table, columns] of Object.entries(additions)) {
+      const present = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));
+      for (const [column, definition] of Object.entries(columns)) {
+        if (!present.has(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+      }
+      if (table === 'items' && !present.has('probe_failures')) {
+        db.exec("UPDATE items SET probe = NULL, duration = NULL WHERE json_extract(CASE WHEN json_valid(probe) THEN probe END, '$.broken') = 1");
+      }
+    }
+    // Removed catalog rows keep their IDs so uploaded subtitles stay linked.
+    db.exec(`CREATE VIEW IF NOT EXISTS active_folders AS SELECT * FROM folders WHERE removed = 0;
+      CREATE VIEW IF NOT EXISTS active_items AS SELECT * FROM items WHERE removed = 0;`);
+  });
   return db;
 }
 // node:sqlite rejects undefined and booleans as bind values.

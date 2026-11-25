@@ -80,8 +80,8 @@ test('title folders group features and episodic files consistently across season
     assert.deepEqual(cyberpunk.map(i => [i.season, i.episode]), [[1, 1], [1, 2], [2, 1]]);
     const garden = items.filter(i => i.group === 'Over The Garden Wall');
     assert.equal(garden.length, 4);
-    assert.equal(garden.find(i => i.path.endsWith('.Pre Tome of the Unknown.mp4')).episode, 0);
-    assert.deepEqual(garden.filter(i => i.episode > 0).map(i => i.episode), [1, 2, 10]);
+    assert.equal(garden.find(i => i.path.endsWith('.Pre Tome of the Unknown.mp4')).episode, 11);
+    assert.deepEqual(garden.map(i => i.episode), [11, 1, 2, 10]);
     for (const folder of ['Shows', 'Shows/Cyberpunk Edgerunners', 'Shows/Cyberpunk Edgerunners/S01', 'Shows/Over The Garden Wall', 'Movies', 'Movies/Akira']) {
       const partial = await scan(path.join(media, folder));
       for (const item of partial) {
@@ -116,6 +116,38 @@ test('desktop and server keep an explicitly numbered lone episode grouped withou
     assert.deepEqual((await scanLibrary(show)).map(item => item.episode), [1120, 1121]);
     await fs.unlink(second);
     assert.equal((await scanLibrary(show))[0].kind, 'show');
+  }
+});
+
+test('server and desktop agree on loose episodes, release years, unnumbered cuts and extras', async t => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-shared-scan-'));
+  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  const root = path.join(temp, 'Media');
+  const files = [
+    'Example - S01E01.mkv', 'Example S01E02.mkv', 'Blade Runner 2049 (2017).mkv',
+    'Movies/Cuts/First Cut.mkv', 'Movies/Cuts/Second Cut.mkv',
+    'Movies/Cuts/Movie-sample.1080p.mkv', 'Movies/Cuts/Movie Trailer.mkv',
+    'Movies/Cuts/Behind the Scenes.mkv', 'Movies/Cuts/Extras/Bonus.mkv',
+    'Shows/Serial/S01/E02.mkv', 'Shows/Serial/S01/Episode 8.mkv', 'Shows/Serial/S01/Special.mkv'
+  ];
+  for (const file of files) {
+    const target = path.join(root, file);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, '');
+  }
+  const server = await scanServer(root), desktop = await scan(root);
+  const shared = rows => rows.map(item => [item.id, item.title, item.groupTitle ?? item.group, item.year, item.kind, item.season, item.episode]);
+  assert.deepEqual(shared(desktop), shared(server));
+  assert.equal(server.length, 8);
+  assert.equal(server.find(item => item.title.startsWith('Blade Runner')).title, 'Blade Runner 2049');
+  assert.equal(server.find(item => item.title === 'Blade Runner 2049').year, 2017);
+  assert.equal(describe('2001 A Space Odyssey.mkv').title, '2001 A Space Odyssey');
+  for (const rows of [desktop, server]) {
+    const loose = rows.filter(item => item.title.startsWith('Example'));
+    assert.deepEqual(loose.map(item => item.episode), [1, 2]);
+    assert.equal(loose[0].groupId, loose[1].groupId);
+    assert.equal(rows.find(item => item.title === 'Special').episode, 9);
+    assert.deepEqual(rows.filter(item => item.title.endsWith('Cut')).map(item => item.kind), ['movie', 'movie']);
   }
 });
 
