@@ -551,3 +551,57 @@ test('receiver saves manual episode sections, maps the season and removes marker
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test('on a phone the show page keeps every action labelled and reachable, with menus that work from the keyboard', async () => {
+  const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'phone-actions-'));
+  const media = path.join(root, 'media'); await fs.mkdir(media);
+  for (const name of ['Lighthouse Keepers S01E01 Arrival.mkv', 'Lighthouse Keepers S01E02 The Long Night.mkv']) await fs.copyFile(f.mkv, path.join(media, name));
+  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} } });
+  let browser;
+  try {
+    await app.createUser('head', 'phone-actions-test', 'admin'); await library.addFolder(media);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: `http://127.0.0.1:${server.address().port}`, MATRO_METADATA: 'off' };
+    delete env.ELECTRON_RUN_AS_NODE;
+    browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
+    const page = await browser.firstWindow();
+    await page.setViewportSize({ width: 375, height: 800 });
+    await page.getByRole('textbox', { name: 'Username', exact: true }).fill('head');
+    await page.getByLabel('Password', { exact: true }).fill('phone-actions-test');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.getByRole('button', { name: 'Open Lighthouse Keepers', exact: true }).click();
+    const box = async locator => locator.evaluate(el => { const r = el.getBoundingClientRect(); return { width: r.width, height: r.height }; });
+    // Episode names drop the show name and the S01E01 code, which the row already shows.
+    await expect(page.getByText('1. Arrival', { exact: true })).toBeVisible();
+    // Every action has a visible label; save options sit behind one labelled menu.
+    const save = page.getByRole('button', { name: 'Save offline', exact: true });
+    await expect(page.getByRole('button', { name: 'Add to queue' })).toContainText('Add to queue');
+    await expect(page.getByRole('button', { name: 'Mark complete', exact: true }).first()).toContainText('Mark complete');
+    await expect(page.getByRole('button', { name: 'Save episode offline' })).toBeHidden();
+    expect((await box(save)).height).toBeGreaterThanOrEqual(44);
+    await save.focus(); await page.keyboard.press('Enter');
+    await expect(save).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByRole('button', { name: 'Save episode offline' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', { name: 'Save episode offline' })).toBeHidden();
+    await expect(save).toBeFocused();
+    await expect(page.locator('#detail-overlay')).toBeVisible();
+    // Each episode has its own 44px menu for Save offline and Mark complete.
+    const more = page.getByRole('button', { name: 'More for Arrival', exact: true });
+    const size = await box(more); expect(size.width).toBeGreaterThanOrEqual(44); expect(size.height).toBeGreaterThanOrEqual(44);
+    await more.click();
+    await expect(page.getByRole('button', { name: 'Save Arrival offline' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Mark complete Lighthouse Keepers S01E01/ })).toBeVisible();
+    await page.mouse.click(5, 400);
+    await expect(page.getByRole('button', { name: 'Save Arrival offline' })).toBeHidden();
+    // Wide screens keep the plain buttons in the row and no menu toggles.
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await expect(page.getByRole('button', { name: 'Save episode offline' })).toBeVisible();
+    await expect(save).toBeHidden();
+    await expect(more).toBeHidden();
+  } finally {
+    await browser?.close();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  }
+});

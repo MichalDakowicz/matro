@@ -80,8 +80,11 @@ function languageName(code) {
 }
 const bitmapTrack = () => info?.subtitles.find(track => track.index === subtitle && track.bitmap);
 function trackHeading(track) {
-  const title = track.title && ![track.language, languageName(track.language)].some(value => value.toLowerCase() === track.title.toLowerCase()) ? track.title : '';
-  return `<span class="track-heading"><strong>${esc(languageName(track.language))}</strong>${title ? `<span class="track-title">${esc(title)}</span>` : ''}</span>`;
+  // A track with no language is numbered by its place in its list instead of reading "Unknown language".
+  const known = languageName(track.language), list = info.audio.includes(track) ? info.audio : info.subtitles;
+  const name = known === 'Unknown language' ? `Track ${list.indexOf(track) + 1}` : known;
+  const title = track.title && ![track.language, known, name].some(value => value.toLowerCase() === track.title.toLowerCase()) ? track.title : '';
+  return `<span class="track-heading"><strong>${esc(name)}</strong>${title ? `<span class="track-title">${esc(title)}</span>` : ''}</span>`;
 }
 function hidePreview() { clearTimeout(previewTimer); previewVersion++; previewHovered = false; if ($('#seek-preview')) $('#seek-preview').hidden = true; }
 function hoverSeek(event) {
@@ -144,7 +147,13 @@ function rememberTracks() {
 const metaKey = item => item.kind === 'show' ? titleKey(item) : item.id;
 const meta = item => metadata[metaKey(item)] || null;
 const displayName = item => meta(item)?.title || item.group;
-const episodeName = item => meta(item)?.episodes?.[item.season]?.[item.episode]?.name || item.title;
+// File names carry the show name and an S01E02 code; the row already shows both, so only the episode's own name is left.
+const plainEpisodeName = item => {
+  if (item.kind !== 'show' || item.prelude) return item.title;
+  const rest = item.title.replace(item.group ?? '', '').replace(/\bS\d{1,2}\s?E\d{1,3}\b/i, '').replace(/[._]+/g, ' ').replace(/^[\s\-–·:]+|[\s\-–·:]+$/g, '');
+  return rest || item.title;
+};
+const episodeName = item => meta(item)?.episodes?.[item.season]?.[item.episode]?.name || plainEpisodeName(item);
 const hash = text => { let h = 7; for (const c of String(text)) h = (h * 31 + c.codePointAt(0)) >>> 0; return h; };
 const artFor = item => `art v${hash(metaKey(item)) % 4}" data-hue="${hash(metaKey(item)) % 360}`;
 const searchText = items => `${items[0].group} ${meta(items[0])?.title || ''} ${(meta(items[0])?.people || []).join(' ')} ${items.map(i => i.title).join(' ')}`.toLowerCase();
@@ -241,7 +250,10 @@ const groupStatus = items => items.every(i => completed(i.id)) ? 'done' : items.
 // A prelude is stored as episode 0 of the first season but is always labelled as the prelude.
 const code = item => item.prelude ? 'Prelude' : `S${item.season} E${item.episode}`;
 const itemMeta = item => item.kind === 'show' ? (item.prelude ? `Season ${item.season} · Prelude` : `Season ${item.season} · Episode ${item.episode}`) : item.kind === 'audio' ? `${item.format} · Audio` : `${item.format} · Movie`;
-const groupMeta = items => { const item = items[0], seasons = new Set(items.map(i => i.season)).size; return item.kind === 'show' ? `${seasons} ${seasons === 1 ? 'season' : 'seasons'} · ${items.length} episodes` : `${meta(item)?.year ? `${meta(item).year} · ` : ''}${itemMeta(item)}`; };
+// Counts read "1 show", not "1 shows". Every list noun here ends in "s".
+const count = (n, noun) => `${n} ${n === 1 ? noun.slice(0, -1) : noun}`;
+// A movie's card says its year (the format is on the title page); a card for a movie with no year falls back to the format.
+const groupMeta = items => { const item = items[0], seasons = new Set(items.map(i => i.season)).size; return item.kind === 'show' ? `${seasons} ${seasons === 1 ? 'season' : 'seasons'} · ${items.length} episodes` : item.kind === 'movie' ? String(meta(item)?.year || item.format) : `${meta(item)?.year ? `${meta(item).year} · ` : ''}${itemMeta(item)}`; };
 function cover(item, extra = '') {
   const m = meta(item);
   return `<span class="cover ${artFor(item)}">${m?.poster ? `<img src="${esc(m.poster)}" alt="" loading="lazy">` : `<span class="cover-title">${esc(displayName(item))}</span>`}${extra}</span>`;
@@ -254,7 +266,7 @@ function poster(items) {
 }
 function continueCard(i) {
   const p = library.progress[i.id] || { position: 0, duration: 0 }, backdrop = meta(i)?.backdrop;
-  return `<div class="continue-card"><button class="cw" data-play="${i.id}"><span class="cw-art ${artFor(i)}" data-frame="${i.kind === 'audio' ? '' : i.id}" data-time="${Math.max(0, (p.position || 0) - 1)}">${backdrop ? `<img src="${esc(backdrop)}" alt="">` : ''}<span class="cw-play">${icon('play')}</span><span class="cw-text"><span class="cw-line"><span class="card-name">${esc(displayName(i))}${i.kind === 'show' ? ` · ${code(i)}` : ''}</span><span class="card-meta">${p.duration ? `${fmt(p.duration - p.position)} left` : 'Up next'}</span></span><span class="progress-track"><span class="progress-fill" data-progress="${p.duration ? Math.min(100, p.position / p.duration * 100) : 0}"></span></span></span></span></button><button class="remove-continue" data-remove-continue="${i.id}" aria-label="Remove ${esc(i.group)} from Continue watching">×</button></div>`;
+  return `<div class="continue-card"><button class="cw" data-play="${i.id}"><span class="cw-art ${artFor(i)}" data-frame="${i.kind === 'audio' ? '' : i.id}" data-time="${Math.max(0, (p.position || 0) - 1)}">${backdrop ? `<img src="${esc(backdrop)}" alt="">` : ''}<span class="cw-play">${icon('play')}</span><span class="cw-text"><span class="cw-line"><span class="card-name">${esc(displayName(i))}${i.kind === 'show' ? ` · ${code(i)}` : ''}</span><span class="card-meta">${p.duration ? `${fmt(p.duration - p.position)} left` : 'Up next'}</span></span>${p.duration ? `<span class="progress-track"><span class="progress-fill" data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}</span></span></button><button class="remove-continue" data-remove-continue="${i.id}" aria-label="Remove ${esc(i.group)} from Continue watching">×</button></div>`;
 }
 // Real frames from one second before where you stopped (the moment you left, not a frame mid-cut), fetched one at a time (the preview decoder cancels overlapping requests).
 const frames = new Map();
@@ -286,23 +298,23 @@ function landingPage() {
   const continues = continueWatching(groupTitles(library.items), library.progress).filter(item => !folderFilter || item.root === folderFilter);
   const featured = !folderFilter ? featuredTitles() : [];
   return `${folderFilter ? `<div class="page-head"><div><h1 class="page-title">${esc(base(folderFilter))}</h1><p class="page-sub">${esc(folderFilter)}</p></div><button class="text-button" data-action="all-folders">Show all folders</button></div>` : ''}
-    ${continues.length ? `<section class="section"><div class="section-heading"><h2>Continue watching ${icon('chevron')}</h2><span>${continues.length} in progress</span></div><div class="cw-row">${continues.map(continueCard).join('')}</div></section>` : ''}
+    ${continues.length ? `<section class="section"><div class="section-heading"><h2>Continue watching</h2><span>${continues.length} in progress</span></div><div class="cw-row">${continues.map(continueCard).join('')}</div></section>` : ''}
     ${featured.length ? reelMarkup(featured) : ''}
-    ${kinds.map(([kind, title, noun]) => { const items = groups(kind); return sectionGrid(title, items, `${items.length} ${kind === 'show' ? 'shows' : noun}`, folderFilter ? '' : kind); }).join('')}`;
+    ${kinds.map(([kind, title, noun]) => { const items = groups(kind); return sectionGrid(title, items, count(items.length, noun), folderFilter ? '' : kind); }).join('')}`;
 }
 function browsePage(kind) {
   const [, title, noun] = kinds.find(([k]) => k === kind), all = groups(kind), items = all.filter(g => statusFilter === 'all' || groupStatus(g) === statusFilter);
   const chips = [['all', 'All'], ['new', kind === 'audio' ? 'Not played' : 'Unwatched'], ['progress', 'In progress'], ['done', kind === 'audio' ? 'Played' : 'Watched']];
-  return `<div class="page-head"><div><h1 class="page-title">${title}</h1><p class="page-sub">${all.length} ${kind === 'show' ? 'shows' : noun}${statusFilter !== 'all' ? ` · ${items.length} shown` : ''}</p></div><div class="chip-row" role="group" aria-label="Filter by status">${chips.map(([id, label]) => `<button class="chip" data-status-filter="${id}" aria-pressed="${statusFilter === id}">${label}</button>`).join('')}</div></div>
+  return `<div class="page-head"><div><h1 class="page-title">${title}</h1><p class="page-sub">${count(all.length, noun)}${statusFilter !== 'all' ? ` · ${items.length} shown` : ''}</p></div><div class="chip-row" role="group" aria-label="Filter by status">${chips.map(([id, label]) => `<button class="chip" data-status-filter="${id}" aria-pressed="${statusFilter === id}">${label}</button>`).join('')}</div></div>
     ${kind === 'show' ? '<section class="shows-scan" id="shows-scan" aria-labelledby="shows-scan-title"><div class="scan-heading"><h2 id="shows-scan-title">Intro &amp; outro scanning</h2><span class="scan-count"></span></div><progress aria-label="Episodes checked for intros and outros" hidden></progress><p class="scan-activity"></p></section>' : ''}
     ${items.length ? `<div class="grid">${items.map(poster).join('')}</div>` : `<div class="empty-results"><h2>Nothing here yet.</h2><p>${all.length ? 'No titles match this filter.' : 'Add a folder or open files to fill this shelf.'}</p></div>`}`;
 }
 function searchPage() {
   const words = query.trim().toLowerCase();
-  const sections = kinds.map(([kind, title, noun]) => { const items = groups(kind); return sectionGrid(title, items, `${items.length} ${kind === 'show' ? 'shows' : noun}`); }).join('');
+  const sections = kinds.map(([kind, title, noun]) => { const items = groups(kind); return sectionGrid(title, items, count(items.length, noun)); }).join('');
   const files = words ? library.items.filter(i => i.path.toLowerCase().includes(words)).slice(0, 12) : [];
   const total = kinds.reduce((sum, [kind]) => sum + groups(kind).length, 0) + files.length;
-  return `<div class="search-hero"><label for="search">Search movies, shows, people and file names</label><div class="search-field">${icon('search')}<input id="search" type="search" placeholder="Try a title, a director, or a file name" aria-label="Search library" autocomplete="off" value="${esc(query)}"><kbd>Ctrl K</kbd></div><p class="search-summary">${words ? `${total} ${total === 1 ? 'result' : 'results'} across ${library.items.length} files` : 'Searching your whole library — titles, people and file names'}</p></div>
+  return `<div class="search-hero"><label for="search">Search movies, shows, people and file names</label><div class="search-field">${icon('search')}<input id="search" type="search" placeholder="Titles, people, file names" aria-label="Search library" autocomplete="off" value="${esc(query)}"><kbd>Ctrl K</kbd></div><p class="search-summary">${words ? `${total} ${total === 1 ? 'result' : 'results'} across ${library.items.length} files` : 'Searching your whole library — titles, people and file names'}</p></div>
     ${sections}${files.length ? `<section class="section"><div class="section-heading"><h2>Files</h2><span>${files.length}</span></div>${files.map(i => `<button class="file-row" data-play="${i.id}">${icon('file')}<span class="mono">${esc(sourcePath(i.path))}</span><small>${esc(i.format)}</small></button>`).join('')}</section>` : ''}
     ${words && !total ? '<div class="empty-results"><h2>No matches.</h2><p>Check the spelling, or search by part of a file name.</p></div>' : ''}`;
 }
@@ -612,13 +624,22 @@ function detail(id, focus = true) {
       <p class="detail-sub">${[...facts, selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie', selected.format].map(esc).join(' <span aria-hidden="true">·</span> ')}</p>
       ${m?.overview ? `<p class="detail-overview">${esc(m.overview)}</p>` : ''}
       <div class="detail-actions">${selected.kind === 'movie' && api.canCompareEditions !== false ? `<button class="pill" data-upgrade="${selected.id}">Find better quality / compare editions</button>` : ''}<button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
-      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}${api.offlineSave ? `<button class="pill" data-offline-save="${target.id}">${icon('download')}${selected.kind === 'show' ? 'Save episode offline' : 'Save offline'}</button>` : ''}${api.offlineSaveMany && selected.kind === 'show' ? offlineSeasonButtons(items, target) : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
+      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}${offlineActions(items, target)}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
       ${m?.rating ? `<div class="ratings"><div><p class="rating-label">TMDB</p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}</div>
     <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
       ${castPanel(m)}${productionPanel(m)}${filePanel(selected, m)}</div></div>`;
   $('#title-links').hidden = !m; $('#imdb-link').hidden = !m?.imdbId;
   document.querySelectorAll('.detail').forEach(old => old.remove()); root.append(overlay); applyStyles(overlay);
   if (focus) restoreFocus($('.dock-back'));
+}
+// A phone action menu: the toggle shows on phones only, and on wider screens the buttons inside sit in the row as plain buttons (the CSS decides).
+const menu = (toggle, items, cls = '') => `<span class="menu ${cls}">${toggle}<span class="menu-items">${items}</span></span>`;
+const menuToggle = (cls, label, content) => `<button class="${cls} menu-toggle" data-menu aria-haspopup="true" aria-expanded="false" aria-label="${esc(label)}">${content}</button>`;
+// One Save offline button; on a show, a "Save offline" menu holding the episode and season saves.
+function offlineActions(items, target) {
+  const one = api.offlineSave ? `<button class="pill" data-offline-save="${target.id}">${icon('download')}${selected.kind === 'show' ? 'Save episode offline' : 'Save offline'}</button>` : '';
+  const many = api.offlineSaveMany && selected.kind === 'show' ? offlineSeasonButtons(items, target) : '';
+  return one && many ? menu(menuToggle('pill', 'Save offline', `${icon('download')}Save offline${icon('chevron')}`), one + many, 'save-menu') : one + many;
 }
 // One button for the current season and one for "from the current episode to the season's end" (current = what Play starts).
 function offlineSeasonButtons(items, target) {
@@ -645,7 +666,7 @@ const episodeInfo = item => meta(item)?.episodes?.[item.season]?.[item.episode] 
 function episodeCard(i, resume) {
   const e = episodeInfo(i), p = library.progress[i.id], done = completed(i.id), now = resume?.id === i.id, pct = p?.duration ? Math.min(100, p.position / p.duration * 100) : 0;
   const facts = [e?.runtime ? `${e.runtime}m` : null, i.format, now ? `${fmt(p.position)} watched` : done ? 'Watched' : p?.position > 0 ? 'In progress' : null].filter(Boolean);
-  return `<div class="episode-entry ${now ? 'current' : ''}"><button class="episode-row" data-play="${i.id}"><span class="episode-still ${artFor(i)}">${e?.still ? `<img src="${esc(e.still)}" alt="" loading="lazy" draggable="false">` : ''}<span class="episode-code">${code(i)}</span>${done ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : ''}${pct && !done ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}<span class="episode-play">${icon('play')}</span></span><span class="episode-text min"><strong>${i.prelude ? '' : `${i.episode}. `}${esc(episodeName(i))}</strong><small>${facts.map(esc).join(' · ')}</small>${e?.overview ? `<span class="episode-overview">${esc(e.overview)}</span>` : ''}</span></button>${api.offlineSave ? `<button class="text-button" data-offline-save="${i.id}" aria-label="Save ${esc(episodeName(i))} offline">Save offline</button>` : ''}<button class="text-button" data-complete="${i.id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(i.title)}">${done ? 'Completed' : 'Mark complete'}</button></div>`;
+  return `<div class="episode-entry ${now ? 'current' : ''}"><button class="episode-row" data-play="${i.id}"><span class="episode-still ${artFor(i)}">${e?.still ? `<img src="${esc(e.still)}" alt="" loading="lazy" draggable="false">` : ''}<span class="episode-code">${code(i)}</span>${done ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : ''}${pct && !done ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}<span class="episode-play">${icon('play')}</span></span><span class="episode-text min"><strong>${i.prelude ? '' : `${i.episode}. `}${esc(episodeName(i))}</strong><small>${facts.map(esc).join(' · ')}</small>${e?.overview ? `<span class="episode-overview">${esc(e.overview)}</span>` : ''}</span></button>${menu(menuToggle('icon-button', `More for ${episodeName(i)}`, icon('more')), `${api.offlineSave ? `<button class="text-button" data-offline-save="${i.id}" aria-label="Save ${esc(episodeName(i))} offline">Save offline</button>` : ''}<button class="text-button" data-complete="${i.id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(i.title)}">${done ? 'Completed' : 'Mark complete'}</button>`, 'episode-menu')}</div>`;
 }
 function episodesPanel(selected, items, resume, target) {
   const seasons = [...new Set(items.map(i => i.season))], key = titleKey(selected);
@@ -854,7 +875,7 @@ async function adoptStream(ready, token) {
 }
 function renderPlayer(adopt = null) {
   document.body.classList.add('in-player');
-  const heading = current.kind === 'show' ? `${displayName(current)} · ${code(current)}` : itemMeta(current);
+  const heading = current.kind === 'show' ? `${displayName(current)} · ${code(current)}` : current.kind === 'movie' ? [meta(current)?.year, meta(current)?.runtime ? `${meta(current).runtime}m` : null].filter(Boolean).join(' · ') || current.format : itemMeta(current);
   root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
   if (adopt) { $('#video').replaceWith(adopt); adopt.id = 'video'; adopt.dataset.preloaded = String(adopt.readyState); }
   video = $('#video'); applyVolume(library.preferences.volume); updateVolume(); applySubStyle();
@@ -987,9 +1008,9 @@ function renderQueue() {
     const id = item.id, previous = items[index - 1], now = id === current.id, done = completed(id), p = library.progress[id], pct = p?.duration && !done ? Math.min(100, p.position / p.duration * 100) : 0;
     const still = episodeInfo(item)?.still || (item.kind !== 'show' ? meta(item)?.backdrop : null), runtime = episodeInfo(item)?.runtime;
     const heading = item.kind === 'show' && (!previous || !sameTitle(previous, item) || previous.season !== item.season) ? `<h3 class="season-heading">${esc(displayName(item))} · Season ${item.season}</h3>` : '';
-    return `${heading}<div class="queue-row ${now ? 'current' : ''} ${done ? 'done' : ''}"><button class="qplay" data-play="${id}" aria-label="Play ${esc(item.title)}"><span class="queue-thumb ${artFor(item)}">${still ? `<img src="${esc(still)}" alt="" draggable="false">` : ''}<span class="queue-code">${item.kind === 'show' ? (item.prelude ? 'Pre' : `E${item.episode}`) : esc(item.format)}</span>${pct ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}</span><span class="queue-info"><small class="kicker">${now ? '<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>Now playing' : done ? 'Watched' : item.kind === 'show' ? (item.prelude ? 'Prelude' : `S${item.season} · E${item.episode}`) : 'Movie'}</small><strong>${esc(item.kind === 'show' ? episodeName(item) : displayName(item))}</strong><small>${esc([runtime ? `${runtime}m` : null, item.format].filter(Boolean).join(' · '))}</small></span></button><span class="queue-actions"><button class="icon-button" data-complete="${id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(item.title)}" title="${done ? 'Mark incomplete' : 'Mark complete'}">${icon('check')}</button><button class="icon-button" data-remove-queue="${id}" aria-label="Remove ${esc(item.title)} from queue" title="Remove from queue">${icon('close')}</button></span></div>`;
+    return `${heading}<div class="queue-row ${now ? 'current' : ''} ${done ? 'done' : ''}"><button class="qplay" data-play="${id}" aria-label="Play ${esc(item.title)}"><span class="queue-thumb ${artFor(item)}">${still ? `<img src="${esc(still)}" alt="" draggable="false">` : ''}<span class="queue-code ${item.kind === 'show' ? '' : 'queue-format'}">${item.kind === 'show' ? (item.prelude ? 'Pre' : `E${item.episode}`) : esc(item.format)}</span>${pct ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}</span><span class="queue-info"><small class="kicker">${now ? '<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>Now playing' : done ? 'Watched' : item.kind === 'show' ? (item.prelude ? 'Prelude' : `S${item.season} · E${item.episode}`) : 'Movie'}</small><strong>${esc(item.kind === 'show' ? episodeName(item) : displayName(item))}</strong><small>${esc([runtime ? `${runtime}m` : null, item.format].filter(Boolean).join(' · '))}</small></span></button><span class="queue-actions"><button class="icon-button" data-complete="${id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(item.title)}" title="${done ? 'Mark incomplete' : 'Mark complete'}">${icon('check')}</button><button class="icon-button" data-remove-queue="${id}" aria-label="Remove ${esc(item.title)} from queue" title="Remove from queue">${icon('close')}</button></span></div>`;
   };
-  panel.innerHTML = `<div class="queue-header"><div><h2>Up next</h2><p>${left} to go · ${items.length} in queue</p></div><button class="text-button" data-action="clear-watched">Clear watched</button></div><div class="queue-items">${items.map(row).join('') || '<p class="queue-empty">Nothing queued. Add titles from a title page.</p>'}</div><div class="autoplay"><div><strong>Autoplay next</strong><small>Plays the next episode when one ends</small></div><button class="switch ${library.preferences.autoplay ? 'on' : ''}" data-action="autoplay" aria-label="Autoplay next" aria-pressed="${library.preferences.autoplay}"></button></div>`;
+  panel.innerHTML = `<div class="queue-header"><div><h2>Up next</h2><p>${left} to go · ${items.length} in queue</p></div><button class="text-button" data-action="clear-watched">Clear watched</button></div><div class="queue-items">${items.map(row).join('') || '<p class="queue-empty">Nothing queued. Add titles from a title page.</p>'}</div><div class="autoplay"><div><strong>Autoplay next</strong><small>Plays the next ${current?.kind === 'show' ? 'episode' : 'item'} when one ends</small></div><button class="switch ${library.preferences.autoplay ? 'on' : ''}" data-action="autoplay" aria-label="Autoplay next" aria-pressed="${library.preferences.autoplay}"></button></div>`;
   applyStyles(panel);
 }
 function nextInQueue(direction) {
@@ -1332,6 +1353,17 @@ document.addEventListener('click', event => {
     const action = actions[btn.dataset.action]; if (action) { btn.classList.add('busy'); try { await action(); } finally { btn.classList.remove('busy'); } }
   });
 });
+// Phone menus (Save offline, per-episode ⋯): a tap on the toggle opens or closes it; a tap anywhere else, choosing an item or Escape closes it.
+const closeMenus = keep => document.querySelectorAll('.menu.open').forEach(open => { if (open !== keep) { open.classList.remove('open'); open.querySelector('[data-menu]').setAttribute('aria-expanded', 'false'); } });
+document.addEventListener('click', event => {
+  const toggle = event.target.closest('[data-menu]'), owner = toggle?.closest('.menu');
+  closeMenus(owner);
+  if (owner) toggle.setAttribute('aria-expanded', String(owner.classList.toggle('open')));
+});
+document.addEventListener('keydown', event => {
+  const open = document.querySelector('.menu.open'); if (event.key !== 'Escape' || !open) return;
+  event.stopPropagation(); closeMenus(); open.querySelector('[data-menu]').focus();
+}, true);
 document.addEventListener('keydown', event => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) && event.target.type !== 'range';
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); void attempt(actions.files); return; }
