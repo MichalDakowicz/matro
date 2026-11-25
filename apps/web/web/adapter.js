@@ -208,7 +208,14 @@ export function createAdapter(session) {
       const { lists } = await post('/api/lists', change);
       if (latest) latest.lists = lists;
       return lists;
-    }, inspect, prepare: inspect, subtitles, loadSubtitle, stream,
+    },
+    get canFollowShows() { return !session.offline && Array.isArray(latest?.followed); },
+    async followShow(change) {
+      const { followed } = await post('/api/follows', change);
+      if (latest) latest.followed = followed;
+      return followed;
+    },
+    async showSchedule(key) { return (await get('/api/follows/' + encodeURIComponent(key) + '/episodes')).episodes; }, inspect, prepare: inspect, subtitles, loadSubtitle, stream,
     offlineSave: session.offline ? null : async id => {
       const item = latest.items.find(item => item.id === id);
       if (!item) throw new Error('That title is no longer in the library.');

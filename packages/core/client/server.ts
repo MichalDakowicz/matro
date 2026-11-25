@@ -108,7 +108,7 @@ export const testMovieRequestAlert = (base: string): Promise<unknown> =>
 
 export type Item = { id: string; groupId: string; title: string; group: string; kind: string; season: number | null; episode: number | null; format: string; root?: string; path?: string; added?: number };
 export type Progress = { position: number; duration: number; completed?: boolean; hidden?: boolean; updated: number };
-export type Metadata = { collection?: { id: number; name: string }; title?: string; poster?: string; backdrop?: string; overview?: string; tagline?: string; year?: string | number; genres?: string[]; runtime?: number; rating?: number; votes?: number; people?: string[]; peopleLabel?: string; cast?: { name: string; role?: string; photo?: string }[]; episodes?: Record<string, Record<string, { name?: string; overview?: string; still?: string; runtime?: number }>> };
+export type Metadata = { tmdbId?: number; collection?: { id: number; name: string }; title?: string; poster?: string; backdrop?: string; overview?: string; tagline?: string; year?: string | number; genres?: string[]; runtime?: number; rating?: number; votes?: number; people?: string[]; peopleLabel?: string; cast?: { name: string; role?: string; photo?: string }[]; episodes?: Record<string, Record<string, { name?: string; overview?: string; still?: string; runtime?: number }>> };
 export type TrackChoice = { language: string; title: string; codec?: string; channels?: number };
 export type TrackPreference = { audio?: TrackChoice | null; subtitle?: TrackChoice | null; off?: boolean; delay?: number; size?: number };
 export type Preferences = { autoplay?: boolean; volume?: number; tracks?: Record<string, TrackPreference>; [key: string]: unknown };
@@ -119,7 +119,8 @@ export type ListChange =
   | { action: 'create'; name: string; titleId?: string }
   | { action: 'delete'; listId: string }
   | { action: 'set'; listId: string; titleId: string; present: boolean };
-export type Library = { lists?: TitleList[]; markers?: Record<string, Segment[]>; scanner?: ScannerStatus; user: MatroUser; items: Item[]; folders?: string[]; progress: Record<string, Progress>; queue: string[]; preferences: Preferences; metadata: Record<string, Metadata>; catalogRevision?: string; movieRequestsEnabled?: boolean; movieRequestPushEnabled?: boolean };
+export type ScheduledEpisode = { season: number; episode: number; title: string; airDate: string; status: 'missing' | 'upcoming' };
+export type Library = { lists?: TitleList[]; metadataEnabled?: boolean; followed?: string[]; markers?: Record<string, Segment[]>; scanner?: ScannerStatus; user: MatroUser; items: Item[]; folders?: string[]; progress: Record<string, Progress>; queue: string[]; preferences: Preferences; metadata: Record<string, Metadata>; catalogRevision?: string; movieRequestsEnabled?: boolean; movieRequestPushEnabled?: boolean };
 export type Track = { index: number; language: string; title: string; bitmap?: boolean; text?: boolean; codec?: string; channels?: number; default?: boolean };
 export type Info = { duration: number; directPlay: boolean; video?: { codec: string; height: number; width: number } | null; chapters?: { start: number; title: string }[]; audio: Track[]; embedded: Track[]; uploaded: { id: number; language: string; name: string }[] };
 export const library = async (base: string): Promise<Library> => { await ensureNativeSession(base); return request(base, '/api/library'); };

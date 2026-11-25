@@ -25,6 +25,7 @@ type HomeProps = ArtProps & { data: Library; groups: Item[][]; featured: Item[][
   onPlay: (item: Item) => void; onOpen: (items: Item[]) => void; onRemoveContinue: (item: Item) => void; onSeeAll: (tab: string) => void; onAddFolder: () => void };
 /** Home: reel first so Play is on screen, then Continue watching, then one short shelf per kind. */
 export function HomeView({ data, groups, featured, continues, layout, chips, refreshing, onRefresh, onPlay, onOpen, onRemoveContinue, onSeeAll, onAddFolder, ...art }: HomeProps) {
+  const following = data.metadataEnabled ? groups.filter(([item]) => item.kind === 'show' && data.followed?.includes(titleKey(item))) : [];
   const shelves = (['show', 'movie', 'audio'] as const).map(kind => ({ kind, all: groups.filter(items => items[0].kind === kind) })).filter(shelf => shelf.all.length);
   return <ScrollView contentContainerStyle={content(layout)} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.text} progressViewOffset={layout.top + 70} />}>
     <View style={{ marginBottom: 20 }}>{chips}</View>
@@ -34,6 +35,9 @@ export function HomeView({ data, groups, featured, continues, layout, chips, ref
       {titleShelves(groups, data.lists, titleKey, item => metadataFor(data, item)).map(shelf => <Shelf key={shelf.id} title={shelf.name} count={shelf.groups.length} noun="titles" onSeeAll={() => onSeeAll('list:' + shelf.id)}>
         {shelf.groups.slice(0, 8).map(items => <PosterCard key={titleKey(items[0])} {...art} data={data} items={items} width={128} onPress={() => onOpen(items)} />)}
       </Shelf>)}
+      {following.length > 0 && <Shelf title="Following" count={following.length} noun="shows" onSeeAll={() => onSeeAll('following')}>
+        {following.slice(0, 8).map(items => <PosterCard key={titleKey(items[0])} {...art} data={data} items={items} width={128} onPress={() => onOpen(items)} />)}
+      </Shelf>}
       {shelves.map(({ kind, all }) => <Shelf key={kind} title={kindNames[kind][0]} count={all.length} noun={kindNames[kind][0].toLowerCase()} onSeeAll={() => onSeeAll(kind)}>
         {all.slice(0, 8).map(items => <PosterCard key={titleKey(items[0])} {...art} data={data} items={items} width={128} onPress={() => onOpen(items)} />)}
       </Shelf>)}

@@ -39,6 +39,7 @@ function createTmdb(db, { fetchImpl = fetch, env = loadEnv([path.join(config.dat
   return {
     enabled: !!meta,
     snapshot,
+    showSchedule: key => meta?.showSchedule(key),
     async preview(request) {
       const { enabled, results } = await preview(request);
       return { enabled, results: results.map(({ key, metadata }) => {

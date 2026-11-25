@@ -20,6 +20,7 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'matro', privileges: { standard:
 let win, streams, storage, segments, scanner, metadata, torrents, upgrades, embeddedSubtitles;
 if (!app.isPackaged && process.env.MATRO_USER_DATA) app.setPath('userData', path.resolve(process.env.MATRO_USER_DATA));
 const { editTitleLists } = require('../title-lists.cjs');
+const { episodeGaps } = require('../episode-schedule.cjs');
 let state = { folders: [], items: [], progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 } };
 let writeQueue = Promise.resolve();
 let scanQueue = Promise.resolve();
@@ -194,6 +195,22 @@ app.whenReady().then(async () => {
     state.lists = lists;
     try { await persist(); } catch (error) { if (state.lists === lists) state.lists = old; throw error; }
     return lists;
+  });
+  const showItems = groupId => state.items.filter(item => item.kind === 'show' && (item.groupId || item.group) === groupId);
+  handle('library:follow-show', async ({ groupId, follow }) => {
+    if (!metadata.enabled || !showItems(groupId).length || typeof follow !== 'boolean') throw new Error('That show is unavailable.');
+    const previous = state.followed;
+    const remaining = (previous || []).filter(id => id !== groupId);
+    const followed = follow ? [groupId, ...remaining] : remaining;
+    state.followed = followed;
+    try { await persist(); } catch (error) { if (state.followed === followed) state.followed = previous; throw error; }
+    return followed;
+  });
+  handle('library:show-schedule', async groupId => {
+    if (!(state.followed || []).includes(groupId) || !showItems(groupId).length) throw new Error('That show is unavailable.');
+    const episodes = await metadata.showSchedule(groupId);
+    if (!episodes) throw new Error('This show needs a TMDB match.');
+    return episodeGaps(episodes, showItems(groupId));
   });
   handle('library:load', async () => { await metadata.loaded; return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
   handle('library:ssh', async options => {

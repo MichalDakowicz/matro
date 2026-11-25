@@ -290,6 +290,7 @@ function landingPage() {
     ${continues.length ? `<section class="section"><div class="section-heading"><h2>Continue watching ${icon('chevron')}</h2><span>${continues.length} in progress</span></div><div class="cw-row">${continues.map(continueCard).join('')}</div></section>` : ''}
     ${featured.length ? reelMarkup(featured) : ''}
     ${!folderFilter ? titleShelves(groupTitles(library.items), library.lists, metaKey, meta).map(shelf => sectionGrid(shelf.name, shelf.groups, shelf.groups.length + ' titles')).join('') : ''}
+    ${!folderFilter && metadataEnabled ? sectionGrid('Following', groups('show').filter(([item]) => library.followed?.includes(titleKey(item))), '') : ''}
     ${kinds.map(([kind, title, noun]) => { const items = groups(kind); return sectionGrid(title, items, `${items.length} ${kind === 'show' ? 'shows' : noun}`, folderFilter ? '' : kind); }).join('')}`;
 }
 function browsePage(kind) {
@@ -602,6 +603,8 @@ function restoreFocus(element) { element?.focus({ preventScroll: true, focusVisi
 function detail(id, focus = true) {
   selected = library.items.find(i => i.id === id); if (!selected) return;
   const items = selected.kind === 'show' ? orderedEpisodes(selected) : [selected];
+  const canFollow = selected.kind === 'show' && metadataEnabled && meta(selected)?.tmdbId && api.followShow && api.canFollowShows !== false;
+  const following = canFollow && library.followed?.includes(titleKey(selected));
   const m = meta(selected), name = displayName(selected), seasons = new Set(items.map(i => i.season)).size;
   const target = resumeTarget(items, library.progress, selected), p = library.progress[target.id];
   const resume = p?.position > 0 && !completed(target.id) ? target : null;
@@ -614,12 +617,14 @@ function detail(id, focus = true) {
       <p class="detail-sub">${[...facts, selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie', selected.format].map(esc).join(' <span aria-hidden="true">·</span> ')}</p>
       ${m?.overview ? `<p class="detail-overview">${esc(m.overview)}</p>` : ''}
       <div class="detail-actions">${selected.kind === 'movie' && api.canCompareEditions !== false ? `<button class="pill" data-upgrade="${selected.id}">Find better quality / compare editions</button>` : ''}<button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
-      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}${api.offlineSave ? `<button class="pill" data-offline-save="${target.id}">${icon('download')}${selected.kind === 'show' ? 'Save episode offline' : 'Save offline'}</button>` : ''}${api.offlineSaveMany && selected.kind === 'show' ? offlineSeasonButtons(items, target) : ''}${api.editLists && api.canEditLists !== false ? '<button class="pill" data-action="title-lists">' + icon('plus') + 'Add to list</button>' : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
+      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}${api.offlineSave ? `<button class="pill" data-offline-save="${target.id}">${icon('download')}${selected.kind === 'show' ? 'Save episode offline' : 'Save offline'}</button>` : ''}${api.offlineSaveMany && selected.kind === 'show' ? offlineSeasonButtons(items, target) : ''}${api.editLists && api.canEditLists !== false ? '<button class="pill" data-action="title-lists">' + icon('plus') + 'Add to list</button>' : ''}${canFollow ? `<button class="pill" data-action="follow-show" aria-pressed="${Boolean(following)}">${following ? 'Following' : 'Follow show'}</button>` : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
       ${m?.rating ? `<div class="ratings"><div><p class="rating-label">TMDB</p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}</div>
     <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
+      ${following ? '<section class="panel flat" aria-labelledby="episode-schedule-heading"><div class="panel-head"><h3 id="episode-schedule-heading">Episode schedule</h3></div><div data-episode-schedule></div></section>' : ''}
       ${castPanel(m)}${productionPanel(m)}${filePanel(selected, m)}</div></div>`;
   $('#title-links').hidden = !m; $('#imdb-link').hidden = !m?.imdbId;
   document.querySelectorAll('.detail').forEach(old => old.remove()); root.append(overlay); applyStyles(overlay);
+  if (following) void renderEpisodeSchedule(overlay.querySelector('[data-episode-schedule]'), titleKey(selected));
   if (focus) restoreFocus($('.dock-back'));
 }
 // One button for the current season and one for "from the current episode to the season's end" (current = what Play starts).
@@ -692,6 +697,29 @@ function openTitleLists() {
   }, { once: true });
   render();
   dialog.showModal();
+}
+const episodeSchedules = new Map();
+async function renderEpisodeSchedule(node, key) {
+  node.textContent = 'Loading episode schedule…';
+  try {
+    const cached = episodeSchedules.get(key);
+    const promise = cached?.expires > Date.now() ? cached.promise : api.showSchedule(key);
+    if (promise !== cached?.promise) episodeSchedules.set(key, { expires: Date.now() + 60000, promise });
+    const episodes = await promise;
+    if (!node.isConnected) return;
+    const canSearch = !api.hiddenTabs?.includes('downloads');
+    const section = (label, status) => {
+      const list = episodes.filter(episode => episode.status === status);
+      if (!list.length) return '';
+      return `<details ${status === 'upcoming' ? 'open' : ''}><summary>${label} · ${list.length}</summary>${list.map(episode => `
+        <div class="episode-schedule-row"><span><strong>S${episode.season} · E${episode.episode} ${esc(episode.title)}</strong><small>${esc(episode.airDate)}</small></span>
+        ${canSearch && status === 'missing' ? `<button class="pill" data-find-episode="${episode.season}:${episode.episode}" aria-label="Search releases for season ${episode.season} episode ${episode.episode}">Search releases</button>` : ''}</div>`).join('')}</details>`;
+    };
+    node.innerHTML = section('Upcoming', 'upcoming') + section('Missing', 'missing') || '<p class="muted">No missing or upcoming episodes with announced dates.</p>';
+  } catch (error) {
+    episodeSchedules.delete(key);
+    node.textContent = error.message;
+  }
 }
 // Episodes: one season at a time behind season tabs, each episode a card with its TMDB still, summary and progress.
 let detailSeason = null;
@@ -1286,6 +1314,14 @@ const actions = {
   about: () => { footerOpen = !footerOpen; $('#library-footer')?.classList.toggle('open', footerOpen); $('.help-button')?.setAttribute('aria-expanded', String(footerOpen)); },
   'fix-match': () => openMatch(selected), 'open-tmdb': () => openTitlePage('tmdb'), 'open-imdb': () => openTitlePage('imdb'), 'pick-prelude': () => setPrelude(false), 'clear-prelude': () => setPrelude(true), 'close-match': () => { $('#match-dialog')?.close(); matchItem = null; },
   'title-lists': openTitleLists,
+  'follow-show': async () => {
+    if (!selected) return;
+    const groupId = titleKey(selected), follow = !library.followed?.includes(groupId);
+    try { library.followed = await api.followShow({ groupId, follow }); }
+    catch (error) { toast(error.message || 'Could not update followed shows.'); return; }
+    rerender();
+    root.querySelector('[data-action=follow-show]')?.focus();
+  },
   shortcuts: () => $('#shortcuts').showModal(), library: backToLibrary,
   toggle, backward: () => seek(offset + video.currentTime - SKIP), forward: () => seek(offset + video.currentTime + SKIP),
   previous: () => step(-1), next: () => step(1), fullscreen: () => api.window('fullscreen'),
@@ -1351,6 +1387,12 @@ document.addEventListener('click', event => {
       toast('Preparing to save offline. See progress in your profile.');
       try { await api.offlineSave(btn.dataset.offlineSave); toast('Saved for offline playback.'); }
       catch (error) { if (error.name !== 'AbortError') throw error; }
+      return;
+    }
+    if (btn.dataset.findEpisode && selected && !api.hiddenTabs?.includes('downloads')) {
+      const [season, episode] = btn.dataset.findEpisode.split(':');
+      downloads.openSeriesSearch(displayName(selected), season, episode);
+      goTab('downloads');
       return;
     }
     if (btn.dataset.complete) return markComplete(btn.dataset.complete);

@@ -146,6 +146,37 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
       poster: await image(localizedImage(movie.images?.posters, movie.poster_path), 'w500', `${prefix}-poster.jpg`),
       backdrop: await image(localizedImage(movie.images?.backdrops, movie.backdrop_path), 'w1280', `${prefix}-backdrop.jpg`) };
   }
+  const schedules = new Map();
+  async function showSchedule(key) {
+    if (!auth) return null;
+    await loaded;
+    const entry = entries[key];
+    if (entry?.status !== 'matched' || entry.type !== 'tv') return null;
+    const id = entry.tmdbId, now = Date.now(), previous = schedules.get(id);
+    if (previous?.expires > now) return previous.promise;
+    const promise = (async () => {
+      const details = await api(`/tv/${id}`, {}, { signal: AbortSignal.timeout(12000) });
+      if (!details) return null;
+      const seasons = (details.seasons || []).map(row => row.season_number).filter(season => Number.isInteger(season) && season >= 1);
+      const episodes = [];
+      let next = 0;
+      async function loadSeasons() {
+        while (next < seasons.length) {
+          const season = seasons[next++];
+          const data = await api(`/tv/${id}/season/${season}`, {}, { signal: AbortSignal.timeout(12000) });
+          for (const row of data?.episodes || []) {
+            if (Number.isInteger(row.episode_number) && /^\d{4}-\d{2}-\d{2}$/.test(row.air_date || '')) {
+              episodes.push({ season, episode: row.episode_number, title: row.name || '', airDate: row.air_date });
+            }
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(3, seasons.length) }, loadSeasons));
+      return episodes;
+    })();
+    schedules.set(id, { expires: now + 3600000, promise });
+    try { return await promise; } catch (error) { schedules.delete(id); throw error; }
+  }
   async function tvDetails(id, seasons) {
     const show = await api(`/tv/${id}`, { append_to_response: 'credits,external_ids' });
     if (!show) return null;
@@ -261,6 +292,6 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     api: (route, params) => api(route, params, previewOptions()),
     image: (pathname, size, name) => image(pathname, size, name, previewOptions()),
   });
-  return { enabled: !!auth, sync, search, assign, setLanguage, preview, snapshot: () => snapshot(), loaded, artworkFile: name => artworkName.test(name) ? path.join(artwork, name) : null };
+  return { enabled: !!auth, showSchedule, sync, search, assign, setLanguage, preview, snapshot: () => snapshot(), loaded, artworkFile: name => artworkName.test(name) ? path.join(artwork, name) : null };
 }
 module.exports = { readEnv, credentials, createMetadata, cleanQuery, yearOf, keyFor };

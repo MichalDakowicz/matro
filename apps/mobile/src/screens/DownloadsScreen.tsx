@@ -22,12 +22,13 @@ function animeTitles(releases: (Release & { title: string; year: string })[]) {
   }
   return [...titles.values()];
 }
-export default function DownloadsScreen({ base, headers, initialRequest }: ArtProps & { initialRequest?: MovieRequest | null }) {
+export type DownloadSearch = Pick<MovieRequest, 'title'> & { year?: number | null; season?: number; episode?: number };
+export default function DownloadsScreen({ base, headers, initialRequest }: ArtProps & { initialRequest?: DownloadSearch | null }) {
   const insets = useSafeAreaInsets(), { width } = useWindowDimensions(), columns = Math.max(3, Math.floor((width - 24) / 108)), cardWidth = (width - 36 - (columns - 1) * 12) / columns;
   const [jobs, setJobs] = useState<Job[]>([]), [transfers, setTransfers] = useState<Transfer[]>([]), [titles, setTitles] = useState<Title[] | null>(null), [selected, setSelected] = useState<Title | null>(null), [releases, setReleases] = useState<Release[]>([]);
-  const [kind, setKind] = useState('movie'), [query, setQuery] = useState(initialRequest?.title || ''), [username, setUsername] = useState(''), [password, setPassword] = useState(''), [config, setConfig] = useState<Config>({});
+  const [kind, setKind] = useState(initialRequest?.season === undefined ? 'movie' : 'show'), [query, setQuery] = useState(initialRequest?.title || ''), [username, setUsername] = useState(''), [password, setPassword] = useState(''), [config, setConfig] = useState<Config>({});
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false), [settings, setSettings] = useState(false), [page, setPage] = useState(1), [total, setTotal] = useState(0), [nextPage, setNextPage] = useState<number | null>(null);
-  const [season, setSeason] = useState(''), [episode, setEpisode] = useState(''), [quality, setQuality] = useState(''), [magnetOpen, setMagnetOpen] = useState(false), [magnet, setMagnet] = useState(''), [magnetTitle, setMagnetTitle] = useState('');
+  const [season, setSeason] = useState(String(initialRequest?.season ?? '')), [episode, setEpisode] = useState(String(initialRequest?.episode ?? '')), [quality, setQuality] = useState(''), [magnetOpen, setMagnetOpen] = useState(false), [magnet, setMagnet] = useState(''), [magnetTitle, setMagnetTitle] = useState('');
   const [seasonDownload, setSeasonDownload] = useState<SeasonDownload | null>(null), [seasonNotice, setSeasonNotice] = useState(''), [addedSeason, setAddedSeason] = useState('');
   const catalogLabel = kind === 'movie' ? 'Movies' : kind === 'anime' ? 'Anime' : 'Series';
   const searchRun = useRef(0), mounted = useRef(true);
