@@ -27,7 +27,8 @@ let updateRequest;
 function persist() { const contents = JSON.stringify(state); writeQueue = writeQueue.catch(() => {}).then(async () => { await fs.writeFile(storage + '.tmp', contents); await fs.rename(storage + '.tmp', storage); }); return writeQueue; }
 async function offerUpdate() {
   if (state.checkForUpdates !== true || updateRequest) return;
-  const request = updateRequest = new AbortController();
+  const request = new AbortController();
+  updateRequest = request;
   try {
     const signal = AbortSignal.any([request.signal, AbortSignal.timeout(10000)]);
     const release = await findUpdate(app.getVersion(), (url, options) => net.fetch(url, options), signal);
@@ -163,9 +164,14 @@ app.whenReady().then(async () => {
     const file = url.hostname === 'app' && files[url.pathname];
     return file ? net.fetch(pathToFileURL(path.join(__dirname, file === 'index.html' ? '../../../apps/desktop' : '../../browser-ui', file)).href) : new Response('Not found', { status: 404 });
   });
+  let checkOnStartup = state.checkForUpdates === true;
   win = new BrowserWindow({ width: 1440, height: 940, minWidth: 900, minHeight: 640, backgroundColor: '#0a0a0b', title: 'Matro', icon: path.join(__dirname, '../../../assets/icon.png'), frame: false, show: false, webPreferences: { preload: path.join(__dirname, '../../../apps/desktop/preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false } });
   // Open maximized, shown only once the first frame is ready so the window never flashes at its default size.
-  win.once('ready-to-show', () => { win.maximize(); win.show(); void offerUpdate(); });
+  win.once('ready-to-show', () => {
+    win.maximize();
+    win.show();
+    if (checkOnStartup) void offerUpdate();
+  });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
   // Page zoom: Ctrl + / Ctrl = zoom in (the default menu only binds Ctrl+Shift+=), Ctrl - out, Ctrl 0 reset.
@@ -190,12 +196,19 @@ app.whenReady().then(async () => {
     if (typeof enabled !== 'boolean') throw new Error('Invalid update setting.');
     const previous = state.checkForUpdates === true;
     if (enabled === previous) return enabled;
+    // The renderer can become interactive before ready-to-show fires.
+    checkOnStartup = false;
     state.checkForUpdates = enabled;
     if (!enabled) {
       updateRequest?.abort();
       updateRequest = null;
     }
-    try { await persist(); } catch (error) { state.checkForUpdates = previous; throw error; }
+    try {
+      await persist();
+    } catch (error) {
+      state.checkForUpdates = previous;
+      throw error;
+    }
     if (enabled) void offerUpdate();
     return enabled;
   });
