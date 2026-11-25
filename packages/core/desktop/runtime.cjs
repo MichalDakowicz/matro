@@ -150,8 +150,9 @@ app.whenReady().then(async () => {
   for (const config of state.sshConnections || []) {
     try { remote.register(config); } catch { /* Leave cached titles available if a saved configuration is invalid. */ }
   }
-  if (state.libraryVersion !== 2) await rescan();
   syncFolderWatcher();
+  const catchUp = state.libraryVersion === 2;
+  if (!catchUp) await rescan();
   streams = await createStreamServer({ dir: path.join(app.getPath('userData'), 'playback') });
   protocol.handle('matro', request => {
     const url = new URL(request.url);
@@ -331,6 +332,10 @@ app.whenReady().then(async () => {
   torrents.start();
   scanner.refresh();
   void refreshMetadata();
+  if (catchUp) {
+    const localRoots = state.folders.filter(root => !remote.isRemote(root));
+    if (localRoots.length) void rescan(localRoots, true).then(publishDownloads).catch(() => {});
+  }
 });
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => { folderWatcher.close(); torrents?.close(); streams?.close(); previews.close(); scanner?.close(); remote.close(); });

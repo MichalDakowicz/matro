@@ -792,10 +792,11 @@ test('finished files enter watched folders without Rescan and pending files stay
   await fs.mkdir(pending, { recursive: true });
   await fs.mkdir(profile);
   await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, folders: [media] }));
+  await fs.copyFile(f.mkv, path.join(media, 'Finished While Closed.mkv'));
   const app = await electron.launch(launchOptions(profile));
   try {
     const page = await app.firstWindow();
-    await expect(page.getByRole('heading', { name: 'Your collection. Your kind of player.' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open Finished While Closed', exact: true })).toBeVisible();
     await fs.copyFile(f.mkv, path.join(pending, 'Watched Folder Movie.mkv'));
     await fs.copyFile(f.mkv, path.join(media, 'Other Movie.mkv'));
     await expect(page.getByRole('button', { name: 'Open Other Movie', exact: true })).toBeVisible();
