@@ -1,5 +1,5 @@
 import { forwardRef, type ReactNode } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fonts } from './theme';
 
@@ -7,7 +7,7 @@ import { colors, fonts } from './theme';
 export function Page({ kicker, title, lede, children }: { kicker: string; title: string; lede: string; children: ReactNode }) {
   const insets = useSafeAreaInsets();
   return (
-    <KeyboardAvoidingView style={s.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={s.fill} behavior="padding">
       <ScrollView
         contentContainerStyle={[s.page, { paddingTop: insets.top + 56, paddingBottom: insets.bottom + 32 }]}
         keyboardShouldPersistTaps="handled"
@@ -33,6 +33,15 @@ export function PrimaryPill({ label, onPress, busy }: { label: string; onPress: 
   );
 }
 
+/** Outlined pill for the second-best action on a page, so the primary pill stays the only filled control. */
+export function SecondaryPill({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [s.secondary, pressed && s.pressed]} accessibilityRole="button">
+      <Text style={s.secondaryText}>{label}</Text>
+    </Pressable>
+  );
+}
+
 export function TextButton({ label, onPress }: { label: string; onPress: () => void }) {
   return (
     <Pressable onPress={onPress} hitSlop={8} accessibilityRole="button" style={s.textButton}>
@@ -41,7 +50,12 @@ export function TextButton({ label, onPress }: { label: string; onPress: () => v
   );
 }
 
-export const ErrorLine = ({ text }: { text: string }) => (text ? <Text style={s.error} accessibilityRole="alert">{text}</Text> : null);
+/** What went wrong, plus (optionally) what to try next. */
+export const ErrorLine = ({ text, hint }: { text: string; hint?: string }) => text
+  ? <View style={hint ? s.errorCard : undefined} accessibilityRole="alert" accessible accessibilityLabel={hint ? `${text} ${hint}` : text}>
+    <Text style={s.error}>{text}</Text>
+    {hint ? <Text style={s.hint}>{hint}</Text> : null}
+  </View> : null;
 
 const s = StyleSheet.create({
   fill: { flex: 1, backgroundColor: colors.ground },
@@ -58,7 +72,11 @@ const s = StyleSheet.create({
   pillText: { fontFamily: fonts.medium, fontSize: 15, color: colors.onPrimary },
   pressed: { opacity: 0.85, transform: [{ scale: 0.985 }] },
   busy: { opacity: 0.6 },
-  textButton: { alignSelf: 'flex-start', paddingVertical: 8, paddingHorizontal: 4 },
+  textButton: { alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', paddingHorizontal: 4 },
   textButtonText: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted },
   error: { fontFamily: fonts.regular, fontSize: 13.5, color: colors.warn, paddingHorizontal: 6 },
+  errorCard: { gap: 4, paddingVertical: 12, paddingHorizontal: 10, borderRadius: 16, borderWidth: 1, borderColor: colors.fieldBorder, backgroundColor: colors.panel },
+  hint: { fontFamily: fonts.regular, fontSize: 13, lineHeight: 19, color: colors.muted, paddingHorizontal: 6 },
+  secondary: { height: 52, borderRadius: 999, borderWidth: 1, borderColor: colors.fieldBorder, alignItems: 'center', justifyContent: 'center' },
+  secondaryText: { fontFamily: fonts.medium, fontSize: 15, color: colors.text },
 });
