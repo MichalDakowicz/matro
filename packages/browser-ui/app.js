@@ -855,10 +855,11 @@ async function adoptStream(ready, token) {
 function renderPlayer(adopt = null) {
   document.body.classList.add('in-player');
   const heading = current.kind === 'show' ? `${displayName(current)} · ${code(current)}` : itemMeta(current);
-  root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
+  root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div id="subtitle-overlay" class="subtitle-overlay"><div id="subtitle-caption" class="subtitle-caption"></div></div><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
   if (adopt) { $('#video').replaceWith(adopt); adopt.id = 'video'; adopt.dataset.preloaded = String(adopt.readyState); }
   video = $('#video'); applyVolume(library.preferences.volume); updateVolume(); applySubStyle();
   const player = video, events = playerEvents = new AbortController();
+  setupSubtitleOverlay(events.signal);
   let recoveryTimer, recoveryAttempts = 0;
   const recover = () => {
     clearTimeout(recoveryTimer);
@@ -1089,18 +1090,18 @@ function renderTracks() {
     <div class="track-bottom"><div class="delay-controls"><span>Sub delay</span><button class="icon-button" data-action="delay-down" aria-label="Subtitles earlier by 0.1 seconds">−</button><output>${delay > 0 ? '+' : ''}${delay.toFixed(1)} s</output><button class="icon-button" data-action="delay-up" aria-label="Subtitles later by 0.1 seconds">+</button></div>
     <button class="text-button" data-action="subtitle-file">Load subtitle file…</button></div>
     ${subStylePanel(bitmap)}
-    ${bitmap ? '<p class="bitmap-note">Bitmap subtitles keep their original appearance. Track or delay changes briefly reload playback.</p>' : ''}
+    ${bitmap ? '<p class="bitmap-note">Bitmap subtitles are part of the picture. Track or delay changes briefly reload playback.</p>' : ''}
     ${info.chapters.length ? `<div class="player-chapters">${info.chapters.map((c, index) => `<button class="chapter-button" data-chapter="${index}">${esc(c.title)} · ${fmt(c.start)}</button>`).join('')}</div>` : ''}</section>`;
 }
 // Subtitle look is one global preference: size (50–200%), font, background box, weight/slant and an edge effect.
-// It is applied through CSS variables that video::cue reads, so restyling never reloads the track.
+// The caption overlay reads these CSS variables, so restyling never reloads the track.
 const SUB_FONTS = [['sans', 'Sans', "Geist, 'Segoe UI', system-ui, sans-serif"], ['classic', 'Classic', 'Arial, Helvetica, sans-serif'], ['serif', 'Serif', "Georgia, 'Times New Roman', serif"], ['mono', 'Mono', "'Geist Mono', Consolas, monospace"], ['casual', 'Casual', "'Comic Sans MS', 'Segoe Print', cursive"]];
 const SUB_BACKGROUNDS = [['none', 'Off', 0], ['light', 'Light', .45], ['dark', 'Dark', .75], ['solid', 'Solid', 1]];
 const SUB_EDGES = [['none', 'None', 'none'], ['outline', 'Outline', '-1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000, 0 0 3px #000'], ['shadow', 'Shadow', '2px 2px 4px #000, 0 0 8px #000c']];
 const subStyle = () => ({ size: 1, font: 'sans', background: 'light', bold: false, italic: false, edge: 'none', ...library.preferences.subtitles });
 function applySubStyle() {
   if (!video) return; const style = subStyle();
-  const set = (name, value) => video.style.setProperty(name, value);
+  const set = (name, value) => $('.stage').style.setProperty(name, value);
   set('--cue-scale', String(style.size)); set('--cue-font', SUB_FONTS.find(([id]) => id === style.font)?.[2] || SUB_FONTS[0][2]);
   set('--cue-bg', `rgb(0 0 0 / ${SUB_BACKGROUNDS.find(([id]) => id === style.background)?.[2] ?? .45})`);
   set('--cue-weight', style.bold ? '700' : '400'); set('--cue-style', style.italic ? 'italic' : 'normal'); set('--cue-shadow', SUB_EDGES.find(([id]) => id === style.edge)?.[2] || 'none');
@@ -1112,18 +1113,75 @@ function subStylePanel(bitmap) {
   const row = (label, body) => `<div class="sub-style-row"><span>${label}</span>${body}</div>`;
   return `<div class="sub-style">${row('Size', `<input id="sub-size" class="volume" type="range" min=".5" max="2" step=".05" value="${style.size}" aria-label="Subtitle size" ${off}><output>${Math.round(style.size * 100)}%</output>`)}
     ${row('Font', chips('Subtitle font', 'font', SUB_FONTS))}${row('Background', chips('Subtitle background', 'background', SUB_BACKGROUNDS))}
-    ${row('Style', `<div class="size-options" role="group" aria-label="Subtitle text style">${[['bold', 'Bold'], ['italic', 'Italic']].map(([key, name]) => `<button class="${style[key] ? 'selected' : ''}" data-sub-style="${key}:on" aria-pressed="${style[key]}" ${off}>${name}</button>`).join('')}</div>${chips('Subtitle edge', 'edge', SUB_EDGES)}`)}</div>`;
+    ${row('Style', `<div class="size-options" role="group" aria-label="Subtitle text style">${[['bold', 'Bold'], ['italic', 'Italic']].map(([key, name]) => `<button class="${style[key] ? 'selected' : ''}" data-sub-style="${key}:on" aria-pressed="${style[key]}" ${off}>${name}</button>`).join('')}</div>${chips('Subtitle edge', 'edge', SUB_EDGES)}`)}
+    ${row('Position', `<div class="size-options" role="group" aria-label="Subtitle position presets">${Object.keys(SUBTITLE_PRESETS).map(name => `<button data-sub-position="${name}" aria-pressed="${atSubtitlePreset(name)}" ${off}>${name}</button>`).join('')}</div><button class="text-button" data-sub-position="Reset" ${off}>Reset position</button>`)}
+    ${row('Horizontal', subtitlePositionSlider('x', 'Horizontal subtitle position', off))}
+    ${row('Vertical', subtitlePositionSlider('y', 'Vertical subtitle position', off))}</div>`;
+}
+const SUBTITLE_PRESETS = { Bottom: { x: 50, y: 100 }, Top: { x: 50, y: 0 } };
+const SUBTITLE_POSITION_KEY = 'matro.subtitlePosition';
+const validSubtitleAxis = (value, fallback) => Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : fallback;
+let subtitlePosition = SUBTITLE_PRESETS.Bottom;
+try {
+  const saved = JSON.parse(localStorage.getItem(SUBTITLE_POSITION_KEY));
+  if (saved) subtitlePosition = { x: validSubtitleAxis(saved.x, 50), y: validSubtitleAxis(saved.y, 100) };
+} catch {}
+function atSubtitlePreset(name) {
+  const preset = SUBTITLE_PRESETS[name];
+  return subtitlePosition.x === preset.x && subtitlePosition.y === preset.y;
+}
+function subtitlePositionSlider(axis, label, disabled) {
+  return `<input class="volume" type="range" min="0" max="100" value="${subtitlePosition[axis]}" style="--fill:${subtitlePosition[axis]}%" data-sub-position-axis="${axis}" aria-label="${label}" ${disabled}>`;
+}
+function applySubtitlePosition() {
+  const overlay = $('#subtitle-overlay');
+  overlay.style.setProperty('--caption-x', `${subtitlePosition.x}%`);
+  overlay.style.setProperty('--caption-y', `${subtitlePosition.y}%`);
+}
+function setSubtitlePosition(position) {
+  subtitlePosition = position;
+  applySubtitlePosition();
+  try { localStorage.setItem(SUBTITLE_POSITION_KEY, JSON.stringify(position)); } catch {}
+  document.querySelectorAll('[data-sub-position-axis]').forEach(input => { input.value = position[input.dataset.subPositionAxis]; fillRange(input); });
+  document.querySelectorAll('.size-options [data-sub-position]').forEach(button => button.setAttribute('aria-pressed', String(atSubtitlePreset(button.dataset.subPosition))));
+}
+function setupSubtitleOverlay(signal) {
+  const stage = $('.stage'), heading = $('.player-top'), timeline = $('.timeline'), segmentTools = $('#segment-tools');
+  const updateBounds = () => {
+    const { top, bottom, height } = stage.getBoundingClientRect();
+    const headerEnd = Math.max(...Array.from(heading.children, child => child.getBoundingClientRect().bottom));
+    const segmentHeight = segmentTools.offsetHeight;
+    const aboveTimeline = bottom - timeline.getBoundingClientRect().top + 8;
+    const aboveSegment = segmentHeight ? parseFloat(getComputedStyle(segmentTools).bottom) + segmentHeight + 8 : 0;
+    const topInset = Math.min(Math.max(12, headerEnd - top + 8), height / 2);
+    stage.style.setProperty('--caption-top', `${topInset}px`);
+    stage.style.setProperty('--caption-bottom', `${Math.max(12, Math.min(height - topInset, Math.max(aboveTimeline, aboveSegment)))}px`);
+  };
+  const observer = new ResizeObserver(updateBounds);
+  for (const element of [stage, timeline, segmentTools, ...heading.children]) observer.observe(element);
+  signal.addEventListener('abort', () => observer.disconnect(), { once: true });
+  applySubtitlePosition();
+  updateBounds();
 }
 document.addEventListener('input', event => {
+  const axis = event.target.dataset.subPositionAxis;
+  if (axis) { setSubtitlePosition({ ...subtitlePosition, [axis]: Number(event.target.value) }); return; }
   if (event.target.id !== 'sub-size') return;
   const size = Number(event.target.value); event.target.nextElementSibling.textContent = `${Math.round(size * 100)}%`; fillRange(event.target); setSubStyle({ size }, false);
 });
-// Chromium keeps drawing the cues that were active when a track element is removed, and nothing ever ends them, so each
-// skip would leave its line stuck on screen. Empty and disable the old track first.
 function dropSubtitleTrack() {
   const old = $('#subtitle-track'), textTrack = old?.track;
   if (textTrack) { for (const cue of [...(textTrack.cues || [])]) textTrack.removeCue(cue); textTrack.mode = 'disabled'; }
   old?.remove();
+  $('#subtitle-caption')?.replaceChildren();
+}
+function renderSubtitleCaption(track) {
+  const caption = $('#subtitle-caption');
+  if (!caption) return;
+  caption.replaceChildren(...Array.from(track.activeCues || [], cue => {
+    const line = document.createElement('div'), text = document.createElement('span');
+    text.append(cue.getCueAsHTML()); line.append(text); return line;
+  }));
 }
 function applySubtitle() {
   dropSubtitleTrack(); if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); subtitleUrl = null; trackCues = []; cueTrack = null;
@@ -1131,8 +1189,15 @@ function applySubtitle() {
   subtitleUrl = URL.createObjectURL(new Blob([subtitleText], { type: 'text/vtt' }));
   const track = document.createElement('track'); track.id = 'subtitle-track'; track.kind = 'subtitles'; track.label = 'Selected subtitles'; track.src = subtitleUrl; track.default = true;
   // A track replaced by a quicker seek may still finish loading; only the current one may take over the cues.
-  track.addEventListener('load', () => { if (!track.isConnected) return; track.track.mode = 'showing'; cueTrack = track.track; trackCues = [...cueTrack.cues].map(cue => { cue.line = -5; return { cue, start: cue.startTime, end: cue.endTime }; }); adjustCues(); });
+  track.track.addEventListener('cuechange', () => { if (track.isConnected) renderSubtitleCaption(track.track); });
+  track.addEventListener('load', () => {
+    if (!track.isConnected) return;
+    track.track.mode = 'hidden'; cueTrack = track.track;
+    trackCues = [...cueTrack.cues].map(cue => ({ cue, start: cue.startTime, end: cue.endTime }));
+    adjustCues(); renderSubtitleCaption(cueTrack);
+  });
   video.append(track);
+  track.track.mode = 'hidden';
 }
 // Cue times are relative to the current stream, which starts at `offset`. Every timing change (a new stream after a seek
 // or skip, or a delay change) rebuilds the track's cue list: lines that ended before the stream start are left off, so
@@ -1327,13 +1392,14 @@ document.addEventListener('click', event => {
     if (btn.dataset.removeQueue) { library.queue = library.queue.filter(id => id !== btn.dataset.removeQueue); await save(); renderQueue(); return; }
     if (btn.dataset.audio) { const position = offset + video.currentTime, playing = playIntent; audio = Number(btn.dataset.audio); rememberTracks(); updateMetadata(); renderTracks(); const token = ++generation; await loadStream(position, playing, token); return; }
     if (btn.dataset.subtitle) return pickSubtitle(btn.dataset.subtitle);
+    if (btn.dataset.subPosition) { setSubtitlePosition(SUBTITLE_PRESETS[btn.dataset.subPosition] || SUBTITLE_PRESETS.Bottom); return; }
     if (btn.dataset.subStyle) { const [key, value] = btn.dataset.subStyle.split(':'); const style = subStyle(); setSubStyle({ [key]: ['bold', 'italic'].includes(key) ? !style[key] : value }); return; }
     if (btn.dataset.chapter !== undefined) return seek(info.chapters[Number(btn.dataset.chapter)].start);
     const action = actions[btn.dataset.action]; if (action) { btn.classList.add('busy'); try { await action(); } finally { btn.classList.remove('busy'); } }
   });
 });
 document.addEventListener('keydown', event => {
-  const typing = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) && event.target.type !== 'range';
+  const typing = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) && (event.target.type !== 'range' || event.target.dataset.subPositionAxis);
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); void attempt(actions.files); return; }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && view === 'library') { event.preventDefault(); if (tab !== 'search') goTab('search'); $('#search')?.focus(); return; }
   if (event.key === 'Escape') { if ($('#shortcuts').open || $('#match-dialog')?.open || $('#ssh-dialog').open) return; if (footerOpen && view === 'library') { actions.about(); return; } if (fullscreenActive) { void api.window('fullscreen'); return; } if (selected) closeDetail(); else if (sidePanel) { sidePanel = null; renderTracks(); } else if (view === 'player') void attempt(backToLibrary); return; }

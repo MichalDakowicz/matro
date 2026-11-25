@@ -387,11 +387,31 @@ test('Vite production UI signs in, plays through the HTTP adapter and saves prog
     // Pausing the decoder must not stop downloading the rest of the movie.
     await expect(page.locator('video')).toHaveAttribute('data-buffer-complete', 'true');
     expect(await page.locator('video').evaluate(v => v.src.startsWith('blob:'))).toBe(true);
+    await page.setViewportSize({ width: 375, height: 800 });
+    await page.evaluate(() => window.matroTheme.set('light'));
+    await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
+    const subtitle = page.locator('[data-subtitle="3"]');
+    await subtitle.click();
+    await expect(subtitle).toHaveAttribute('aria-pressed', 'true');
     await page.locator('#seek').evaluate(el => { el.value = '6'; el.dispatchEvent(new Event('change', { bubbles: true })); });
-    await expect(page.locator('#position')).toHaveText('0:06');
-    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    await expect(page.locator('#subtitle-caption')).toHaveText('Subtitles after a seek.');
+    await expect.poll(() => page.locator('video').evaluate(v => v.paused)).toBe(true);
+    const at = await page.locator('#position').textContent();
+    const y = page.getByRole('slider', { name: 'Vertical subtitle position' });
+    await y.press('Home');
+    await y.press('ArrowRight');
+    await expect(y).toHaveValue('1');
+    await expect(page.locator('#position')).toHaveText(at);
+    await expect(page.locator('#subtitle-caption')).toHaveText('Subtitles after a seek.');
+    await page.getByRole('button', { name: 'Close audio and subtitles' }).click();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('video')).toHaveCount(0);
     const saved = await page.evaluate(async () => (await (await fetch('/api/library')).json()).progress);
     expect(Object.values(saved).some(p => p.position >= 5.9)).toBe(true);
+    await page.reload();
+    await page.getByRole('button', { name: 'Resume watching', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
+    await expect(y).toHaveValue('1');
     expect(errors).toEqual([]);
   } finally {
     await browser?.close(); app.downloads.close(); app.closePlayback();
