@@ -1,4 +1,5 @@
 const { HttpError } = require('./http');
+const { tx } = require('./db');
 
 const USERNAME = /^[A-Za-z0-9][A-Za-z0-9._-]{1,31}$/;
 function validateCredentials(username, password) {
@@ -22,7 +23,13 @@ function createUsers(db, auth) {
     count: () => count.get().n,
     byName: name => byName.get(String(name)),
     async create(username, password, role) { return insertHash(username, await auth.hashPassword(password), role); },
-    async setPassword(userId, password) { setHash.run(await auth.hashPassword(password), userId); auth.destroyAll(userId); }
+    async setPassword(userId, password) {
+      const hash = await auth.hashPassword(password);
+      tx(db, () => {
+        setHash.run(hash, userId);
+        auth.destroyAll(userId);
+      });
+    }
   };
 }
 module.exports = { USERNAME, validateCredentials, createUsers };

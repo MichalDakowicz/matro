@@ -11,6 +11,7 @@ const mediaDir = path.join(root, 'media'), dataDir = path.join(root, 'data');
 process.env.MATRO_MEDIA = mediaDir;
 const { ffmpeg } = require('../../../packages/core/server/config');
 const { createApp } = require('../../../packages/core/server');
+const { sessionHash } = require('../../../packages/core/server/auth');
 
 let base, close, database, app;
 const jar = {};
@@ -452,13 +453,18 @@ test('invite codes work once, expire, can be revoked, and are never stored in th
 test('changing a password signs other devices out and hands the native app its replacement session', async () => {
   assert.equal((await join('pat', 'patricia', 'first-pass-1')).status, 200);
   const native = { 'x-matro-client': 'native' }, login = async password => (await call(null, 'POST', '/api/login', { username: 'patricia', password }, native)).data.token;
-  const old = await login('first-pass-1'), bearer = token => ({ authorization: `Bearer ${token}` });
+  const old = await login('first-pass-1'), other = await login('first-pass-1'), bearer = token => ({ authorization: `Bearer ${token}` });
   assert.equal((await call(null, 'POST', '/api/me/password', { current: 'wrong-pass-9', password: 'second-pass-2' }, { ...native, ...bearer(old) })).status, 403);
   const changed = await call(null, 'POST', '/api/me/password', { current: 'first-pass-1', password: 'second-pass-2' }, { ...native, ...bearer(old) });
   assert.equal(changed.status, 200);
   assert.ok(changed.data.token && changed.data.token !== old, 'the native app gets a new bearer session');
   assert.equal((await call(null, 'GET', '/api/me', undefined, bearer(old))).status, 401, 'the old session is gone');
+  assert.equal((await call(null, 'GET', '/api/me', undefined, bearer(other))).status, 401, 'the other device is signed out');
   assert.equal((await call(null, 'GET', '/api/me', undefined, bearer(changed.data.token))).status, 200);
+  const session = database.prepare('SELECT token_hash FROM sessions WHERE token_hash = ?');
+  assert.equal(session.get(sessionHash(old)), undefined);
+  assert.equal(session.get(sessionHash(other)), undefined);
+  assert.equal(session.get(sessionHash(changed.data.token)).token_hash, sessionHash(changed.data.token));
   const web = await call('pat', 'POST', '/api/login', { username: 'patricia', password: 'second-pass-2' });
   assert.equal((await call('pat', 'POST', '/api/me/password', { current: 'second-pass-2', password: 'third-pass-3' })).data?.token, undefined, 'web clients keep the cookie only');
   assert.equal(web.status, 200);

@@ -243,7 +243,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       onResume={id => { const item = data.items.find(item => item.id === id); if (item) save(item); }}
       onRemoved={() => { if (offline) void load(); }} /></View>
     : tab === 'movie-requests' && !offline && data.movieRequestsEnabled ? top(<MovieRequestsScreen key={alerts.opened} base={base} admin={data.user.role === 'admin'} alerts={alerts} onSearch={request => { push('downloads'); setRequestSearch(request); }} />)
-    : tab === 'account' && !offline ? <AccountScreen base={base} data={data} layout={layout} admin={admin} notify={notify} />
+    : tab === 'account' && !offline ? <AccountScreen onPasswordChanged={async () => setHeaders(await mediaHeaders(base))} base={base} data={data} layout={layout} admin={admin} notify={notify} />
     : tab === 'downloads' && admin ? top(<DownloadsScreen {...art} initialRequest={requestSearch} />)
     : tab === 'folders' && !offline ? top(<FoldersScreen base={base} data={data} header={chips} onRefresh={load} onBrowse={path => push('home', path)} />)
     : tab === 'search' ? <SearchView {...common} data={data} groups={allGroups} />

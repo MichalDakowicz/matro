@@ -6,12 +6,12 @@ import { colors, fonts } from '../theme';
 import { Field } from '../ui';
 import { Pill, Row, SectionLabel, Sheet, styles as t } from '../components/Matro';
 
-type Props = { base: string; data: Library; layout: { top: number; bottom: number }; admin: boolean; notify: (text: string) => void };
+type Props = { base: string; data: Library; layout: { top: number; bottom: number }; admin: boolean; onPasswordChanged: () => Promise<void>; notify: (text: string) => void };
 const day = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 const failure = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback;
 
 /** Mirrors the web profile: everyone can change their password; the head account also sees the people on the server and their invite codes. */
-export default function AccountScreen({ base, data, layout, admin, notify }: Props) {
+export default function AccountScreen({ base, data, layout, admin, onPasswordChanged, notify }: Props) {
   const [current, setCurrent] = useState(''), [fresh, setFresh] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [people, setPeople] = useState<Person[]>([]), [invites, setInvites] = useState<Invite[]>([]), [loadError, setLoadError] = useState('');
   const [resetFor, setResetFor] = useState<Person | null>(null), [reset, setReset] = useState(''), [code, setCode] = useState<{ code: string; expires: number } | null>(null);
@@ -26,7 +26,7 @@ export default function AccountScreen({ base, data, layout, admin, notify }: Pro
 
   const savePassword = async () => {
     setBusy(true); setError('');
-    try { await changePassword(base, current, fresh); setCurrent(''); setFresh(''); notify('Password changed. Other devices were signed out.'); }
+    try { await changePassword(base, current, fresh); await onPasswordChanged(); setCurrent(''); setFresh(''); notify('Password changed. Other devices were signed out.'); }
     catch (e) { setError(failure(e, 'Couldn’t change the password.')); }
     finally { setBusy(false); }
   };
@@ -58,8 +58,8 @@ export default function AccountScreen({ base, data, layout, admin, notify }: Pro
           <Text style={t.dim}>{person.role === 'admin' ? 'Head account' : `Viewer${person.lastWatched ? ` · last watched ${day(person.lastWatched)}` : ''} · ${person.subtitles} subtitle file${person.subtitles === 1 ? '' : 's'} added`}</Text>
         </View>
         {person.role !== 'admin' && <View style={s.actions}>
-          <Pill label="Reset password" compact onPress={() => { setReset(''); setResetFor(person); }} />
-          <Pill label="Remove" compact onPress={() => confirmRemove(person)} />
+          <Pill label="Reset password" accessibilityLabel={`Reset password for ${person.username}`} compact onPress={() => { setReset(''); setResetFor(person); }} />
+          <Pill label="Remove" accessibilityLabel={`Remove ${person.username}`} compact onPress={() => confirmRemove(person)} />
         </View>}
       </View>)}</View>
 
@@ -77,8 +77,8 @@ export default function AccountScreen({ base, data, layout, admin, notify }: Pro
 
     <Sheet visible={!!resetFor} onClose={() => setResetFor(null)} title={`Reset password for ${resetFor?.username || ''}`}>
       <Text style={t.muted}>They are signed out everywhere. Give them the new password.</Text>
-      <Field accessibilityLabel="New password" placeholder="New password (8 or more characters)" autoCapitalize="none" autoCorrect={false} value={reset} onChangeText={setReset} style={{ marginTop: 12 }} />
-      <Pill label="Set password" primary disabled={reset.length < 8} style={{ marginTop: 14 }} onPress={() => void act(async () => {
+      <Field accessibilityLabel={`New password for ${resetFor?.username || 'this account'}`} placeholder="New password (8 or more characters)" autoCapitalize="none" autoCorrect={false} value={reset} onChangeText={setReset} style={{ marginTop: 12 }} />
+      <Pill label="Set password" accessibilityLabel={`Set password for ${resetFor?.username || 'this account'}`} primary disabled={reset.length < 8} style={{ marginTop: 14 }} onPress={() => void act(async () => {
         if (!resetFor) return;
         await resetPassword(base, resetFor.id, reset); setResetFor(null); notify(`${resetFor.username} was signed out everywhere. Give them the new password.`);
       }, 'Couldn’t reset the password.')} />
