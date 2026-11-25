@@ -3,13 +3,14 @@ const path = require('node:path');
 const { movieEditions } = require('./movie-editions');
 const { VIDEO, idFor, describe, walk, locateTitles, groupVideos } = require('../media-scan.cjs');
 
-async function scan(root, exclude) {
+async function scan(root, exclude, knownShows) {
   root = path.resolve(root);
   const walked = await walk(fs, root, VIDEO);
   const excluded = await exclude?.(root);
   const files = excluded ? walked.filter(file => !excluded.has(file)) : walked;
-  const entries = locateTitles(root, files).map(entry => ({ ...entry, root }));
-  const groups = groupVideos(entries), editions = movieEditions(entries, groups);
+  const wasShow = folder => knownShows?.has(idFor(`dir:${folder}`));
+  const entries = locateTitles(root, files, wasShow).map(entry => ({ ...entry, root }));
+  const groups = groupVideos(entries, wasShow), editions = movieEditions(entries, groups);
   return files.map(file => {
     const { groupKey, group, ...row } = groups.get(file);
     const edition = editions.get(file);

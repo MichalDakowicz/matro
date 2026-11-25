@@ -79,6 +79,13 @@ function open(file) {
         db.exec("UPDATE items SET probe = NULL, duration = NULL WHERE json_extract(CASE WHEN json_valid(probe) THEN probe END, '$.broken') = 1");
       }
     }
+    // Earlier builds included the device and change time in the fingerprint.
+    const previousFingerprints = db.prepare("SELECT id, fingerprint FROM items WHERE fingerprint GLOB '*:*:*:*:*'").all();
+    const setFingerprint = db.prepare('UPDATE items SET fingerprint = ? WHERE id = ?');
+    for (const { id, fingerprint } of previousFingerprints) {
+      const [, inode, size, mtime] = fingerprint.split(':');
+      setFingerprint.run([size, mtime, inode === '0' ? '' : inode].join(':'), id);
+    }
     // Removed catalog rows keep their IDs so uploaded subtitles stay linked.
     db.exec(`CREATE VIEW IF NOT EXISTS active_folders AS SELECT * FROM folders WHERE removed = 0;
       CREATE VIEW IF NOT EXISTS active_items AS SELECT * FROM items WHERE removed = 0;`);

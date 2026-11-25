@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { setTimeout: delay } = require('node:timers/promises');
 const { DatabaseSync } = require('node:sqlite');
 const { test } = require('node:test');
 const { open } = require('../../../packages/core/server/db');
@@ -144,6 +145,81 @@ test('a probe of a replaced file cannot overwrite its new metadata', async t => 
   oldProbe.resolve({ duration: 10 });
   await stale;
   assert.equal(library.item(id).duration, 20);
+});
+
+test('an existing unnumbered show keeps its group ID through a server rescan', async t => {
+  const root = await temporaryDirectory(t);
+  const show = path.join(root, 'Existing Show');
+  await fs.mkdir(show);
+  const paths = ['Pilot.mkv', 'Finale.mkv'].map(name => path.join(show, name));
+  await Promise.all(paths.map(file => fs.writeFile(file, '')));
+  const db = open(':memory:');
+  t.after(() => db.close());
+  db.prepare('INSERT INTO folders (id, path, added) VALUES (1, ?, 1)').run(show);
+  const groupId = idFor('dir:' + show);
+  const insert = db.prepare(`INSERT INTO items (id, folder_id, path, title, group_id, group_title, kind, size, mtime, added)
+    VALUES (?, 1, ?, 'Old title', ?, 'Existing Show', 'show', 0, 0, 1)`);
+  for (const file of paths) insert.run(idFor(file), file, groupId);
+  const library = createLibrary(db, { autoProbe: false });
+  assert.equal((await library.rescan(1)).ok, true);
+  for (const file of paths) {
+    const row = library.item(idFor(file));
+    assert.equal(row.group_id, groupId);
+    assert.equal(row.kind, 'show');
+  }
+});
+
+test('background probing wakes at the earliest retry without another scan', { timeout: 5000 }, async t => {
+  const root = await temporaryDirectory(t);
+  const first = path.join(root, 'First.mkv'), next = path.join(root, 'Next.mkv');
+  await Promise.all([fs.writeFile(first, ''), fs.writeFile(next, '')]);
+  const db = open(':memory:');
+  t.after(() => db.close());
+  const tried = [];
+  const library = createLibrary(db, { autoProbe: false, probeFile: async file => {
+    tried.push(file);
+    return { duration: 20 };
+  } });
+  await library.addFolder(root);
+  const postpone = db.prepare('UPDATE items SET retry_probe_after = ? WHERE id = ?');
+  const start = Date.now();
+  postpone.run(start + 80, idFor(first));
+  postpone.run(start + 200, idFor(next));
+  library.probeSoon();
+  assert.deepEqual(tried, []);
+  while (!library.item(idFor(next)).probe) await delay(20);
+  assert.deepEqual(tried, [first, next]);
+});
+
+test('device and change time changes preserve an existing probe', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-library-'));
+  const file = path.join(root, 'Film.mkv'), id = idFor(file);
+  await fs.writeFile(file, 'film');
+  const catalog = path.join(root, 'matro.db');
+  let db = open(catalog);
+  // Windows cannot delete the catalog while it is open, and the directory hook runs first.
+  t.after(() => { try { db.close(); } catch { /* already closed */ } return fs.rm(root, { recursive: true, force: true }); });
+  const fileStat = await fs.stat(file, { bigint: true });
+  const legacy = [fileStat.dev, fileStat.ino, fileStat.size, fileStat.mtimeNs, fileStat.ctimeNs].join(':');
+  let attempts = 0;
+  const probeFile = async () => { attempts++; return { duration: 20 }; };
+  let library = createLibrary(db, { autoProbe: false, probeFile });
+  const folder = await library.addFolder(root);
+  await library.info(library.item(id));
+  db.prepare('UPDATE items SET fingerprint = ? WHERE id = ?').run(legacy, id);
+  db.close();
+  db = open(catalog);
+  library = createLibrary(db, { autoProbe: false, probeFile });
+
+  const stat = fs.stat;
+  t.mock.method(fs, 'stat', async (target, options) => {
+    const result = await stat(target, options);
+    if (target === file && options?.bigint) { result.dev += 1n; result.ctimeNs += 1n; }
+    return result;
+  });
+  assert.equal((await library.rescan(folder.id)).ok, true);
+  assert.equal((await library.info(library.item(id))).duration, 20);
+  assert.equal(attempts, 1);
 });
 
 test('probes back off after errors and recover after repeated failures', async t => {
