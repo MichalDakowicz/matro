@@ -3,8 +3,8 @@ const config = require('./config');
 const { createPlaybackCache } = require('../playback/cache.cjs');
 function createStreams({ dataDir = config.dataDir } = {}) {
   const cache = createPlaybackCache({ ffmpeg: config.ffmpeg, dir: path.join(dataDir, 'playback'), maxJobs: config.maxTranscodes, ownerTtlMs: 300000 });
-  const transcode = async (req, res, { session, preload = false, file, info, offset, audio, burn, delay = 0, quality = null }) => {
-    await cache.serve(req, res, { file, input: file, info, offset, audio, burn, delay, quality }, {}, `${session}:${preload ? 'preload' : 'main'}`);
+  const transcode = async (req, res, { session, preload = false, file, info, offset, audio, burn, delay = 0, quality = null, channels = 2 }) => {
+    await cache.serve(req, res, { file, input: file, info, offset, audio, burn, delay, quality, channels }, {}, `${session}:${preload ? 'preload' : 'main'}`);
   };
   // A download releases its reader between range requests. Keep the same
   // prepared generation available across those gaps and short disconnects.

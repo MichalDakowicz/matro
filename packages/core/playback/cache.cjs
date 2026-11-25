@@ -6,7 +6,7 @@ const { createHash } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { pipeline } = require('node:stream');
 const { once } = require('node:events');
-const { argumentsFor, selectEncoder, canCopyVideo, QUALITIES, SOFTWARE } = require('./encoding.cjs');
+const { argumentsFor, selectEncoder, canCopyVideo, QUALITIES, outputChannels, supportsToneMap, SOFTWARE } = require('./encoding.cjs');
 
 // FFmpeg writes ahead to disk independently of the network/player. Slow clients, pauses and
 // disconnected requests never block encoding. Only complete files survive a process restart.
@@ -68,6 +68,7 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
   async function get(options, owner, { pinMs = 0, read = false } = {}) {
     if (closed) throw Error('Playback service is closed.');
     const source = await stat(options.file);
+    const toneMap = !!options.info.video?.hdr && await supportsToneMap(ffmpeg);
     if (closed) throw Error('Playback service is closed.');
     const use = entry => {
       entry.used = Date.now();
@@ -80,6 +81,8 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
     };
     const identity = [3, options.file, source.size, source.mtimeMs, options.offset, options.audio, options.burn, options.delay, options.info.video];
     if (QUALITIES[options.quality]) identity.push(options.quality);
+    if (outputChannels(options.info, options.audio, options.channels) === 6) identity.push('aac-5.1');
+    if (toneMap) identity.push('hdr-sdr');
     const key = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
     while (entries.has(key)) {
       const existing = entries.get(key);
@@ -107,7 +110,7 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
         await fsp.rm(entry.file, { force: true }); entry.size = 0; entry.preparedSeconds = 0;
         if (closed || entry.error) throw entry.error || Error('Playback service is closed.');
         return new Promise((resolve, reject) => {
-          const child = spawnProcess(ffmpeg, argumentsFor(options, selected), { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+          const child = spawnProcess(ffmpeg, argumentsFor({ ...options, toneMap }, selected), { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
           entry.child = child;
           let lastOutput = Date.now(), errorText = '', progressText = '', failed;
           const timeout = setInterval(() => {

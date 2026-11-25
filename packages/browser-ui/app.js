@@ -635,7 +635,7 @@ function offlineSeasonButtons(items, target) {
 // Cast and production come from TMDB; a missing portrait gets the generated cover, like missing posters do.
 const castPanel = m => m?.cast?.length ? `<section class="panel flat cast-panel" aria-labelledby="cast-h"><div class="panel-head"><h3 id="cast-h">Cast</h3></div><div class="cast-grid">${m.cast.map(c => `<div class="cast-member"><span class="cast-photo art" data-hue="${hash(c.name) % 360}">${c.photo ? `<img src="${esc(c.photo)}" alt="" loading="lazy" draggable="false">` : icon('person')}</span><strong>${esc(c.name)}</strong>${c.role ? `<small>${esc(c.role)}</small>` : ''}</div>`).join('')}</div></section>` : '';
 // Where the file lives and what it is; it sits flat on the page like the other sections.
-const filePanel = (item, m) => `<section class="panel flat file" aria-labelledby="file-h"><div class="panel-head"><h3 id="file-h">File</h3></div><div class="facts"><div><p>Format</p><strong>${esc(item.format)}</strong><small>${item.kind === 'show' ? 'Series' : item.kind === 'audio' ? 'Audio' : 'Movie'}</small></div><div><p>Source</p><strong>${esc(item.root ? base(item.root) : 'Opened file')}</strong><small>${sshSource(item.path) ? 'SSH media' : 'Local file'}</small></div>${m?.cast?.length ? `<div><p>Starring</p><strong>${esc(m.cast.slice(0, 2).map(c => c.name).join(', '))}</strong>${m.cast[2] ? `<small>${esc(m.cast.slice(2, 5).map(c => c.name).join(', '))}</small>` : ''}</div>` : ''}</div><div class="path-box">${icon('folder')}<span class="mono">${esc(sourcePath(item.path))}</span></div><p class="note">Audio tracks, subtitles and chapters appear when playback starts. HDR is tone-mapped and surround plays as stereo.</p></section>`;
+const filePanel = (item, m) => `<section class="panel flat file" aria-labelledby="file-h"><div class="panel-head"><h3 id="file-h">File</h3></div><div class="facts"><div><p>Format</p><strong>${esc(item.format)}</strong><small>${item.kind === 'show' ? 'Series' : item.kind === 'audio' ? 'Audio' : 'Movie'}</small></div><div><p>Source</p><strong>${esc(item.root ? base(item.root) : 'Opened file')}</strong><small>${sshSource(item.path) ? 'SSH media' : 'Local file'}</small></div>${m?.cast?.length ? `<div><p>Starring</p><strong>${esc(m.cast.slice(0, 2).map(c => c.name).join(', '))}</strong>${m.cast[2] ? `<small>${esc(m.cast.slice(2, 5).map(c => c.name).join(', '))}</small>` : ''}</div>` : ''}</div><div class="path-box">${icon('folder')}<span class="mono">${esc(sourcePath(item.path))}</span></div><p class="note">Audio tracks, subtitles and chapters appear when playback starts. HDR plays as HDR on an HDR display when the file allows it, otherwise it is tone-mapped. 5.1 is kept when the output supports it.</p></section>`;
 const money = n => n >= 1e9 ? `$${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `$${Math.round(n / 1e6)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}K` : '';
 function productionPanel(m) {
   if (!m) return '';
@@ -847,9 +847,9 @@ async function prepareNext(position) {
     if (details.subtitles.find(t => t.index === tracks.subtitle)?.text) { try { text = await api.subtitles({ id, index: tracks.subtitle }); } catch { tracks.subtitle = null; } }
     if (stale()) return;
     const bitmapSubtitle = details.video ? details.subtitles.find(t => t.index === tracks.subtitle && t.bitmap)?.index ?? null : null;
-    const result = await api.stream({ id, offset: startAt(item, details.duration), audio: tracks.audio, bitmapSubtitle, subtitleDelay: tracks.delay, preload: true, forceTranscode: supportsFullBuffer(!!details.video) });
+    const result = await api.stream({ id, offset: startAt(item, details.duration), audio: tracks.audio, bitmapSubtitle, subtitleDelay: tracks.delay, preload: true, ...playbackOptions(details, tracks.audio) });
     if (stale()) return;
-    const element = document.createElement('video'); element.playsInline = true; element.crossOrigin = 'anonymous'; element.preload = 'auto'; element.src = bufferPlayback(element, result.url, details.duration - result.offset, !!details.video); element.load();
+    const element = document.createElement('video'); element.playsInline = true; element.crossOrigin = 'anonymous'; element.preload = 'auto'; element.src = result.progressive ? result.url : bufferPlayback(element, result.url, details.duration - result.offset, !!details.video); element.load();
     prepared = { id, info: details, ...tracks, subtitleText: text, offset: result.offset, url: result.url, element };
   } catch { /* Preloading only saves time; the next item still starts the regular way. */ }
   finally { if (preparing === run) preparing = null; }
@@ -908,12 +908,26 @@ const fillRange = input => input.style.setProperty('--fill', `${(Number(input.va
 // built once the boost is first used, since routing an element through Web Audio can't be undone for that element.
 const MAX_VOLUME = 1.5;
 let audioContext = null, boost = null;
+function playbackOptions(details, track, force = false) {
+  const player = video || document.createElement('video');
+  const hdr = !!details.hdrDirectMime && (matchMedia('(video-dynamic-range: high)').matches || matchMedia('(dynamic-range: high)').matches)
+    && player.canPlayType(details.hdrDirectMime) === 'probably';
+  let channels = 2;
+  if ((details.audio.find(audio => audio.index === track)?.channels ?? 0) >= 6 && player.canPlayType('audio/mp4; codecs="mp4a.40.2"')) {
+    try {
+      audioContext ||= new AudioContext();
+      if (audioContext.destination.maxChannelCount >= 6) channels = 6;
+    } catch { /* Default to stereo without a reported audio output. */ }
+  }
+  return { hdr, channels, forceTranscode: force || (!hdr && supportsFullBuffer(!!details.video)) };
+}
 function applyVolume(value) {
   if (!video) return;
   video.volume = Math.min(1, value);
   if (value > 1 && boost?.element !== video) {
     try {
       audioContext ||= new AudioContext();
+      if (audioContext.destination.maxChannelCount >= 6) audioContext.destination.channelCount = 6;
       const gain = audioContext.createGain(); audioContext.createMediaElementSource(video).connect(gain).connect(audioContext.destination);
       boost = { element: video, gain };
     } catch { boost = null; }
@@ -924,12 +938,12 @@ const currentVolume = () => boost?.element === video ? video.volume * boost.gain
 function updateVolume() { const input = $('#volume'), output = $('#volume-value'); if (!input || !video) return; const volume = currentVolume(); input.value = volume; fillRange(input); output.textContent = video.muted ? 'Muted' : `${Math.round(volume * 100)}%`; output.classList.toggle('boosted', !video.muted && volume > 1.005); }
 function scheduleIdle() { clearTimeout(idleTimer); idleTimer = setTimeout(() => { if (view === 'player' && !video.paused && !sidePanel && !loading && !previewHovered && !$('.stage').querySelector(':focus-visible')) $('.stage').classList.add('idle'); }, 3200); }
 function updateMetadata() {
-  $('#player-chips').innerHTML = `<span class="chip">${esc(current.format)}</span>${info.video ? `<span class="chip">${info.video.height}p · ${esc(info.video.codec.toUpperCase())}</span>` : '<span class="chip">Audio</span>'}${info.audio.length ? `<span class="chip">${esc(info.audio.find(a => a.index === audio)?.codec.toUpperCase())} · Stereo output</span>` : ''}`;
+  $('#player-chips').innerHTML = `<span class="chip">${esc(current.format)}</span>${info.video ? `<span class="chip">${info.video.height}p · ${esc(info.video.codec.toUpperCase())}</span>` : '<span class="chip">Audio</span>'}${info.audio.length ? `<span class="chip">${esc(info.audio.find(a => a.index === audio)?.codec.toUpperCase())}</span>` : ''}`;
   $('#seek').max = info.duration || 1; $('#duration').textContent = fmt(info.duration); showTimes(offset + (video?.currentTime || 0)); renderSeekMarks();
 }
 async function loadStream(position, shouldPlay = true, token = generation) {
   playIntent = shouldPlay; loading = true; playbackError = ''; showMessage(); updateToggle(); pendingStream = { id: current.id, position };
-  const result = await api.stream({ id: current.id, offset: position, audio, bitmapSubtitle: bitmapTrack()?.index ?? null, subtitleDelay: delay, forceTranscode: supportsFullBuffer(!!info.video) || video.dataset.forceTranscode === 'true' }); if (token !== generation) return;
+  const result = await api.stream({ id: current.id, offset: position, audio, bitmapSubtitle: bitmapTrack()?.index ?? null, subtitleDelay: delay, ...playbackOptions(info, audio, video.dataset.forceTranscode === 'true') }); if (token !== generation) return;
   offset = result.offset; streamId = current.id;
   const player = video, start = Math.max(0, position - offset);
   // Preserve the target until this source has reached it. load() emits zero-time
@@ -946,7 +960,8 @@ async function loadStream(position, shouldPlay = true, token = generation) {
   settlePending = settle;
   player.addEventListener('loadedmetadata', () => { if (token === generation && video === player && start) player.currentTime = start; }, { once: true });
   player.addEventListener('timeupdate', settle);
-  video.src = bufferPlayback(video, result.url, info.duration - offset, !!info.video); video.load(); applySubtitle(); updateTime();
+  releaseBuffer(video);
+  video.src = result.progressive ? result.url : bufferPlayback(video, result.url, info.duration - offset, !!info.video); video.load(); applySubtitle(); updateTime();
   if (playIntent) { try { await video.play(); } catch (error) { if (token === generation && error.name !== 'AbortError') { loading = false; playbackError = error.message; showMessage(); } } }
   // A paused stream only gets its first frame now; re-apply cue timings so the subtitle for this moment appears without pressing play.
   else { video.addEventListener('loadeddata', () => { loading = false; showMessage(); adjustCues(); }, { once: true }); }
@@ -1085,7 +1100,7 @@ function renderTracks() {
   $('.stage').classList.remove('idle');
   if (sidePanel === 'segments') { panel.innerHTML = segmentsPanel(); return; }
   const bitmap = !!bitmapTrack();
-  const audioRows = info.audio.map(a => `<button class="track-option ${a.index === audio ? 'selected' : ''}" data-audio="${a.index}" aria-pressed="${a.index === audio}"><span class="radio"></span><span class="track-copy">${trackHeading(a)}<small>${esc(a.codec.toUpperCase())} · ${a.channels} ch${a.channels > 2 ? ' · plays as stereo' : ''}${a.default ? ' · Default' : ''}</small></span></button>`).join('');
+  const audioRows = info.audio.map(a => `<button class="track-option ${a.index === audio ? 'selected' : ''}" data-audio="${a.index}" aria-pressed="${a.index === audio}"><span class="radio"></span><span class="track-copy">${trackHeading(a)}<small>${esc(a.codec.toUpperCase())} · ${a.channels} ch${a.default ? ' · Default' : ''}</small></span></button>`).join('');
   const subtitleRows = info.subtitles.map(s => `<button class="track-option ${s.index === subtitle ? 'selected' : ''}" data-subtitle="${s.index}" aria-pressed="${s.index === subtitle}" ${s.text || s.bitmap ? '' : 'disabled'}><span class="radio"></span><span class="track-copy">${trackHeading(s)}<small>${esc(s.codec.toUpperCase())} · ${s.sidecar ? 'File next to video' : s.bitmap ? 'Bitmap' : s.text ? 'Text' : 'Unsupported format'}</small></span></button>`).join('');
   panel.innerHTML = `<section class="tracks-panel" aria-label="Audio and subtitles">
     <div class="tracks-heading"><h3>Audio & subtitles</h3><button class="icon-button" data-action="tracks" aria-label="Close audio and subtitles">×</button></div>

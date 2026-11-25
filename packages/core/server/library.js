@@ -98,7 +98,10 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange } = {}) {
     return task;
   }
   async function info(item) {
-    if (item.probe) return JSON.parse(item.probe);
+    if (item.probe) {
+      const cached = JSON.parse(item.probe);
+      if (!cached.video || cached.colorVersion === 1) return cached;
+    }
     return probeItem(item);
   }
   function probeSoon() {

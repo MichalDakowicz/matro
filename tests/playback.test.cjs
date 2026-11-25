@@ -212,3 +212,65 @@ test('a quality tier scales the picture down, caps the bitrate and is part of th
   assert.equal((await probe(small.file)).video.height, Math.min(info.video.height, 480));
   assert.equal((await probe(original.file)).video.height, info.video.height);
 });
+
+const { canDirectPlay } = require('../packages/core/playback/direct.cjs');
+const { outputChannels, supportsToneMap } = require('../packages/core/playback/encoding.cjs');
+const { hdrColor } = require('../packages/core/playback/color.cjs');
+
+test('HDR files direct play only for a client that shows HDR, and only in a container browsers read', () => {
+  const hdr = { transfer: 'smpte2084', primaries: 'bt2020', matrix: 'bt2020nc', codecTag: 'hvc1', level: 153 };
+  const info = { video: { codec: 'hevc', width: 3840, height: 2160, pixelFormat: 'yuv420p10le', hdr }, audio: [{ index: 1, codec: 'aac', channels: 6 }] };
+  assert.equal(canDirectPlay('film.mp4', info), false);
+  assert.equal(canDirectPlay('film.mp4', info, { hdr: true }), true);
+  assert.equal(canDirectPlay('film.mkv', info, { hdr: true }), false);
+  assert.equal(canDirectPlay('film.mp4', { ...info, video: { ...info.video, hdr: { ...hdr, codecTag: 'hev1' } } }, { hdr: true }), false);
+  assert.equal(canDirectPlay('film.mp4', { ...info, audio: [{ index: 1, codec: 'eac3', channels: 6 }] }, { hdr: true }), false);
+  assert.equal(hdrColor({ color_transfer: 'bt709' }), null);
+  assert.equal(hdrColor({ color_transfer: 'arib-std-b67', color_primaries: 'bt2020' }).transfer, 'arib-std-b67');
+});
+
+test('5.1 is kept only when the source has it and the client asked for it; HDR is tone-mapped to SDR', () => {
+  const source = { video: { codec: 'hevc', pixelFormat: 'yuv420p10le', hdr: { transfer: 'smpte2084', primaries: 'bt2020', matrix: 'bt2020nc' } }, audio: [{ index: 1, channels: 6 }, { index: 2, channels: 2 }] };
+  const flag = (args, name) => args[args.indexOf(name) + 1];
+  assert.equal(outputChannels(source, null, 6), 6);
+  assert.equal(outputChannels(source, null, 2), 2);
+  assert.equal(outputChannels(source, 2, 6), 2);
+  assert.equal(outputChannels({ audio: [{ index: 1, channels: 2 }] }, null, 6), 2);
+  const surround = argumentsFor({ input: 'a.mkv', info: source, channels: 6 }), stereo = argumentsFor({ input: 'a.mkv', info: source });
+  assert.equal(flag(surround, '-ac'), '6'); assert.equal(flag(surround, '-b:a'), '384k');
+  assert.equal(flag(stereo, '-ac'), '2'); assert.equal(flag(stereo, '-b:a'), '192k');
+  assert.match(flag(surround, '-vf'), /tonemap=tonemap=hable.*format=yuv420p/);
+  assert.equal(flag(surround, '-colorspace'), 'bt709');
+  assert.equal(surround.includes('copy'), false);
+  assert.match(flag(surround, '-vf'), /^scale=.*min\(iw,1920\).*min\(ih,1080\).*zscale=t=linear/);
+  const hardware = argumentsFor({ input: 'a.mkv', info: source, channels: 6, quality: '720p' }, ['-c:v', 'h264_nvenc']);
+  assert.equal(flag(hardware, '-c:v'), 'h264_nvenc');
+  assert.equal(flag(hardware, '-b:a'), '320k');
+  assert.match(flag(hardware, '-vf'), /^scale=.*min\(iw,1280\).*min\(ih,720\).*tonemap=.*?,scale=.*min\(iw,1280\)/);
+  const fallback = argumentsFor({ input: 'a.mkv', info: source, toneMap: false });
+  assert.equal(fallback.includes('-colorspace'), false);
+  assert.doesNotMatch(flag(fallback, '-vf'), /zscale|tonemap/);
+  assert.equal(argumentsFor({ input: 'a.mkv', info: source, burn: 3 }, ['-c:v', 'h264_nvenc']).includes('-hwaccel'), false);
+  assert.match(flag(argumentsFor({ input: 'a.mkv', info: source, burn: 3 }), '-filter_complex'), /\[0:v:0\]scale=.*zscale.*\[sdr\];\[sub\]\[sdr\]scale2ref=.*\[picture\]\[scaledSub\]overlay/);
+});
+
+test('an HDR 5.1 file plays as tone-mapped SDR with 5.1 AAC for a surround client and stereo for the rest', async t => {
+  if (!await supportsToneMap(ffmpeg)) return t.skip('FFmpeg has no zscale or tonemap filter');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-hdr-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const input = path.join(dir, 'hdr.mkv');
+  await run(ffmpeg, ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '2', '-af', 'pan=5.1|FL=c0|FR=c0|FC=c0|LFE=c0|BL=c0|BR=c0',
+    '-c:v', 'libx265', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p10le', '-x265-params', 'log-level=error', '-color_primaries', 'bt2020', '-color_trc', 'smpte2084', '-colorspace', 'bt2020nc', '-c:a', 'ac3', input]);
+  const info = await probe(input);
+  assert.equal(info.video.hdr.transfer, 'smpte2084'); assert.equal(info.audio[0].channels, 6);
+  for (const [channels, expected] of [[6, 6], [2, 2]]) {
+    const cache = createPlaybackCache({ ffmpeg, dir: path.join(dir, `c${channels}`) });
+    t.after(() => cache.close());
+    const entry = await cache.get({ file: input, input, info, offset: 0, audio: null, burn: null, delay: 0, channels });
+    await until(() => entry.done || entry.error); assert.ifError(entry.error);
+    const streams = JSON.parse(await run(ffprobe, ['-v', 'error', '-show_streams', '-of', 'json', entry.file])).streams;
+    const video = streams.find(s => s.codec_type === 'video'), audio = streams.find(s => s.codec_type === 'audio');
+    assert.equal(video.codec_name, 'h264'); assert.equal(video.pix_fmt, 'yuv420p'); assert.equal(video.color_transfer, 'bt709');
+    assert.equal(audio.channels, expected);
+  }
+});

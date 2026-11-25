@@ -4,6 +4,7 @@ const { createHash } = require('node:crypto');
 const { execFile } = require('node:child_process');
 const os = require('node:os');
 const ffprobe = require('ffprobe-static').path.replace('app.asar', 'app.asar.unpacked');
+const { hdrColor, hdrDirectType } = require('../playback/color.cjs');
 const ffmpeg = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
 
 const extensions = new Set('mkv mp4 m4v avi mov webm flv wmv mpg mpeg ts mts m2ts vob ogv 3gp mp3 flac wav aac m4a ogg opus wma aiff alac'.split(' '));
@@ -142,7 +143,9 @@ async function keepSidecar(video, subtitle, language = '') {
 async function probe(file) {
   const data = JSON.parse(await run(ffprobe, ['-v', 'error', '-show_format', '-show_streams', '-show_chapters', '-of', 'json', file]));
   const video = data.streams.find(s => s.codec_type === 'video' && !s.disposition?.attached_pic);
-  return { duration: Number(data.format?.duration) || 0, video: video ? { codec: video.codec_name, width: video.width, height: video.height, pixelFormat: video.pix_fmt } : null,
+  const hdr = video && hdrColor(video);
+  const picture = video ? { codec: video.codec_name, width: video.width, height: video.height, pixelFormat: video.pix_fmt, ...(hdr ? { hdr } : {}) } : null;
+  return { duration: Number(data.format?.duration) || 0, video: picture, hdrDirectMime: hdrDirectType(file, { video: picture }),
     audio: data.streams.filter(s => s.codec_type === 'audio').map(s => ({ index: s.index, language: s.tags?.language || 'und', title: s.tags?.title || '', codec: s.codec_name, channels: s.channels, default: !!s.disposition?.default })),
     subtitles: data.streams.filter(s => s.codec_type === 'subtitle').map(s => ({ index: s.index, language: s.tags?.language || 'und', title: s.tags?.title || '', codec: s.codec_name,
       text: ['subrip', 'ass', 'ssa', 'webvtt', 'mov_text', 'text'].includes(s.codec_name), bitmap: ['hdmv_pgs_subtitle', 'dvd_subtitle', 'dvb_subtitle', 'xsub'].includes(s.codec_name) })),

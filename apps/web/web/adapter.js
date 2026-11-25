@@ -104,7 +104,7 @@ export function createAdapter(session) {
     }
     const info = await get(`/api/items/${id}/info`);
     const saved = await offline.store.meta(id).catch(() => null);
-    const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay, qualities: saved?.complete ? [] : qualityOptions(info.video),
+    const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay, hdrDirectMime: info.hdrDirectMime, qualities: saved?.complete ? [] : qualityOptions(info.video),
       subtitles: [...info.embedded.map(({ forced: _f, ...t }) => t), ...info.uploaded.map(u => track(u))] };
     details.set(id, result);
     return result;
@@ -156,7 +156,7 @@ export function createAdapter(session) {
   }
 
   // Direct play when the browser can handle the file as-is; otherwise a transcode that starts at `offset`.
-  async function stream({ id, offset = 0, audio = null, bitmapSubtitle = null, subtitleDelay = 0, preload = false, forceTranscode = false }) {
+  async function stream({ id, offset = 0, audio = null, bitmapSubtitle = null, subtitleDelay = 0, preload = false, forceTranscode = false, hdr = false, channels = 2 }) {
     const saved = await offline.store.meta(id).catch(() => null);
     if (saved?.complete && bitmapSubtitle === null && (audio === null || audio === saved.info.audio[0]?.index)) {
       const url = await offline.playback(id);
@@ -167,10 +167,12 @@ export function createAdapter(session) {
     const tier = d.video && quality !== 'original' ? quality : null;
     const q = new URLSearchParams({ session: playerSession });
     if (preload) q.set('preload', '1');
-    if (!tier && !forceTranscode && d.directPlay && bitmapSubtitle === null && (audio === null || !first || audio === first.index)) return { url: `/api/items/${id}/direct?${q}${offset > 0 ? `#t=${offset}` : ''}`, offset: 0 };
+    const directHDR = hdr && !!d.hdrDirectMime;
+    if (!tier && !forceTranscode && (d.directPlay || directHDR) && bitmapSubtitle === null && (audio === null || !first || audio === first.index)) return { url: `/api/items/${id}/direct?${q}${offset > 0 ? `#t=${offset}` : ''}`, offset: 0, progressive: directHDR };
     q.set('t', String(Math.floor(offset * 10) / 10));
     if (audio !== null) q.set('audio', audio);
     if (tier) q.set('quality', tier);
+    if (channels === 6) q.set('channels', '6');
     if (bitmapSubtitle !== null) { q.set('burn', bitmapSubtitle); q.set('delay', subtitleDelay); }
     return { url: `/api/items/${id}/transcode?${q}`, offset };
   }
