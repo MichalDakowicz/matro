@@ -10,6 +10,7 @@ import { NavigationBar } from 'expo-navigation-bar';
 import type { Item, Library } from '../lib/server';
 import { episodeName, formatTime, languageName, metadataFor, nameFor } from '../../../../packages/core/client/library';
 import { usePlayback } from '../player/usePlayback';
+import { usePinchToFill } from '../player/usePinchToFill';
 import { Icon, IconButton, MediaArt, Pill, SkipIcon, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
 import { colors, fonts } from '../theme';
@@ -19,6 +20,8 @@ type Props = ArtProps & { item: Item; data: Library; initialPosition?: number; s
 export default function NativePlayer({ base, headers, item, data, initialPosition, saved, offline, queue, onBack, onSelect, onNext }: Props) {
   const p = usePlayback({ base, data, item, initialPosition, saved, offline, onEnd: onNext });
   const [controls, setControls] = useState(true), [sheet, setSheet] = useState<'tracks' | 'queue' | null>(null), [scrub, setScrub] = useState<number | null>(null);
+  const bitmap = !!p.info?.embedded.some(track => track.index === p.subtitle && track.bitmap);
+  const { fit, indicator, stageTouches } = usePinchToFill(!!p.info?.video, bitmap, () => setControls(visible => !visible));
   const insets = useSafeAreaInsets(), { width, height } = useWindowDimensions(), landscape = width > height, opacity = useRef(new Animated.Value(1)).current;
   const dragging = useRef(false);
   const queueIndex = queue.findIndex(i => i.id === item.id), hasPrevious = queueIndex > 0, hasNext = queueIndex >= 0 && queueIndex < queue.length - 1;
@@ -62,7 +65,8 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
   const select = async (next: Item) => { setSheet(null); await p.persist().catch(() => {}); p.player.pause(); onSelect(next); };
   const skip = (delta: number) => { setControls(true); p.seek(p.position + delta); };
   const videoAspect = p.info?.video?.width && p.info.video.height ? p.info.video.width / p.info.video.height : 16 / 9;
-  const pictureHeight = Math.min(height, width / videoAspect), captionBottom = Math.max((height - pictureHeight) / 2 + pictureHeight * .06, controls ? (landscape ? 110 : 225 + insets.bottom) : insets.bottom + 16);
+  const pictureHeight = fit === 'cover' ? height : Math.min(height, width / videoAspect);
+  const captionBottom = Math.max((height - pictureHeight) / 2 + pictureHeight * .06, controls ? (landscape ? 110 : 225 + insets.bottom) : insets.bottom + 16);
   const allSubs = [...(p.info?.embedded || []), ...(p.info?.uploaded || []).map(track => ({ index: 10000 + track.id, language: track.language, title: track.name, text: true, codec: 'vtt' }))];
   const transport = <View style={[s.transport, landscape && { gap: 4 }]}>
     <IconButton name="prev" label="Previous in queue" disabled={!hasPrevious} size={landscape ? 40 : 46} onPress={() => void select(queue[queueIndex - 1])} />
@@ -78,8 +82,8 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
     <IconButton name="fullscreen" label={landscape ? 'Exit fullscreen' : 'Fullscreen'} onPress={toggleFullscreen} />
   </View>;
   return <View style={s.fill}>
-    <VideoView player={p.player} nativeControls={false} contentFit="contain" fullscreenOptions={{ enable: false }} style={StyleSheet.absoluteFill} />
-    <Pressable style={StyleSheet.absoluteFill} onPress={() => setControls(!controls)} accessibilityLabel="Show or hide playback controls" />
+    <VideoView player={p.player} nativeControls={false} contentFit={fit} fullscreenOptions={{ enable: false }} style={StyleSheet.absoluteFill} />
+    <Pressable style={StyleSheet.absoluteFill} {...stageTouches} accessibilityLabel="Show or hide playback controls" />
     {p.caption ? <Text pointerEvents="none" style={[s.caption, { bottom: captionBottom, fontSize: 20 * p.subtitleSize, lineHeight: 27 * p.subtitleSize, maxWidth: landscape ? '80%' : '92%' }]}>{p.caption}</Text> : null}
     {p.busy || p.error ? <View pointerEvents="box-none" style={s.message}>{p.error ? <><Text style={[t.sectionTitle, { textAlign: 'center' }]}>Couldn’t play this file.</Text><Text style={[t.muted, { textAlign: 'center' }]}>{p.error}</Text><Pill label="Try again" onPress={p.retry} /></> : <><ActivityIndicator color={colors.text} /><Text style={t.dim}>Getting your file ready</Text><Text style={t.muted}>Preparing playback…</Text></>}</View> : null}
     <Animated.View pointerEvents={controls ? 'box-none' : 'none'} style={[StyleSheet.absoluteFill, { opacity }]}>
@@ -99,6 +103,9 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
         <View style={[s.controlRows, landscape && { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>{transport}{utilities}</View>
       </View>
     </Animated.View>
+    {indicator ? <View pointerEvents="none" style={[s.fitIndicator, { top: landscape ? 62 : insets.top + 68 }]}>
+      <Text accessibilityLiveRegion="polite" style={t.text}>{indicator}</Text>
+    </View> : null}
     {segment && <View style={{ position: 'absolute', right: Math.max(18, insets.right), bottom: controls ? (landscape ? 140 : 290 + insets.bottom) : insets.bottom + 24 }}><Pill label={`Skip ${segment.type}`} onPress={() => { setControls(true); p.seek(segment.end); }} /></View>}
     <Modal visible={!!sheet} transparent animationType="slide" supportedOrientations={['portrait', 'landscape']} presentationStyle="overFullScreen" onRequestClose={() => setSheet(null)}>
       <Pressable style={s.scrim} onPress={() => setSheet(null)} accessibilityLabel="Close player panel" />
@@ -121,6 +128,7 @@ const s = StyleSheet.create({
   fill: { flex: 1, backgroundColor: '#000' }, topFade: { position: 'absolute', top: 0, left: 0, right: 0 }, top: { position: 'absolute', flexDirection: 'row', alignItems: 'center', gap: 8 }, playerTitle: { color: colors.text, fontFamily: fonts.medium, fontSize: 15, lineHeight: 21 }, playerSubtitle: { color: colors.dim, fontFamily: fonts.regular, fontSize: 12 },
   bottomFade: { position: 'absolute', bottom: 0, left: 0, right: 0 }, controls: { position: 'absolute' }, bufferTrack: { position: 'absolute', left: 0, right: 0, height: 3, backgroundColor: '#ffffff18' }, time: { fontSize: 12, fontFamily: fonts.mono, color: colors.muted, fontVariant: ['tabular-nums'], marginTop: 1 },
   controlRows: { gap: 4, marginTop: 4 }, transport: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 }, utilities: { flexDirection: 'row', width: '100%', justifyContent: 'space-between', alignItems: 'center' }, speed: { minWidth: 46, height: 44, justifyContent: 'center', alignItems: 'center' },
+  fitIndicator: { position: 'absolute', alignSelf: 'center', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: colors.inputFill, borderWidth: 1, borderColor: colors.hairline },
   message: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28, gap: 12 }, caption: { position: 'absolute', alignSelf: 'center', color: colors.primary, fontFamily: fonts.medium, backgroundColor: '#0008', textAlign: 'center', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 3, textShadowColor: '#000', textShadowRadius: 3 },
   scrim: { ...StyleSheet.absoluteFill, backgroundColor: '#0005' }, sheet: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#121214', borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderColor: colors.hairline, paddingHorizontal: 18, paddingTop: 12 }, panelLabel: { fontSize: 14, color: colors.text, fontFamily: fonts.semibold, marginBottom: 10 }, track: { minHeight: 52, borderRadius: 9, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 4 }, selectedTrack: { backgroundColor: '#ffffff0e' }, setting: { borderTopWidth: 1, borderTopColor: colors.hairline, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 6 }, queueRow: { flexDirection: 'row', gap: 12, alignItems: 'center', padding: 8, borderRadius: 10, marginBottom: 5 }
 });
