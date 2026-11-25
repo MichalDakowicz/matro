@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const config = require('./config');
-const { open } = require('./db');
+const { open, lockData } = require('./db');
 const { createAuth } = require('./auth');
 const { createLibrary } = require('./library');
 const { createRouter, createServer } = require('./http');
@@ -24,8 +24,10 @@ function createApp({ dataDir = config.dataDir, tmdb: tmdbOptions, downloads: dow
 }
 
 async function main() {
+  const unlock = lockData(config.dataDir);
   fs.mkdirSync(config.mediaDir, { recursive: true });
-  const { server, library, app } = createApp();
+  const { server, library, app, db } = createApp();
+  server.on('close', () => { db.close(); unlock(); });
   if (!library.byPath(config.mediaDir)) await library.addFolder(config.mediaDir);
   // Folders the operator wants shared from the start, e.g. read-only mounts in a container.
   for (const folder of config.libraryFolders) if (!library.byPath(folder)) await library.addFolder(folder).catch(error => console.error(`library folder ${folder}: ${error.message}`));
