@@ -13,7 +13,7 @@ export function groupTitles(items) {
   /** @type {Map<string, Item[]>} */
   const groups = new Map();
   for (const item of items) {
-    const key = item.kind === 'show' ? item.groupId || item.group : item.id;
+    const key = item.kind === 'show' ? item.groupId || item.group : item.editionGroup || item.id;
     const group = groups.get(key);
     if (group) group.push(item);
     else groups.set(key, [item]);
@@ -96,5 +96,5 @@ export function resumeTarget(items, progress, fallback = items[0]) {
   const unfinished = items.filter(item => !isCompleted(progress[item.id])).sort(compareEpisodes);
   const partial = unfinished.filter(item => progress[item.id]?.position > 0)
     .sort((a, b) => (progress[b.id].updated || 0) - (progress[a.id].updated || 0) || compareEpisodes(a, b))[0];
-  return partial || unfinished[0] || fallback;
+  return partial || (fallback?.editionGroup ? fallback : unfinished[0] || fallback);
 }

@@ -68,7 +68,7 @@ function open(file) {
     const additions = {
       folders: { removed: 'INTEGER NOT NULL DEFAULT 0', canonical_path: 'TEXT' },
       items: { removed: 'INTEGER NOT NULL DEFAULT 0', fingerprint: 'TEXT', probe_failures: 'INTEGER NOT NULL DEFAULT 0',
-        probe_error: 'TEXT', probed_at: 'INTEGER', retry_probe_after: 'INTEGER' }
+        probe_error: 'TEXT', probed_at: 'INTEGER', retry_probe_after: 'INTEGER', edition_group: 'TEXT', edition_label: 'TEXT' }
     };
     for (const [table, columns] of Object.entries(additions)) {
       const present = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));

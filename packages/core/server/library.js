@@ -36,8 +36,8 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, probeFil
     moveItem: db.prepare('UPDATE items SET folder_id = ? WHERE id = ?'),
     existing: db.prepare('SELECT id, path FROM active_items WHERE folder_id = ?'),
     // Catalogs from before fingerprints keep their probes while size and mtime still match.
-    upsert: db.prepare(`INSERT INTO items (id, folder_id, path, title, group_id, group_title, year, kind, season, episode, size, mtime, added, fingerprint)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    upsert: db.prepare(`INSERT INTO items (id, folder_id, path, title, group_id, group_title, year, kind, season, episode, size, mtime, added, fingerprint, edition_group, edition_label)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET folder_id = excluded.folder_id, title = excluded.title, group_id = excluded.group_id, group_title = excluded.group_title,
         year = excluded.year, kind = excluded.kind, season = excluded.season, episode = excluded.episode, removed = 0,
         probe = CASE WHEN (items.fingerprint = excluded.fingerprint OR (items.fingerprint IS NULL AND items.size = excluded.size AND items.mtime = excluded.mtime)) THEN items.probe END,
@@ -46,10 +46,12 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, probeFil
         probe_error = CASE WHEN items.fingerprint = excluded.fingerprint THEN items.probe_error END,
         probed_at = CASE WHEN items.fingerprint = excluded.fingerprint THEN items.probed_at END,
         retry_probe_after = CASE WHEN items.fingerprint = excluded.fingerprint THEN items.retry_probe_after END,
+        edition_group = excluded.edition_group, edition_label = excluded.edition_label,
         size = excluded.size, mtime = excluded.mtime, fingerprint = excluded.fingerprint
       WHERE items.removed = 1 OR items.folder_id != excluded.folder_id OR items.title != excluded.title
         OR items.group_id != excluded.group_id OR items.group_title != excluded.group_title OR items.year IS NOT excluded.year
         OR items.kind != excluded.kind OR items.season IS NOT excluded.season OR items.episode IS NOT excluded.episode
+        OR items.edition_group IS NOT excluded.edition_group OR items.edition_label IS NOT excluded.edition_label
         OR items.fingerprint IS NOT excluded.fingerprint`),
     dropItem: db.prepare('UPDATE items SET removed = 1 WHERE id = ?'),
     item: db.prepare('SELECT * FROM active_items WHERE id = ?'),
@@ -86,7 +88,7 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, probeFil
     tx(db, () => {
       for (const [row, stat] of live) {
         const result = q.upsert.run(row.id, folderId, row.path, row.title, row.groupId, row.groupTitle, row.year,
-          row.kind, row.season, row.episode, stat.size, stat.mtime, now, stat.fingerprint);
+          row.kind, row.season, row.episode, stat.size, stat.mtime, now, stat.fingerprint, row.editionGroup, row.editionLabel);
         catalogChanged ||= result.changes > 0;
       }
       if (!error) for (const id of known) { q.dropItem.run(id); catalogChanged = true; }

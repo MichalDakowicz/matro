@@ -175,3 +175,47 @@ test('probes back off after errors and recover after repeated failures', async t
   assert.equal(library.item(id).probe_error, null);
   assert.equal(library.item(id).probe_failures, 0);
 });
+
+test('cuts and encodes of one movie in a folder become editions of a single movie, not a show', async t => {
+  const base = await temporaryDirectory(t), root = path.join(base, 'Media'), movie = path.join(root, 'Film (2020)'), other = path.join(root, 'Shows', 'Show');
+  await fs.mkdir(movie, { recursive: true });
+  await fs.mkdir(other, { recursive: true });
+  const files = ['Film (2020).mkv', "Film (2020) Director's Cut.mkv", 'Film.2020.2160p.x265.mkv'].map(name => path.join(movie, name));
+  for (const file of files) await fs.writeFile(file, 'x' + path.basename(file));
+  await fs.mkdir(path.join(root, 'Solo (2019)'));
+  await fs.writeFile(path.join(root, 'Solo (2019)', 'Solo (2019).mkv'), 'solo');
+  await fs.writeFile(path.join(other, 'Show.S01E01.mkv'), 'e1');
+  const db = open(':memory:');
+  t.after(() => db.close());
+  const library = createLibrary(db, { autoProbe: false });
+  const { id } = await library.addFolder(root);
+  const rows = Object.fromEntries(db.prepare('SELECT * FROM active_items').all().map(row => [path.basename(row.path), row]));
+  const editions = files.map(file => rows[path.basename(file)]);
+  assert.deepEqual([...new Set(editions.map(row => row.kind))], ['movie']);
+  assert.equal(new Set(editions.map(row => row.edition_group)).size, 1);
+  assert.ok(editions[0].edition_group);
+  assert.equal(new Set(editions.map(row => row.group_title)).size, 1);
+  assert.deepEqual(editions.map(row => row.edition_label), ['Film (2020)', "Director's Cut", '2160p · x265']);
+  assert.equal(rows['Solo (2019).mkv'].edition_group, null);
+  assert.equal(rows['Show.S01E01.mkv'].edition_group, null);
+  const before = editions.map(row => row.id);
+  await library.rescan(id);
+  assert.deepEqual(db.prepare('SELECT id FROM active_items WHERE edition_group IS NOT NULL ORDER BY path').all().map(row => row.id).sort(), before.sort());
+  await fs.rm(files[1]);
+  await library.rescan(id);
+  const rest = db.prepare('SELECT edition_group, kind FROM active_items WHERE path LIKE ?').all(movie + '%');
+  assert.equal(rest.length, 2);
+  assert.ok(rest.every(row => row.edition_group && row.kind === 'movie'));
+});
+
+test('unrelated movies sharing a folder stay separate movies', async t => {
+  const root = path.join(await temporaryDirectory(t), 'Media'), folder = path.join(root, 'Double Bill');
+  await fs.mkdir(folder, { recursive: true });
+  for (const name of ['Alpha (2001).mkv', 'Beta (2002).mkv']) await fs.writeFile(path.join(folder, name), name);
+  const db = open(':memory:');
+  t.after(() => db.close());
+  await createLibrary(db, { autoProbe: false }).addFolder(root);
+  const rows = db.prepare('SELECT kind, edition_group FROM active_items').all();
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every(row => row.kind === 'movie' && row.edition_group === null));
+});

@@ -12,6 +12,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onComplete, o
   const item = items[0], m = metadataFor(data, item), target = resumeItem(data, items), p = data.progress[target.id];
   const insets = useSafeAreaInsets(), seasons = [...new Set(items.map(i => i.season || 1))];
   const [season, setSeason] = useState(target.season || seasons[0]);
+  const editions = item.editionGroup && items.length > 1;
   const resume = p?.position > 0 && !p.completed;
   const inSeason = items.filter(i => (i.season || 1) === season);
   // From the episode Play would start now to the end of its season.
@@ -26,9 +27,14 @@ export default function TitleScreen({ data, items, onBack, onPlay, onComplete, o
     <View style={[t.row, { marginTop: 20, flexWrap: 'wrap', gap: 8 }]}>
       <Pill label={resume ? `Resume  ${formatTime(p.position)}` : 'Play now'} icon="play" primary onPress={() => onPlay(target)} style={{ flex: 1, minWidth: 150 }} />
       {resume && <View style={s.circleAction}><IconButton name="restart" label="Play from start" size={50} onPress={() => onPlay(target, 0)} /></View>}
-      <View style={s.circleAction}><IconButton name="plus" label="Add to queue" size={50} onPress={() => onEnqueue(items)} /></View>
-      <View style={s.circleAction}><IconButton name="check" label={data.progress[item.id]?.completed ? 'Mark incomplete' : 'Mark complete'} size={50} active={!!data.progress[item.id]?.completed} onPress={() => onComplete(item)} /></View>
+      <View style={s.circleAction}><IconButton name="plus" label="Add to queue" size={50} onPress={() => onEnqueue(item.kind === 'show' ? items : [target])} /></View>
+      <View style={s.circleAction}><IconButton name="check" label={data.progress[target.id]?.completed ? 'Mark incomplete' : 'Mark complete'} size={50} active={!!data.progress[target.id]?.completed} onPress={() => onComplete(target)} /></View>
     </View>
+    {editions && <View style={{ marginTop: 24, gap: 8 }}>
+      <Text accessibilityRole="header" style={t.sectionTitle}>Editions</Text>
+      {items.map(edition => <Pill key={edition.id} label={(edition.editionLabel || edition.title) + ' · ' + edition.format}
+        icon="play" onPress={() => onPlay(edition)} />)}
+    </View>}
     {onSave && item.kind !== 'show' && <View style={{ alignSelf: 'flex-start', marginTop: 12 }}><Pill label="Save offline" icon="download" onPress={() => onSave(target)} /></View>}
     {onRemoveSaved && <View style={{ alignSelf: 'flex-start', marginTop: 12 }}><Pill label="Remove from this device" compact onPress={() => onRemoveSaved(items)} /></View>}
     {m.rating ? <View style={s.ratings}><Text style={[t.mono, { marginBottom: 6 }]}>TMDB</Text><View style={[t.row, { alignItems: 'baseline', gap: 5 }]}><Text style={s.score}>{m.rating.toFixed(1)}</Text><Text style={t.dim}>/10{m.votes ? ` · ${m.votes.toLocaleString()} votes` : ''}</Text></View></View> : null}
