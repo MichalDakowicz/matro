@@ -53,7 +53,12 @@ test('back up live state and restore it offline while keeping the replaced state
   assert.equal(setup.status, 0, setup.stderr);
   const db = open(file);
   const item = db.prepare('SELECT id FROM items').get().id;
-  const state = { history: { [item]: { position: 42 } }, manualMarkers: { [item]: [{ start: 0, end: 25 }] } };
+  const state = {
+    progress: { [item]: { position: 42, duration: 100 } },
+    queue: [item],
+    preferences: { autoplay: false, volume: .5 },
+    markers: { [item]: [{ type: 'intro', start: 0, end: 25, source: 'manual' }] }
+  };
   const vtt = 'WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello\n';
   const settings = '{"server":{"username":"qbittorrent"}}';
   try {
