@@ -22,7 +22,7 @@ const adapter = createAdapter(session);
 window.matro = adapter.matro;
 if (import.meta.env.PROD && navigator.serviceWorker) void navigator.serviceWorker.register('/sw.js').catch(() => {});
 const leave = async () => {
-  for (const id of adapter.offline.jobs.keys()) adapter.offline.cancel(id);
+  adapter.offline.shutdown();
   await signOut();
 };
 const openSaved = () => savedDownloads({ ...adapter, onOpenTitle: id => document.dispatchEvent(new CustomEvent('matro:saved-title', { detail: id })) });

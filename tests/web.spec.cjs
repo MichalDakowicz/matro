@@ -504,15 +504,26 @@ test('Vite production UI signs in, plays through the HTTP adapter and saves prog
   }
 });
 
-test('a receiver plays a saved title after restarting with the server unreachable', async () => {
+test('a receiver plays saved media during an outage and syncs offline changes after reconnecting', async () => {
   const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'offline-ui-'));
   const media = path.join(root, 'media'); await fs.mkdir(media);
   await fs.copyFile(f.mkv, path.join(media, 'Northbound.mkv'));
   const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} } });
   const respond = server.listeners('request')[0];
-  let disconnected = false, browser;
+  let disconnected = false, hangPlayback = false, rejectedUploads = 0, browser;
+  const blocked = [];
   server.removeListener('request', respond);
-  server.on('request', (req, res) => { if (disconnected) req.socket.destroy(); else void respond(req, res); });
+  server.on('request', (req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    if (disconnected) { req.socket.destroy(); return; }
+    if (hangPlayback && /\/(?:info|state|stop)$/.test(url.pathname)) { blocked.push(url.pathname); return; }
+    if (req.method === 'POST' && url.searchParams.get('filename') === 'rejected.srt') {
+      rejectedUploads++;
+      res.writeHead(422, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Subtitle rejected by the server.' }));
+      return;
+    }
+    void respond(req, res);
+  });
   try {
     await app.createUser('head', 'offline-receiver-test', 'admin'); await library.addFolder(media);
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -525,37 +536,68 @@ test('a receiver plays a saved title after restarting with the server unreachabl
     await page.getByLabel('Password', { exact: true }).fill('offline-receiver-test');
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await expect(page.locator('.receiver-account-name')).toHaveText('head');
+    await page.evaluate(() => window.matroTheme.set('dark'));
     await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
     await page.getByRole('button', { name: 'Save offline', exact: true }).click();
     await expect(page.getByRole('status').filter({ hasText: 'Saved for offline playback.' })).toBeVisible();
     await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
+    hangPlayback = true;
+    await page.getByRole('button', { name: /^(Play now|Resume)$/ }).click();
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.2);
+    expect(await page.locator('video').evaluate(v => v.src.startsWith('blob:'))).toBe(true);
+    expect(blocked.some(url => url.endsWith('/info'))).toBe(false);
     await browser.close(); browser = null;
 
-    disconnected = true;
+    hangPlayback = false; disconnected = true;
     browser = await electron.launch(options);
     page = await browser.firstWindow();
     await expect(page.getByRole('button', { name: 'Offline · Reconnect' })).toBeVisible();
     await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
-    await page.getByRole('button', { name: 'Play now', exact: true }).click();
-    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.2);
+    await page.getByRole('button', { name: /^(Play now|Resume)$/ }).click();
+    const resumedAt = await page.locator('video').evaluate(v => v.currentTime);
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(resumedAt + .2);
     expect(await page.locator('video').evaluate(v => v.src.startsWith('blob:'))).toBe(true);
     await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
-    const queued = page.evaluate(async () => window.matro.loadSubtitle((await window.matro.load()).items[0].id));
-    const subtitle = page.getByRole('dialog', { name: 'Add subtitles' });
-    await subtitle.locator('input[type=file]').setInputFiles({ name: 'offline.srt', mimeType: 'text/plain',
-      buffer: Buffer.from('1\n00:00:00,100 --> 00:00:02,000\nOffline line\n') });
-    await subtitle.getByRole('button', { name: 'Add subtitles' }).click();
-    expect((await queued).text).toContain('Offline line');
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: 'Mark complete', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Mark incomplete', exact: true })).toBeVisible();
+    expect(await page.evaluate(async () => Object.values((await window.matro.load()).progress)[0].completed)).toBe(true);
+    await page.getByRole('button', { name: 'Mark incomplete', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Mark complete', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    const removeContinue = page.getByRole('button', { name: 'Remove Northbound from Continue watching' });
+    await removeContinue.click();
+    await expect(removeContinue).toHaveCount(0);
+    for (const name of ['rejected.srt', 'offline.srt']) {
+      const queued = page.evaluate(async () => window.matro.loadSubtitle((await window.matro.load()).items[0].id));
+      const subtitle = page.getByRole('dialog', { name: 'Add subtitles' });
+      await subtitle.locator('input[type=file]').setInputFiles({ name, mimeType: 'text/plain',
+        buffer: Buffer.from('1\n00:00:00,100 --> 00:00:02,000\nOffline line\n') });
+      await subtitle.getByRole('button', { name: 'Add subtitles' }).click();
+      expect((await queued).text).toContain('Offline line');
+    }
     await page.getByRole('button', { name: 'Profile: head' }).click();
     await page.getByRole('button', { name: 'View offline downloads' }).click();
     const saved = page.getByRole('dialog', { name: 'Saved for offline' });
     await expect(saved.getByText('Northbound', { exact: true })).toBeVisible();
-    await expect(saved.getByRole('status')).toContainText('1 subtitle upload');
+    await expect(saved.getByRole('status')).toContainText('2 subtitle uploads');
     await saved.getByRole('button', { name: 'Close', exact: true }).click();
     disconnected = false;
     await page.getByRole('button', { name: 'Offline · Reconnect' }).click();
     await expect(page.getByRole('button', { name: 'Open Northbound', exact: true })).toBeVisible();
     await expect.poll(() => db.prepare('SELECT count(*) AS total FROM subtitles').get().total).toBe(1);
+    const progress = await page.evaluate(async () => Object.values((await (await fetch('/api/library')).json()).progress)[0]);
+    expect(progress).toMatchObject({ completed: false, hidden: true });
+    await page.setViewportSize({ width: 375, height: 800 });
+    await page.evaluate(() => window.matroTheme.set('light'));
+    await page.getByRole('button', { name: 'Profile: head' }).click();
+    await page.getByRole('button', { name: 'View offline downloads' }).click();
+    await expect(saved.getByText('Subtitle rejected by the server.')).toBeVisible();
+    expect(await saved.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await saved.getByRole('button', { name: 'Retry upload' }).press('Enter');
+    await expect.poll(() => rejectedUploads).toBe(2);
+    await saved.getByRole('button', { name: 'Discard upload' }).press('Enter');
+    await expect(saved.getByText('rejected.srt')).toHaveCount(0);
   } finally {
     await browser?.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
     await fs.rm(root, { recursive: true, force: true });
