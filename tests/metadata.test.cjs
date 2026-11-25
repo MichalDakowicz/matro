@@ -312,3 +312,28 @@ test('NFO parsing keeps valid fields, ignores entity declarations and rejects ba
   assert.deepEqual(readNfo('<!DOCTYPE x [<!ENTITY a "b">]><movie><title>&a;</title></movie>'), {});
   assert.deepEqual(readNfo('<tvshow><year>20x1</year><tmdbid>0</tmdbid><title>Show</title></tvshow>'), { title: 'Show' });
 });
+
+test('removing an NFO releases its cached TMDB match immediately', async t => {
+  const { metadata, dir } = await previewFixture(t, url => {
+    if (url.pathname === '/3/movie/77') return json({ id: 77, title: 'Pinned title' });
+    if (url.pathname === '/3/search/movie') return json({ results: [{ id: 88, title: 'Home Film' }] });
+    if (url.pathname === '/3/movie/88') return json({ id: 88, title: 'Home Film' });
+    return missing();
+  });
+  const nfo = path.join(dir, 'Home Film.nfo');
+  const items = [{ id: 'home', kind: 'movie', path: path.join(dir, 'Home Film.mkv'), group: 'Home Film' }];
+  const waitForMatch = async id => {
+    for (let i = 0; i < 50 && metadata.snapshot().home?.tmdbId !== id; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(metadata.snapshot().home?.tmdbId, id);
+  };
+  await fs.writeFile(nfo, '<movie><tmdbid>77</tmdbid></movie>');
+  await metadata.syncLocal(items);
+  await metadata.sync(items);
+  for (let i = 0; i < 50 && metadata.snapshot().home?.title !== 'Pinned title'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(metadata.snapshot().home?.title, 'Pinned title');
+  await fs.rm(nfo);
+  await metadata.syncLocal(items);
+  assert.equal(metadata.snapshot().home, undefined);
+  await metadata.sync(items);
+  await waitForMatch(88);
+});

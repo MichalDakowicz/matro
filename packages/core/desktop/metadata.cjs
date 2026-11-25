@@ -76,6 +76,9 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
       await loaded;
       const next = await readLocal(items);
       if (JSON.stringify(next) === JSON.stringify(local)) return false;
+      for (const key of new Set([...Object.keys(local), ...Object.keys(next)])) {
+        if (local[key]?.tmdbId !== next[key]?.tmdbId) failed.delete(key);
+      }
       local = next;
       changed();
       return true;
@@ -83,7 +86,7 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     localTask = task.catch(() => {});
     return task;
   }
-  const pending = new Set(), failed = new Set(), edits = new Map();
+  const pending = new Map(), failed = new Set(), edits = new Map();
   const loaded = (async () => {
     try { entries = JSON.parse(await fsp.readFile(file, 'utf8')).entries || {}; } catch { entries = {}; }
     await fsp.mkdir(artwork, { recursive: true });
@@ -106,7 +109,8 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
   function changed() { clearTimeout(updateTimer); updateTimer = setTimeout(() => onUpdate?.(snapshot()), 300); }
   function snapshot() {
     const matched = auth ? Object.fromEntries(Object.entries(entries).filter(([key, entry]) =>
-      entry.status === 'matched' && entry.matcher === MATCHER && (!local[key]?.tmdbId || local[key].tmdbId === entry.tmdbId)
+      entry.status === 'matched' && entry.matcher === MATCHER &&
+      (local[key]?.tmdbId ? local[key].tmdbId === entry.tmdbId : !entry.nfoId)
     ).map(([key, { status, query, checked, matcher, nfoId, ...rest }]) => [key, rest])) : {};
     for (const [key, fields] of Object.entries(local)) matched[key] = { ...matched[key], ...fields };
     return matched;
@@ -197,15 +201,25 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     entries[job.key] = { status: result ? 'matched' : 'missing', query: job.query, checked: Date.now(), matcher: MATCHER, details: DETAILS, nfoId: job.nfoId, ...(manual ? { manual: true } : {}), ...(job.language ? { language: job.language } : {}), ...(result || {}) };
     save();
   }
+  function enqueue(job) {
+    pending.set(job.key, job); queue.push(job);
+  }
   async function work() {
     while (queue.length && running < 4) {
-      const job = queue.shift(); running++;
+      const job = queue.shift();
+      const isCurrent = () => pending.get(job.key) === job && local[job.key]?.tmdbId === job.nfoId;
+      if (!isCurrent()) continue;
+      running++;
       void lookup(job).then(result => {
-        if (entries[job.key] !== job.previous || (job.tmdbId && !result) || (job.nfoId && local[job.key]?.tmdbId !== job.nfoId)) return;
+        if (!isCurrent() || entries[job.key] !== job.previous || (job.tmdbId && !result)) return;
         record(job, result, job.manual);
         if (result) changed();
       })
-        .catch(() => failed.add(job.key)).finally(() => { running--; pending.delete(job.key); void work(); });
+        .catch(() => { if (isCurrent()) failed.add(job.key); }).finally(() => {
+          running--;
+          if (pending.get(job.key) === job) pending.delete(job.key);
+          void work();
+        });
     }
   }
   function titlesOf(items) {
@@ -227,12 +241,12 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     for (const job of titlesOf(items)) {
       const entry = entries[job.key], fields = local[job.key];
       const nfoId = fields?.tmdbId;
+      if (pending.get(job.key)?.nfoId !== nfoId) pending.delete(job.key);
       if (nfoId || entry?.nfoId) {
         const pinChanged = nfoId !== entry?.nfoId;
         const missingEpisodes = entry?.type === 'tv' && job.seasons.some(season => !entry.episodes?.[season]);
         if ((pinChanged || missingEpisodes || entry.details !== DETAILS) && !pending.has(job.key) && !failed.has(job.key)) {
-          pending.add(job.key);
-          queue.push({ ...job, query: fields?.title || job.query, year: fields?.year || job.year, nfoId, tmdbId: nfoId, language: entry?.language, previous: entry });
+          enqueue({ ...job, query: fields?.title || job.query, year: fields?.year || job.year, nfoId, tmdbId: nfoId, language: entry?.language, previous: entry });
         }
         continue;
       }
@@ -241,10 +255,10 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
       const missingSeason = entry?.status === 'matched' && entry.type === 'tv' && job.seasons.some(s => !entry.episodes?.[s]);
       // Matched titles with a new season or older stored details are refreshed by id, keeping the match (and whether it was manual).
       const stale = entry?.status === 'matched' && entry.matcher === MATCHER && (missingSeason || entry.details !== DETAILS);
-      if (stale || entry?.manual) { if ((stale || missingSeason) && entry.status === 'matched' && !pending.has(job.key) && !failed.has(job.key)) { pending.add(job.key); queue.push({ ...job, query: entry.query, tmdbId: entry.tmdbId, manual: !!entry.manual, language: entry.language, previous: entry }); } continue; }
+      if (stale || entry?.manual) { if ((stale || missingSeason) && entry.status === 'matched' && !pending.has(job.key) && !failed.has(job.key)) enqueue({ ...job, query: entry.query, tmdbId: entry.tmdbId, manual: !!entry.manual, language: entry.language, previous: entry }); continue; }
       const fresh = entry && entry.matcher === MATCHER && entry.query === job.query && (entry.status === 'matched' || Date.now() - entry.checked < RECHECK_MISSING);
       if (!job.query || pending.has(job.key) || failed.has(job.key) || (fresh && !missingSeason)) continue;
-      pending.add(job.key); queue.push({ ...job, language: entry?.language, previous: entry });
+      enqueue({ ...job, language: entry?.language, previous: entry });
     }
     void work();
   }
