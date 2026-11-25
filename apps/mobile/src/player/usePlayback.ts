@@ -9,8 +9,10 @@ import { downloadPlayback } from './diskBuffer';
 import { loadQuality, progressRecovery, recoveryScope, saveQuality } from '../lib/storage';
 import { qualityOptions } from '../../../../packages/core/client/quality.js';
 import type { SavedMedia } from '../lib/offline';
+import { describePlayback, savedPlayback } from '../../../../packages/core/client/playback-info.js';
 
 export function usePlayback({ base, data, item, initialPosition, saved, offline = false, onEnd }: { base: string; data: Library; item: Item; initialPosition?: number; saved?: SavedMedia; offline?: boolean; onEnd: () => void }) {
+  const [diagnostics, setDiagnostics] = useState<typeof savedPlayback | null>(null);
   const initial = initialPosition ?? (data.progress[item.id]?.completed ? 0 : data.progress[item.id]?.position || 0);
   const pref = data.preferences.tracks?.[trackKey(item)];
   const [info, setInfo] = useState<Info | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState(''), [position, setPosition] = useState(initial), [buffered, setBuffered] = useState(initial), [playing, setPlaying] = useState(false), [caption, setCaption] = useState('');
@@ -20,7 +22,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   const sourceReady = useRef(false), advanced = useRef(false), sampledPlayback = useRef(false), playbackStart = useRef<number | null>(null);
   const pendingStart = useRef<{ time: number; since: number } | null>(null);
   const replacement = useRef<Promise<void>>(Promise.resolve()), localSource = useRef(false);
-  const disk = useRef<{ uri: string; offset: number; audio: number | null; burn: number | null; delay: number; audioDelay: number; quality: string } | null>(null), cancelDownload = useRef<(() => void) | null>(null);
+  const disk = useRef<{ uri: string; offset: number; audio: number | null; burn: number | null; delay: number; audioDelay: number; quality: string; diagnostics: typeof savedPlayback } | null>(null), cancelDownload = useRef<(() => void) | null>(null);
   dataRef.current = data; endRef.current = onEnd;
   const at = useRef(initial), offset = useRef(0), direct = useRef(false), replacing = useRef(true), mounted = useRef(true), intent = useRef(true), generation = useRef(0), subtitleRun = useRef(0), retries = useRef(0), moved = useRef(Date.now()), lastSaved = useRef(0), forceTranscode = useRef(false), cues = useRef<Cue[]>([]), prefTimer = useRef<ReturnType<typeof setTimeout> | null>(null), bitmapTimer = useRef<ReturnType<typeof setTimeout> | null>(null), rateRef = useRef(1);
   const player = useVideoPlayer(null, p => {
@@ -95,14 +97,17 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       const source = saved ? { path: '', start: position, offset: 0 } : playbackPath(item.id, compatible, streamOptions);
       if (!mounted.current || run !== generation.current) return;
       const diskCopy = disk.current;
-      const local = saved ? { uri: saved.uri, offset: 0 } : diskCopy && position >= diskCopy.offset && diskCopy.audio === audio && diskCopy.burn === burn && diskCopy.delay === subtitleDelay && diskCopy.audioDelay === audioDelay && diskCopy.quality === quality ? diskCopy : null;
+      const local = saved ? { uri: saved.uri, offset: 0, diagnostics: savedPlayback } : diskCopy && position >= diskCopy.offset && diskCopy.audio === audio && diskCopy.burn === burn && diskCopy.delay === subtitleDelay && diskCopy.audioDelay === audioDelay && diskCopy.quality === quality ? diskCopy : null;
+      const sourceDirect = source.path.split('?')[0].endsWith('/direct');
+      const description = local?.diagnostics ?? describePlayback(details, { direct: sourceDirect, audio, burn, offset: source.offset, quality, audioDelay, toneMap: details.hdrToneMap, force: !compatible.directPlay && details.directPlay });
       const start = local ? position - local.offset : source.start;
       if (!local) { cancelDownload.current?.(); cancelDownload.current = null; disk.current = null; }
       // Native source replacements cannot be cancelled. Let an in-flight one
       // finish, then apply only the latest requested source and its timeline.
       const apply = replacement.current.catch(() => {}).then(async () => {
         if (!mounted.current || run !== generation.current) return;
-        offset.current = local ? local.offset : source.offset; direct.current = !!local || source.path.split('?')[0].endsWith('/direct'); localSource.current = !!local;
+        offset.current = local ? local.offset : source.offset; direct.current = !!local || sourceDirect; localSource.current = !!local;
+        setDiagnostics(description);
         await player.replaceAsync({ uri: local?.uri || base + source.path, headers: local ? undefined : headers, contentType: 'progressive', metadata: { title: item.title, artist: item.group } });
         if (!mounted.current || run !== generation.current) return;
         pendingStart.current = { time: start, since: Date.now() };
@@ -114,7 +119,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       if (!mounted.current || run !== generation.current) return;
       if (!local && headers) cancelDownload.current = downloadPlayback(base + source.path, headers, file => {
         if (!mounted.current || run !== generation.current) return;
-        const saved = { uri: file, offset: source.offset, audio, burn, delay: subtitleDelay, quality, audioDelay };
+        const saved = { uri: file, offset: source.offset, audio, burn, delay: subtitleDelay, quality, audioDelay, diagnostics: description };
         disk.current = saved; setBuffered(details.duration);
         // Keep the current decoder running. Use the completed copy on the next
         // seek/retry instead of interrupting playback when a download finishes.
@@ -253,5 +258,5 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   };
   const setSubtitleSize = (value: number) => { choices.current.size = value; setSubtitleSizeValue(value); remember(); };
   const changeSpeed = () => { const values = [.75, 1, 1.25, 1.5, 2], next = values[(values.indexOf(rateRef.current) + 1) % values.length]; rateRef.current = next; player.playbackRate = next; setRate(next); };
-  return { player, info, markers, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, audioDelay, subtitleSize, rate, quality, qualities: saved ? [] : qualityOptions(info?.video), chooseQuality, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setAudioDelay, setSubtitleSize, changeSpeed, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
+  return { player, info, diagnostics, markers, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, audioDelay, subtitleSize, rate, quality, qualities: saved ? [] : qualityOptions(info?.video), chooseQuality, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setAudioDelay, setSubtitleSize, changeSpeed, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
 }

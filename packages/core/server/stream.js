@@ -1,5 +1,6 @@
 const path = require('node:path');
 const config = require('./config');
+const { supportsToneMap } = require('../playback/encoding.cjs');
 const { createPlaybackCache } = require('../playback/cache.cjs');
 function createStreams({ dataDir = config.dataDir } = {}) {
   const cache = createPlaybackCache({ ffmpeg: config.ffmpeg, dir: path.join(dataDir, 'playback'), maxJobs: config.maxTranscodes, ownerTtlMs: 300000 });
@@ -10,6 +11,9 @@ function createStreams({ dataDir = config.dataDir } = {}) {
   // prepared generation available across those gaps and short disconnects.
   transcode.offline = (file, info, audio) => cache.get({ file, input: file, info, offset: 0, audio, burn: null, delay: 0 }, null, { pinMs: 600000 });
   transcode.close = () => cache.close();
+  transcode.supportsToneMap = () => supportsToneMap(config.ffmpeg);
+  transcode.stats = () => cache.stats();
+  transcode.encoder = session => cache.encoder(`${session}:main`);
   transcode.releaseMain = session => cache.release(`${session}:main`);
   transcode.renew = session => {
     cache.renew(`${session}:main`); cache.renew(`${session}:preload`);

@@ -16,6 +16,8 @@ test('overlapping large progress saves work on a slow connection', async () => {
       res.writeHead(200, { 'Content-Type': 'text/javascript' }).end(await fs.readFile(path.join(__dirname, '../apps/web/web', req.url.slice(1))));
     } else if (req.url === '/packages/core/client/quality.js') {
       res.writeHead(200, { 'Content-Type': 'text/javascript' }).end(await fs.readFile(path.join(__dirname, '../packages/core/client/quality.js')));
+    } else if (req.url === '/packages/core/client/playback-info.js') {
+      res.writeHead(200, { 'Content-Type': 'text/javascript' }).end(await fs.readFile(path.join(__dirname, '../packages/core/client/playback-info.js')));
     } else res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><title>Network regression</title>');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

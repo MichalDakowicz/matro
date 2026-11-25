@@ -38,6 +38,7 @@ function harness(t: any, directPlay = false) {
     '../../../../packages/core/client/library': { trackKey: () => 'movie', matchTrack: () => undefined },
     '../../../../packages/core/client/watch-progress.js': { isContinueDismissed },
     '../../../../packages/core/client/quality.js': require('../../../../packages/core/client/quality.js'),
+    '../../../../packages/core/client/playback-info.js': require('../../../../packages/core/client/playback-info.js'),
     '../../../../packages/core/client/subtitles': { parseVtt },
     './diskBuffer': { downloadPlayback: (_: any, __: any, ready: any) => { const job = { ready, cancelled: false }; downloads.push(job); return () => { job.cancelled = true; }; } },
     '../lib/storage': { recoveryScope: () => 'test', progressRecovery: { write: async () => {} }, loadQuality: async () => 'original', saveQuality: async () => {} },

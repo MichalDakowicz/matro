@@ -152,6 +152,9 @@ test('desktop library, MKV playback, tracks, seeking, queue and persistence', as
     await page.getByRole('button', { name: 'Play', exact: true }).click();
     await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Audio', exact: true })).toBeVisible();
+    const diagnostics = page.getByText('Playback info · Remux', { exact: true });
+    await diagnostics.click();
+    await expect(page.getByText(/The video is copied and audio is encoded as AAC/)).toBeVisible();
     await expect(page.locator('[data-audio="1"] strong')).toHaveText('English');
     await expect(page.locator('[data-audio="1"] .track-title')).toHaveText('Original mix');
     await expect(page.locator('[data-audio="2"] strong')).toHaveText('Polish');

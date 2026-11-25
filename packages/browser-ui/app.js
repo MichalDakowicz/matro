@@ -52,7 +52,7 @@ let tab = 'home', query = '', view = 'library', selected = null, folderFilter = 
 let current = null, info = null, video = null, offset = 0, audio = null, subtitle = null, subtitleText = null, subtitleUrl = null, delay = 0, audioDelay = 0;
 let queueOpen = false, sidePanel = null, generation = 0, lastSave = 0, idleTimer, toastTimer, subtitleGeneration = 0;
 let loading = false, playbackError = '', trackCues = [];
-let audioDelayTimer, playIntent = true, streamId = null, pendingStream = null, playerEvents;
+let audioDelayTimer, playIntent = true, streamId = null, pendingStream = null, diagnostics = null, playerEvents;
 let showPlaybackAdvanced = false, rewatchingShow = false, dismissedShow = false;
 let segmentStatus = '', markerDraft = null;
 let scannerSummary = null;
@@ -851,11 +851,12 @@ async function prepareNext(position) {
     const result = await api.stream({ id, offset: startAt(item, details.duration), audio: tracks.audio, bitmapSubtitle, subtitleDelay: tracks.delay, audioDelay: tracks.audioDelay, preload: true, ...playbackOptions(details, tracks.audio) });
     if (stale()) return;
     const element = document.createElement('video'); element.playsInline = true; element.crossOrigin = 'anonymous'; element.preload = 'auto'; element.src = result.progressive ? result.url : bufferPlayback(element, result.url, details.duration - result.offset, !!details.video); element.load();
-    prepared = { id, info: details, ...tracks, subtitleText: text, offset: result.offset, url: result.url, element };
+    prepared = { id, info: details, ...tracks, subtitleText: text, offset: result.offset, url: result.url, diagnostics: result.diagnostics, element };
   } catch { /* Preloading only saves time; the next item still starts the regular way. */ }
   finally { if (preparing === run) preparing = null; }
 }
 async function adoptStream(ready, token) {
+  diagnostics = ready.diagnostics; renderTracks();
   playIntent = true; offset = ready.offset; streamId = current.id; pendingStream = null; applySubtitle(); updateTime(); showMessage(); updateToggle();
   try { await video.play(); } catch (error) { if (token === generation && error.name !== 'AbortError') { loading = false; playbackError = error.message; showMessage(); } }
 }
@@ -945,6 +946,7 @@ function updateMetadata() {
 async function loadStream(position, shouldPlay = true, token = generation) {
   playIntent = shouldPlay; loading = true; playbackError = ''; showMessage(); updateToggle(); pendingStream = { id: current.id, position };
   const result = await api.stream({ id: current.id, offset: position, audio, bitmapSubtitle: bitmapTrack()?.index ?? null, subtitleDelay: delay, audioDelay, ...playbackOptions(info, audio, video.dataset.forceTranscode === 'true') }); if (token !== generation) return;
+  diagnostics = result.diagnostics; if (sidePanel === 'tracks') renderTracks();
   offset = result.offset; streamId = current.id;
   const player = video, start = Math.max(0, position - offset);
   // Preserve the target until this source has reached it. load() emits zero-time
@@ -1105,6 +1107,7 @@ function renderTracks() {
   const subtitleRows = info.subtitles.map(s => `<button class="track-option ${s.index === subtitle ? 'selected' : ''}" data-subtitle="${s.index}" aria-pressed="${s.index === subtitle}" ${s.text || s.bitmap ? '' : 'disabled'}><span class="radio"></span><span class="track-copy">${trackHeading(s)}<small>${esc(s.codec.toUpperCase())} · ${s.sidecar ? 'File next to video' : s.bitmap ? 'Bitmap' : s.text ? 'Text' : 'Unsupported format'}</small></span></button>`).join('');
   panel.innerHTML = `<section class="tracks-panel" aria-label="Audio and subtitles">
     <div class="tracks-heading"><h3>Audio & subtitles</h3><button class="icon-button" data-action="tracks" aria-label="Close audio and subtitles">×</button></div>
+    ${diagnostics ? `<details class="sub-style" ${panel.querySelector('details')?.open ? 'open' : ''}><summary>Playback info · ${esc(diagnostics.mode)}</summary><p class="scan-note">${esc(diagnostics.reason)}</p></details>` : ''}
     <div class="track-columns"><div><h3>Audio</h3>${audioRows || '<p class="scan-note">No audio tracks</p>'}</div>
     <div><h3>Subtitles</h3><button class="track-option ${subtitle === null ? 'selected' : ''}" data-subtitle="off" aria-pressed="${subtitle === null}"><span class="radio"></span><span><strong>Off</strong><small>No subtitles</small></span></button>${subtitleRows}
     ${subtitle === 'external' ? '<button class="track-option selected" disabled><span class="radio"></span><span><strong>External file</strong><small>Loaded subtitles</small></span></button>' : ''}</div></div>
@@ -1205,6 +1208,7 @@ async function restartStream() { const token = ++generation; await loadStream(pe
 async function changeSubtitleDelay(change) { delay = Math.max(-60, Math.min(60, Math.round((delay + change) * 10) / 10)); adjustCues(); renderTracks(); rememberTracks(); if (bitmapTrack()) await restartStream(); }
 function resetPlayer() {
   clearTimeout(audioDelayTimer);
+  diagnostics = null;
   // load() resets currentTime and queues media events. Invalidate the stream
   // first so those events cannot overwrite the checkpoint we just saved.
   streamId = null; pendingStream = null; settlePending = null;

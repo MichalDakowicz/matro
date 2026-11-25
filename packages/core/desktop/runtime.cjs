@@ -286,9 +286,12 @@ app.whenReady().then(async () => {
     const bitmapSubtitle = info.video ? info.subtitles.find(s => s.index === options.bitmapSubtitle && s.bitmap)?.index ?? null : null;
     const subtitleDelay = Math.max(-60, Math.min(60, Number(options.subtitleDelay) || 0));
     const audioDelay = Math.max(-10, Math.min(10, Number(options.audioDelay) || 0));
-    const direct = !options.forceTranscode && !remote.isRemote(item.path) && require('../playback/direct.cjs').canDirectPlay(item.path, info, { hdr: options.hdr === true }) && bitmapSubtitle === null && !audioDelay && (audio === null || audio === info.audio[0]?.index);
+    const remoteSource = remote.isRemote(item.path);
+    const direct = !options.forceTranscode && !remoteSource && require('../playback/direct.cjs').canDirectPlay(item.path, info, { hdr: options.hdr === true }) && bitmapSubtitle === null && !audioDelay && (audio === null || audio === info.audio[0]?.index);
     const channels = options.channels === 6 ? 6 : 2;
-    return { url: streams.create({ file: item.path, offset, audio, info, direct, bitmapSubtitle, subtitleDelay, audioDelay, channels }, { preload: !!options.preload }) + (direct && offset ? `#t=${offset}` : ''), offset: direct ? 0 : offset, progressive: direct && !!info.video?.hdr };
+    const toneMap = !direct && !!info.video?.hdr && await require('../playback/encoding.cjs').supportsToneMap(ffmpeg);
+    const diagnostics = require('../client/playback-info.js').describePlayback(info, { direct, audio, offset, burn: bitmapSubtitle, force: options.forceTranscode, remote: remoteSource, channels, audioDelay, toneMap });
+    return { url: streams.create({ file: item.path, offset, audio, info, direct, bitmapSubtitle, subtitleDelay, audioDelay, channels }, { preload: !!options.preload }) + (direct && offset ? `#t=${offset}` : ''), offset: direct ? 0 : offset, progressive: direct && !!info.video?.hdr, diagnostics };
   });
   handle('media:preview', async ({ id, time, hover }) => { const item = find(id); if (!Number.isFinite(time) || time < 0) throw new Error('Invalid preview time'); return previews.frame(item.path, time, { hover: !!hover }); });
   handle('media:subtitles', async ({ id, index }) => {

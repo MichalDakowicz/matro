@@ -23,6 +23,17 @@ export function openProfile({ session, getState, save, signOut, openSaved }) {
   document.addEventListener('keydown', onKey, true);
 
   const user = session.user, admin = user.role === 'admin' && !session.offline, state = getState();
+  const activity = h('div', { role: 'status' });
+  async function loadActivity() {
+    const { playing, preparation } = await get('/api/admin/activity');
+    activity.replaceChildren(
+      h('p', { class: 'muted' }, `${preparation.active}/${preparation.capacity} preparing · ${(preparation.bytes / 1024 ** 2).toFixed(1)} MiB playback cache`),
+      ...(playing.length ? playing.map(entry => h('div', { class: 'source-row web-row' },
+        h('div', { class: 'min' }, h('span', { class: 'source-name' }, entry.episode ? `${entry.groupTitle} · S${entry.season}E${entry.episode} · ${entry.title}` : entry.title),
+          h('span', { class: 'source-path' }, [entry.username, entry.mode, entry.encoder, entry.buffering ? 'Buffering' : null].filter(Boolean).join(' · '))))) : [h('p', { class: 'muted' }, 'No active server streams.')])
+    );
+  }
+  const refreshActivity = () => loadActivity().catch(error => { activity.textContent = error.message; });
   const done = Object.values(state?.progress || {}).filter(p => p.completed).length;
   const going = Object.values(state?.progress || {}).filter(p => !p.completed && p.position > 10 && !p.hidden).length;
   const remembered = Object.keys(state?.preferences?.tracks || {}).length;
@@ -102,12 +113,13 @@ export function openProfile({ session, getState, save, signOut, openSaved }) {
       section('Your watching', null, stats), section('Dub and subtitles', forget, h('p', { class: 'muted' }, 'The player remembers which audio and subtitle language you pick for each show or film, so a dub chosen in one episode carries through the series.')),
       section('Saved for offline', null, h('button', { class: 'pill', type: 'button', onclick: () => { close(); openSaved(); } }, 'View offline downloads')),
       session.offline ? null : section('Subtitles you added', null, added), session.offline ? null : section('Password', null, password),
+      admin ? section('Now playing', h('button', { class: 'pill small', type: 'button', onclick: refreshActivity }, 'Refresh activity'), activity) : null,
       admin ? section('Downloads', null, h('p', { class: 'muted' }, 'Find films and series, add magnet links, and manage downloads on the Matro host.'), h('button', { class: 'pill primary', type: 'button', onclick: () => { close(); document.querySelector('.dock-item[data-tab="downloads"]')?.click(); } }, 'Open downloads')) : null,
       admin ? section('People', null, h('p', { class: 'page-sub', style: { margin: '-6px 0 16px' } }, 'Viewers keep their own progress and choices and can add subtitles. Only you can add or remove films and shows (Folders). To add someone, create a one-time invite code and send it to them: they sign up with it and pick their own password.'), people, h('h3', { class: 'web-sub' }, 'Invites'), invites, addPerson) : null,
       h('div', { class: 'show-actions' }, h('button', { class: 'pill', type: 'button', onclick: signOut }, 'Sign out'))));
   document.body.append(layer); document.body.classList.add('web-layer-open');
   if (!session.offline) loadAdded().catch(fail);
-  if (admin) { loadPeople().catch(fail); loadInvites().catch(fail); }
+  if (admin) { loadPeople().catch(fail); loadInvites().catch(fail); void refreshActivity(); }
   layer.querySelector('.web-back').focus();
   return close;
 }

@@ -387,6 +387,9 @@ test('Vite production UI signs in, plays through the HTTP adapter and saves prog
     // Pausing the decoder must not stop downloading the rest of the movie.
     await expect(page.locator('video')).toHaveAttribute('data-buffer-complete', 'true');
     expect(await page.locator('video').evaluate(v => v.src.startsWith('blob:'))).toBe(true);
+    await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
+    await expect(page.getByText('Playback info · Remux', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Close audio and subtitles' }).click();
     await page.locator('#seek').evaluate(el => { el.value = '6'; el.dispatchEvent(new Event('change', { bubbles: true })); });
     await expect(page.locator('#position')).toHaveText('0:06');
     await page.locator('#tracks-button').click();

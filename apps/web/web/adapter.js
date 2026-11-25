@@ -5,6 +5,7 @@ import { h, say, dialog, languageSelect } from './dom.js';
 import { createOffline, networkLost } from './offline.js';
 import { toVtt } from './offline-store.js';
 import { mountMovieRequests } from './movie-requests.js';
+import { describePlayback, savedPlayback } from '../../../packages/core/client/playback-info.js';
 
 import { knownQuality, qualityOptions } from '../../../packages/core/client/quality.js';
 const SIDECAR = 10000; // uploaded subtitle tracks get indexes from here up, as sidecar files do on the desktop
@@ -104,7 +105,7 @@ export function createAdapter(session) {
     }
     const info = await get(`/api/items/${id}/info`);
     const saved = await offline.store.meta(id).catch(() => null);
-    const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay, hdrDirectMime: info.hdrDirectMime, qualities: saved?.complete ? [] : qualityOptions(info.video),
+    const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay, hdrDirectMime: info.hdrDirectMime, hdrToneMap: info.hdrToneMap, qualities: saved?.complete ? [] : qualityOptions(info.video),
       subtitles: [...info.embedded.map(({ forced: _f, ...t }) => t), ...info.uploaded.map(u => track(u))] };
     details.set(id, result);
     return result;
@@ -160,7 +161,7 @@ export function createAdapter(session) {
     const saved = await offline.store.meta(id).catch(() => null);
     if (saved?.complete && bitmapSubtitle === null && (audio === null || audio === saved.info.audio[0]?.index)) {
       const url = await offline.playback(id);
-      if (url) return { url: preload && offset > 0 ? `${url}#t=${offset}` : url, offset: 0 };
+      if (url) return { url: preload && offset > 0 ? `${url}#t=${offset}` : url, offset: 0, diagnostics: savedPlayback };
     }
     if (session.offline) throw new Error('This title or track is unavailable offline.');
     const d = details.get(id) || await inspect(id), first = d.audio[0];
@@ -168,14 +169,15 @@ export function createAdapter(session) {
     const q = new URLSearchParams({ session: playerSession });
     if (preload) q.set('preload', '1');
     const directHDR = hdr && !!d.hdrDirectMime;
-    if (!tier && !audioDelay && !forceTranscode && (d.directPlay || directHDR) && bitmapSubtitle === null && (audio === null || !first || audio === first.index)) return { url: `/api/items/${id}/direct?${q}${offset > 0 ? `#t=${offset}` : ''}`, offset: 0, progressive: directHDR };
-    q.set('t', String(Math.floor(offset * 10) / 10));
+    if (!tier && !audioDelay && !forceTranscode && (d.directPlay || directHDR) && bitmapSubtitle === null && (audio === null || !first || audio === first.index)) return { url: `/api/items/${id}/direct?${q}${offset > 0 ? `#t=${offset}` : ''}`, offset: 0, progressive: directHDR, diagnostics: describePlayback(d, { direct: true, audio }) };
+    const start = Math.floor(offset * 10) / 10;
+    q.set('t', String(start));
     if (audio !== null) q.set('audio', audio);
     if (tier) q.set('quality', tier);
     if (audioDelay) q.set('adelay', audioDelay);
     if (channels === 6) q.set('channels', '6');
     if (bitmapSubtitle !== null) { q.set('burn', bitmapSubtitle); q.set('delay', subtitleDelay); }
-    return { url: `/api/items/${id}/transcode?${q}`, offset };
+    return { url: `/api/items/${id}/transcode?${q}`, offset, diagnostics: describePlayback(d, { audio, offset: start, burn: bitmapSubtitle, force: forceTranscode, quality: tier, channels, audioDelay, toneMap: d.hdrToneMap }) };
   }
 
   // Adding media is for the head account: a folder on the server, or files sent from this browser.

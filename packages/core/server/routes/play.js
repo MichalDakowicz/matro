@@ -8,6 +8,7 @@ const { createStreams } = require('../stream');
 const { QUALITIES } = require('../../playback/encoding.cjs');
 const { createAssetCache } = require('../asset-cache');
 const { playbackSession, createPlaybackActivity } = require('../playback-session');
+const { describePlayback } = require('../../client/playback-info.js');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { createHash } = require('node:crypto');
@@ -20,6 +21,7 @@ function register(app) {
   const assets = createAssetCache(dataDir);
   const embedded = createEmbedded(dataDir, assets), frames = createFrames(dataDir, assets), transcode = createStreams({ dataDir });
   const activity = createPlaybackActivity(app.scanner.setPlayback);
+  app.playbackActivity = () => ({ playing: activity.list(transcode.encoder), preparation: transcode.stats() });
   app.closePlayback = () => { activity.close(); transcode.close(); };
   const q = {
     uploaded: db.prepare(`SELECT s.id, s.name, s.language, s.kind, s.created, s.user_id AS userId, u.username AS addedBy FROM subtitles s
@@ -32,6 +34,9 @@ function register(app) {
     remove: db.prepare('DELETE FROM subtitles WHERE id = ?')
   };
   const find = id => { const item = library.item(id); if (!item) throw new HttpError(404, 'That title is not in the library.'); return item; };
+  const source = (ctx, item, session, preload, mode) => activity.source(session, {
+    username: ctx.user.username, title: item.title, groupTitle: item.group_title, season: item.season, episode: item.episode, mode
+  }, preload);
   const label = ctx => {
     const name = String(ctx.query.get('name') || '').trim().replace(/\s+/g, ' ');
     if (!name || name.length > 60) throw new HttpError(400, 'Give the subtitles a name (up to 60 characters).');
@@ -51,6 +56,7 @@ function register(app) {
     return {
       id: item.id, groupId: item.group_id, title: item.title, groupTitle: item.group_title, kind: item.kind, season: item.season, episode: item.episode,
       duration: info.duration, video: info.video, directPlay: canDirectPlay(item.path, info), chapters: info.chapters,
+      hdrToneMap: !!info.video?.hdr && await transcode.supportsToneMap(),
       hdrDirectMime: canDirectPlay(item.path, info, { hdr: true }) ? hdrDirectType(item.path, info) : null,
       audio: info.audio.map(t => ({ ...t, language: normalize(t.language) })),
       embedded: info.subtitles.map(t => ({ ...t, language: normalize(t.language) })),
@@ -61,7 +67,9 @@ function register(app) {
   router.add('GET', '/api/items/:id/direct', async ctx => {
     const item = find(ctx.params.id);
     const session = playbackSession(ctx, ctx.query.get('session'));
-    if (ctx.query.get('preload') !== '1') transcode.releaseMain(session);
+    const preload = ctx.query.get('preload') === '1';
+    if (!preload) transcode.releaseMain(session);
+    source(ctx, item, session, preload, 'Direct play');
     await sendFile(ctx.req, ctx.res, item.path, MIME[path.extname(item.path).toLowerCase()] || 'video/mp4', { 'Cache-Control': 'private, no-store' });
   });
 
@@ -110,7 +118,7 @@ function register(app) {
   router.add('POST', '/api/playback/stop', async ctx => {
     const body = await readJson(ctx.req), session = playbackSession(ctx, body.session);
     transcode.stop(session, body.keepPreload === true);
-    activity.set(session, false);
+    activity.stop(session, body.keepPreload === true);
   });
 
   router.add('GET', '/api/items/:id/transcode', async ctx => {
@@ -121,10 +129,12 @@ function register(app) {
     if (!Number.isFinite(offset) || offset < 0 || (info.duration && offset >= info.duration)) throw new HttpError(400, 'Bad start time.');
     if (audio !== null && !info.audio.some(t => t.index === audio)) throw new HttpError(400, 'Unknown audio track.');
     if (burn !== null && !info.subtitles.some(t => t.index === burn && t.bitmap)) throw new HttpError(400, 'Unknown image subtitle track.');
-    const quality = ctx.query.get('quality');
-    if (quality !== null && quality !== 'original' && !QUALITIES[quality]) throw new HttpError(400, 'Unknown quality.');
+    const requestedQuality = ctx.query.get('quality');
+    if (requestedQuality !== null && requestedQuality !== 'original' && !QUALITIES[requestedQuality]) throw new HttpError(400, 'Unknown quality.');
     const channels = ctx.query.get('channels') === '6' ? 6 : 2;
-    await transcode(ctx.req, ctx.res, { session, file: item.path, info, offset, audio, burn, delay: Number.isFinite(delay) ? delay : 0, audioDelay, preload, channels, quality: QUALITIES[quality] ? quality : null });
+    const quality = QUALITIES[requestedQuality] ? requestedQuality : null;
+    source(ctx, item, session, preload, describePlayback(info, { offset, audio, burn, quality, channels, audioDelay }).mode);
+    await transcode(ctx.req, ctx.res, { session, file: item.path, info, offset, audio, burn, delay: Number.isFinite(delay) ? delay : 0, audioDelay, preload, channels, quality });
   });
 
   // A still frame, used for seek previews and thumbnails.
