@@ -10,7 +10,11 @@ async function scan(root, exclude, knownShows) {
   const files = excluded ? walked.filter(file => !excluded.has(file)) : walked;
   const wasShow = folder => knownShows?.has(idFor(`dir:${folder}`));
   const entries = locateTitles(root, files, wasShow).map(entry => ({ ...entry, root }));
-  const groups = groupVideos(entries, wasShow), editions = movieEditions(entries, groups);
+  // Clear the old multi-file show classification when the files identify a movie with editions.
+  const current = groupVideos(entries);
+  const editions = movieEditions(entries, current);
+  const editionFolders = new Set(entries.filter(({ file }) => editions.has(file)).map(({ folder }) => folder).filter(Boolean));
+  const groups = knownShows?.size ? groupVideos(entries, folder => !editionFolders.has(folder) && wasShow(folder)) : current;
   return files.map(file => {
     const { groupKey, group, ...row } = groups.get(file);
     const edition = editions.get(file);

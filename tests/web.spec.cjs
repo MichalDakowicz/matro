@@ -596,7 +596,10 @@ test('a movie folder with several cuts is one movie with an editions picker and 
       await expect(rows.first()).toBeVisible();
     }
     await rows.filter({ hasText: "Director's Cut" }).focus();
+    const cut = db.prepare('SELECT id FROM active_items WHERE edition_label = ?').get("Director's Cut");
+    const inspected = page.waitForRequest(request => new URL(request.url()).pathname === '/api/items/' + cut.id + '/info');
     await page.keyboard.press('Enter');
+    await inspected;
     await expect(page.locator('video')).toBeVisible();
   } finally {
     await browser?.close();

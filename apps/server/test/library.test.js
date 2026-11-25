@@ -275,6 +275,8 @@ test('cuts and encodes of one movie in a folder become editions of a single movi
   assert.equal(rows['Solo (2019).mkv'].edition_group, null);
   assert.equal(rows['Show.S01E01.mkv'].edition_group, null);
   const before = editions.map(row => row.id);
+  const { idFor } = require('../../../packages/core/server/scan');
+  db.prepare("UPDATE items SET kind = 'show', group_id = ?, season = 1, episode = 0, edition_group = NULL WHERE edition_group IS NOT NULL").run(idFor('dir:' + movie));
   await library.rescan(id);
   assert.deepEqual(db.prepare('SELECT id FROM active_items WHERE edition_group IS NOT NULL ORDER BY path').all().map(row => row.id).sort(), before.sort());
   await fs.rm(files[1]);

@@ -32,8 +32,13 @@ export default function TitleScreen({ data, items, onBack, onPlay, onComplete, o
     </View>
     {editions && <View style={{ marginTop: 24, gap: 8 }}>
       <Text accessibilityRole="header" style={t.sectionTitle}>Editions</Text>
-      {items.map(edition => <Pill key={edition.id} label={(edition.editionLabel || edition.title) + ' · ' + edition.format}
-        icon="play" onPress={() => onPlay(edition)} />)}
+      {items.map(edition => {
+        const progress = data.progress[edition.id], bytes = edition.size;
+        const size = bytes ? bytes >= 1e9 ? (bytes / 1e9).toFixed(1) + ' GB' : Math.ceil(bytes / 1e6) + ' MB' : null;
+        const position = progress?.position > 0 && !progress.completed ? 'Resume at ' + formatTime(progress.position) : null;
+        const label = [edition.editionLabel || edition.title, edition.format, size, position].filter(Boolean).join(' · ');
+        return <Pill key={edition.id} label={label} icon="play" onPress={() => onPlay(edition)} />;
+      })}
     </View>}
     {onSave && item.kind !== 'show' && <View style={{ alignSelf: 'flex-start', marginTop: 12 }}><Pill label="Save offline" icon="download" onPress={() => onSave(target)} /></View>}
     {onRemoveSaved && <View style={{ alignSelf: 'flex-start', marginTop: 12 }}><Pill label="Remove from this device" compact onPress={() => onRemoveSaved(items)} /></View>}
