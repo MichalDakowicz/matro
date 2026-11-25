@@ -12,7 +12,6 @@ import type { SavedMedia } from '../lib/offline';
 import { describePlayback, savedPlayback } from '../../../../packages/core/client/playback-info.js';
 
 export function usePlayback({ base, data, item, initialPosition, saved, offline = false, onEnd }: { base: string; data: Library; item: Item; initialPosition?: number; saved?: SavedMedia; offline?: boolean; onEnd: () => void }) {
-  const [diagnostics, setDiagnostics] = useState<typeof savedPlayback | null>(null);
   const initial = initialPosition ?? (data.progress[item.id]?.completed ? 0 : data.progress[item.id]?.position || 0);
   const pref = data.preferences.tracks?.[trackKey(item)];
   const [info, setInfo] = useState<Info | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState(''), [position, setPosition] = useState(initial), [buffered, setBuffered] = useState(initial), [playing, setPlaying] = useState(false), [caption, setCaption] = useState('');
@@ -34,6 +33,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   });
   const lastLocal = useRef(0), rewatching = useRef(!!data.progress[item.id]?.completed);
   const [markers, setMarkers] = useState(data.markers?.[item.id] || []);
+  const [diagnostics, setDiagnostics] = useState<typeof savedPlayback | null>(null);
   useEffect(() => {
     if (offline) return;
     let active = true;

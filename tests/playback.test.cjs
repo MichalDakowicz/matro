@@ -8,6 +8,7 @@ const { EventEmitter } = require('node:events');
 const { execFile } = require('node:child_process');
 const { PassThrough } = require('node:stream');
 const { createPlaybackCache } = require('../packages/core/playback/cache.cjs');
+const { copiesVideo, describePlayback } = require('../packages/core/client/playback-info.js');
 const { argumentsFor, SOFTWARE } = require('../packages/core/playback/encoding.cjs');
 const { fixtures } = require('./fixtures.cjs');
 const { ffmpeg, probe, run } = require('../packages/core/desktop/media.cjs');
@@ -24,6 +25,23 @@ test('compatible H.264 is remuxed; precise seeks and bitmap subtitles require en
   assert.ok(accelerated.indexOf('-hwaccel') < accelerated.indexOf('-i'));
   assert.equal(accelerated[accelerated.indexOf('-hwaccel') + 1], 'auto');
   assert.equal(argumentsFor({ ...options, burn: 2 }, ['-c:v', 'h264_nvenc']).includes('-hwaccel'), false);
+});
+
+test('diagnostics and the encoder agree on a quality tier at offset zero', () => {
+  const info = { video: { codec: 'h264', pixelFormat: 'yuv420p' }, audio: [{ index: 1, channels: 6 }] };
+  assert.equal(copiesVideo(info), true);
+  assert.equal(copiesVideo(info, null, 0, '720p'), false);
+  assert.equal(argumentsFor({ input: 'movie.mkv', info, quality: '720p' }).includes('copy'), false);
+  const tier = describePlayback(info, { quality: '720p', offset: 0, channels: 6, audioDelay: -0.4 });
+  assert.equal(tier.mode, 'Transcode');
+  assert.match(tier.reason, /720p quality tier/);
+  assert.match(tier.reason, /5\.1 AAC/);
+  assert.match(tier.reason, /0\.4 s earlier/);
+  const hdr = { ...info, video: { ...info.video, hdr: { transfer: 'smpte2084' } } };
+  assert.equal(copiesVideo(hdr), false);
+  assert.match(describePlayback(hdr, { direct: true }).reason, /plays in HDR.*5\.1 audio/);
+  assert.match(describePlayback(hdr).reason, /tone-mapped to SDR.*downmixed to stereo AAC/);
+  assert.match(describePlayback(hdr, { toneMap: false }).reason, /tone-mapping is unavailable/);
 });
 
 test('audio delay becomes an audio filter and does not touch the subtitle delay or direct copy', () => {

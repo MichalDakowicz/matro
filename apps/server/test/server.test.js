@@ -253,7 +253,7 @@ test('the head account sees active sessions, preparation and cache usage', async
   assert.equal((await call(null, 'GET', '/api/admin/activity')).status, 401);
   assert.equal((await call('sam', 'GET', '/api/admin/activity')).status, 403);
   await call('sam', 'GET', `/api/items/${movie.id}/direct?session=activity-direct`, undefined, { range: 'bytes=0-99' });
-  const response = await fetch(`${base}/api/items/${episode.id}/transcode?t=1&session=activity-prepared`, { headers: { cookie: jar.sam } });
+  const response = await fetch(`${base}/api/items/${episode.id}/transcode?t=0&quality=720p&session=activity-prepared`, { headers: { cookie: jar.sam } });
   assert.equal(response.status, 200);
   await response.arrayBuffer();
   await call('sam', 'POST', '/api/playback/state', { session: 'activity-direct', playing: true });
