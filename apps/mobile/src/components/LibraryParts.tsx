@@ -76,7 +76,7 @@ export function Dock({ tab, onChange, audio, requests }: { tab: string; onChange
   if (requests) items.push({ id: 'movie-requests', label: requests, icon: 'requests' });
   return <View style={[s.dockWrap, { bottom: insets.bottom + 14 }]}><View style={s.dock}>{items.map(item => <Pressable key={item.id} onPress={() => onChange(tab === item.id ? 'home' : item.id)} accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.id }} style={({ pressed }) => [s.dockItem, tab === item.id && { backgroundColor: '#ffffff1f' }, pressed && { opacity: .65 }]}><Icon name={item.icon} color={tab === item.id ? colors.text : '#bebab3'} /></Pressable>)}</View></View>;
 }
-export function AccountSheet({ visible, onClose, data, base, offline, onGo, onRefresh, onServer, onSignOut }: { visible: boolean; onClose: () => void; data: Library | null; base: string; offline: boolean; onGo: (tab: string) => void; onRefresh: () => void; onServer: () => void; onSignOut: () => void }) {
+export function AccountSheet({ visible, onClose, data, base, offline, onGo, onRefresh, onServer, onSignOut, onDevices }: { visible: boolean; onClose: () => void; data: Library | null; base: string; offline: boolean; onGo: (tab: string) => void; onRefresh: () => void; onServer: () => void; onSignOut: () => void; onDevices?: () => void }) {
   const insets = useSafeAreaInsets();
   const go = (tab: string) => { onClose(); onGo(tab); };
   return <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
@@ -91,6 +91,7 @@ export function AccountSheet({ visible, onClose, data, base, offline, onGo, onRe
       </View>
       <View style={{ gap: 10 }}>
         {data && <Pill label="Saved for offline" icon="download" onPress={() => go('offline')} />}
+        {onDevices && <Pill label="Connected devices" icon="network" onPress={onDevices} />}
         {!offline && data?.user.role === 'admin' && <View style={[t.row, { gap: 10 }]}>
           <Pill label="Folders" icon="folder" onPress={() => go('folders')} />
           <Pill label="Host downloads" icon="download" onPress={() => go('downloads')} />

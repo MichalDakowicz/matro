@@ -16,7 +16,7 @@ export function profileButton(session, open) {
   return button;
 }
 
-export function openProfile({ session, getState, save, signOut, openSaved }) {
+export function openProfile({ session, getState, save, signOut, openSaved, openDevices }) {
   const layer = h('div', { class: 'web-layer', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Profile' });
   const close = () => { layer.remove(); document.removeEventListener('keydown', onKey, true); document.body.classList.remove('web-layer-open'); };
   const onKey = e => { if (e.key === 'Escape' && !document.querySelector('dialog[open]')) { e.stopPropagation(); close(); } };
@@ -101,6 +101,7 @@ export function openProfile({ session, getState, save, signOut, openSaved }) {
       h('header', { class: 'page-head' }, h('div', { class: 'web-who' }, avatar(user.username, true), h('div', {}, h('h1', { class: 'page-title' }, user.username), h('p', { class: 'page-sub' }, admin ? 'Head account · looks after the library and everyone on it' : 'Viewer · watches and adds subtitles')))),
       section('Your watching', null, stats), section('Dub and subtitles', forget, h('p', { class: 'muted' }, 'The player remembers which audio and subtitle language you pick for each show or film, so a dub chosen in one episode carries through the series.')),
       section('Saved for offline', null, h('button', { class: 'pill', type: 'button', onclick: () => { close(); openSaved(); } }, 'View offline downloads')),
+      openDevices && section('Remote playback', null, h('button', { class: 'pill remote-device-button', type: 'button', onclick: () => { close(); openDevices(); } }, 'Connected devices')),
       session.offline ? null : section('Subtitles you added', null, added), session.offline ? null : section('Password', null, password),
       admin ? section('Downloads', null, h('p', { class: 'muted' }, 'Find films and series, add magnet links, and manage downloads on the Matro host.'), h('button', { class: 'pill primary', type: 'button', onclick: () => { close(); document.querySelector('.dock-item[data-tab="downloads"]')?.click(); } }, 'Open downloads')) : null,
       admin ? section('People', null, h('p', { class: 'page-sub', style: { margin: '-6px 0 16px' } }, 'Viewers keep their own progress and choices and can add subtitles. Only you can add or remove films and shows (Folders). To add someone, create a one-time invite code and send it to them: they sign up with it and pick their own password.'), people, h('h3', { class: 'web-sub' }, 'Invites'), invites, addPerson) : null,

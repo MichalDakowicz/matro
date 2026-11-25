@@ -13,7 +13,7 @@ const sizeText = bytes => bytes > 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Ma
 // The matcher stores artwork as `artwork/<name>`; on the server those files live behind the API.
 const artwork = value => typeof value === 'string' ? (value.startsWith('artwork/') ? `/api/${value}` : value) : Array.isArray(value) ? value.map(artwork) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, artwork(v)])) : value;
 
-export function createAdapter(session) {
+export function createAdapter(session, remote = null) {
   const noop = () => () => {};
   const watchers = new Set();
   const offline = createOffline(session.user);
@@ -208,6 +208,7 @@ export function createAdapter(session) {
 
   const matro = {
     chooseSource: window.matroDesktop?.chooseSource,
+    remote,
     recoveryScope: `account:${session.user.id}:${session.user.username}`,
     load, inspect, prepare: inspect, subtitles, loadSubtitle, stream,
     offlineSave: session.offline ? null : async id => {

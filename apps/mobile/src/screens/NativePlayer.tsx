@@ -14,10 +14,38 @@ import { Icon, IconButton, MediaArt, Pill, SkipIcon, styles as t } from '../comp
 import type { ArtProps } from '../components/LibraryParts';
 import { colors, fonts } from '../theme';
 import type { SavedMedia } from '../lib/offline';
+import type { RemoteCommand, RemotePlayback } from '../../../../packages/core/client/remote';
 
-type Props = ArtProps & { item: Item; data: Library; initialPosition?: number; saved?: SavedMedia; offline?: boolean; queue: Item[]; onBack: () => void; onSelect: (item: Item) => void; onNext: () => void };
-export default function NativePlayer({ base, headers, item, data, initialPosition, saved, offline, queue, onBack, onSelect, onNext }: Props) {
+export type RemotePlayer = { playback: () => RemotePlayback | null; receive: (command: RemoteCommand) => void; pause: () => Promise<void> };
+type Props = ArtProps & { item: Item; data: Library; initialPosition?: number; saved?: SavedMedia; offline?: boolean; queue: Item[]; onBack: () => void; onSelect: (item: Item) => void; onNext: () => void;
+  onDevices?: () => void; registerRemote?: (player: RemotePlayer | null) => void; confirmRemoteStart?: (ok: boolean) => void };
+export default function NativePlayer({ base, headers, item, data, initialPosition, saved, offline, queue, onBack, onSelect, onNext, onDevices, registerRemote, confirmRemoteStart }: Props) {
   const p = usePlayback({ base, data, item, initialPosition, saved, offline, onEnd: onNext });
+  const playback = useRef(p);
+  playback.current = p;
+  useEffect(() => {
+    if (!registerRemote) return;
+    registerRemote({
+      playback: () => {
+        const player = playback.current;
+        return player.info && !player.error ? { itemId: item.id, position: player.position, playing: player.playing } : null;
+      },
+      receive: command => {
+        const player = playback.current;
+        if (command.itemId !== item.id || !player.info || player.error) throw new Error('This device changed titles.');
+        if (command.action === 'seek') player.seek(command.position);
+        else player.setPlaybackPlaying(command.action === 'play');
+      },
+      pause: async () => { playback.current.setPlaybackPlaying(false); },
+    });
+    return () => registerRemote(null);
+  }, [item.id, registerRemote]);
+  useEffect(() => {
+    if (!confirmRemoteStart) return;
+    if (p.error) confirmRemoteStart(false);
+    else if (!p.busy && p.player.playing) confirmRemoteStart(true);
+  }, [confirmRemoteStart, p.busy, p.error, p.player, p.playing]);
+  useEffect(() => () => confirmRemoteStart?.(false), [confirmRemoteStart]);
   const [controls, setControls] = useState(true), [sheet, setSheet] = useState<'tracks' | 'queue' | null>(null), [scrub, setScrub] = useState<number | null>(null);
   const insets = useSafeAreaInsets(), { width, height } = useWindowDimensions(), landscape = width > height, opacity = useRef(new Animated.Value(1)).current;
   const dragging = useRef(false);
@@ -87,6 +115,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
       <View style={[s.top, { top: landscape ? 8 : insets.top + 12, left: Math.max(14, insets.left), right: Math.max(14, insets.right) }]}>
         <IconButton name="back" label="Back to library" onPress={() => void leave()} />
         <View style={{ flex: 1, gap: 4 }}><Text numberOfLines={1} style={s.playerTitle}>{title}</Text><Text numberOfLines={1} style={s.playerSubtitle}>{item.kind === 'show' ? `${nameFor(data, item)} · S${item.season} E${item.episode}` : `${item.format} · Movie`}</Text></View>
+        {onDevices && <IconButton name="network" label="Connected devices" onPress={() => { setControls(true); onDevices(); }} />}
       </View>
       <LinearGradient pointerEvents="none" colors={['transparent', '#000e']} style={[s.bottomFade, { height: landscape ? 180 : 300 + insets.bottom }]} />
       <View style={[s.controls, { left: Math.max(14, insets.left), right: Math.max(14, insets.right), bottom: landscape ? Math.max(6, insets.bottom) : insets.bottom + 12 }]}>

@@ -618,7 +618,7 @@ function detail(id, focus = true) {
       <p class="detail-sub">${[...facts, selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie', selected.format].map(esc).join(' <span aria-hidden="true">·</span> ')}</p>
       ${m?.overview ? `<p class="detail-overview">${esc(m.overview)}</p>` : ''}
       <div class="detail-actions">${selected.kind === 'movie' && api.canCompareEditions !== false ? `<button class="pill" data-upgrade="${selected.id}">Find better quality / compare editions</button>` : ''}<button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
-      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}${api.offlineSave ? `<button class="pill" data-offline-save="${target.id}">${icon('download')}${selected.kind === 'show' ? 'Save episode offline' : 'Save offline'}</button>` : ''}${api.offlineSaveMany && selected.kind === 'show' ? offlineSeasonButtons(items, target) : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
+      ${api.remote ? `<button class="pill remote-device-button" data-remote-title="${target.id}">Play on device</button>` : ''}${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}${api.offlineSave ? `<button class="pill" data-offline-save="${target.id}">${icon('download')}${selected.kind === 'show' ? 'Save episode offline' : 'Save offline'}</button>` : ''}${api.offlineSaveMany && selected.kind === 'show' ? offlineSeasonButtons(items, target) : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
       ${m?.rating ? `<div class="ratings"><div><p class="rating-label">TMDB</p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}</div>
     <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
       ${castPanel(m)}${productionPanel(m)}${filePanel(selected, m)}</div></div>`;
@@ -763,9 +763,9 @@ function enqueue(id, all = false) {
   library.queue = [...new Set([...library.queue, ...ids])]; void attempt(save); toast(`${all ? 'Episodes' : displayName(item)} added to queue`); if (view === 'player') renderQueue();
 }
 function ib(name, label, action, extra = '') { return `<button class="icon-button ${extra}" data-action="${action}" aria-label="${label}" title="${label}">${icon(name)}</button>`; }
-async function play(id, keepQueue = false, compareEdition = false) {
+async function play(id, keepQueue = false, compareEdition = false, remotePosition) {
   if (compareEdition) library.queue = [id];
-  else {
+  else if (remotePosition === undefined) {
     const editions = Object.values(library.movieEditions || {}).find(group => group.editions.includes(id));
     if (editions?.favorite && library.items.some(item => item.id === editions.favorite)) {
       id = editions.favorite;
@@ -777,7 +777,7 @@ async function play(id, keepQueue = false, compareEdition = false) {
   if (view !== 'player') queueOpen = false;
   hidePreview(); remember(); await save(); const token = ++generation; subtitleGeneration++; loading = true; frameRun++; selected = null;
   // A preloaded stream is used only if its track choice still matches what this title would pick now.
-  const fresh = prepared?.id === id && (({ audio: a, subtitle: s, delay: d }) => a === prepared.audio && s === prepared.subtitle && d === prepared.delay)(chooseTracks(item, prepared.info));
+  const fresh = remotePosition === undefined && prepared?.id === id && (({ audio: a, subtitle: s, delay: d }) => a === prepared.audio && s === prepared.subtitle && d === prepared.delay)(chooseTracks(item, prepared.info));
   const ready = fresh ? prepared : null; if (ready) prepared = null; discardPrepared();
   resetPlayer();
   await api.stop(ready?.url); current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
@@ -806,7 +806,7 @@ async function play(id, keepQueue = false, compareEdition = false) {
     }
     if (item.kind !== 'show' && library.progress[id]) library.progress[id].hidden = false;
     updateMetadata();
-    const start = startAt(item, info.duration);
+    const start = remotePosition === undefined ? startAt(item, info.duration) : Math.min(remotePosition, Math.max(0, info.duration - .1));
     // Starting an already watched title begins a new viewing session with a resumable position.
     if (item.kind !== 'show' && completed(id) && !start) library.progress[id] = { ...library.progress[id], position: 0, completed: false, updated: Date.now() };
     if (ready) await adoptStream(ready, token); else await loadStream(start, true, token);
@@ -861,7 +861,7 @@ async function adoptStream(ready, token) {
 function renderPlayer(adopt = null) {
   document.body.classList.add('in-player');
   const heading = current.kind === 'show' ? `${displayName(current)} · ${code(current)}` : itemMeta(current);
-  root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
+  root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div>${api.remote ? '<button class="pill remote-device-button player-device-button" data-action="devices">Devices</button>' : ''}</div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
   if (adopt) { $('#video').replaceWith(adopt); adopt.id = 'video'; adopt.dataset.preloaded = String(adopt.readyState); }
   video = $('#video'); applyVolume(library.preferences.volume); updateVolume(); applySubStyle();
   const player = video, events = playerEvents = new AbortController();
@@ -964,6 +964,55 @@ async function seek(position) {
     pendingStream = null; settlePending = null; video.currentTime = relative; updateTime(); checkpoint(true); return;
   }
   const token = ++generation, load = loadStream(target, shouldPlay, token); checkpoint(true); await load;
+}
+function remotePlayback() {
+  if (!video || view !== 'player' || streamId !== current?.id || playbackError) return null;
+  const position = pendingStream?.id === current.id ? pendingStream.position : offset + video.currentTime;
+  return { itemId: current.id, position, playing: !video.paused };
+}
+async function setRemotePlaying(playing) {
+  const player = video;
+  playIntent = playing;
+  if (playing) {
+    try { await player.play(); }
+    catch (error) {
+      if (player === video) { playIntent = false; updateToggle(); }
+      throw error;
+    }
+  } else player.pause();
+  if (player === video) { updateToggle(); void api.playbackState(playing); }
+}
+async function receiveRemote({ action, itemId, position }) {
+  if (action === 'start') {
+    if (!library.items.some(item => item.id === itemId)) throw new Error('That title is unavailable on this device.');
+    await play(itemId, false, false, position);
+    if (remotePlayback()?.itemId !== itemId || video.paused) throw new Error('Could not start playback here.');
+    return;
+  }
+  if (remotePlayback()?.itemId !== itemId) throw new Error('This device changed titles.');
+  if (action === 'seek') {
+    await seek(position);
+    if (remotePlayback()?.itemId !== itemId) throw new Error('Could not seek on this device.');
+  } else await setRemotePlaying(action === 'play');
+}
+function openDevices(itemId) {
+  const player = itemId ? null : video;
+  const start = itemId ? {
+    label: 'Play on selected device',
+    snapshot: () => ({ itemId, position: completed(itemId) ? 0 : library.progress[itemId]?.position || 0 }),
+  } : view === 'player' ? {
+    label: 'Continue on selected device',
+    snapshot: () => {
+      const snapshot = player === video && remotePlayback();
+      if (!snapshot) return null;
+      return { ...snapshot, pause: async () => { if (video === player) await setRemotePlaying(false); } };
+    },
+  } : undefined;
+  return api.remote?.open({
+    start,
+    title: id => { const item = library.items.find(item => item.id === id); return item && (item.kind === 'show' ? episodeName(item) : displayName(item)); },
+    continueHere: playback => receiveRemote({ ...playback, action: 'start' }),
+  });
 }
 // Left: elapsed / total. Right: time left, from the same whole seconds so elapsed + left always adds up to the total shown.
 function showTimes(position) { $('#position').textContent = fmt(position); $('#remaining').textContent = `-${fmt(wholeSeconds(info.duration) - wholeSeconds(position))}`; }
@@ -1238,6 +1287,7 @@ const actions = {
   about: () => { footerOpen = !footerOpen; $('#library-footer')?.classList.toggle('open', footerOpen); $('.help-button')?.setAttribute('aria-expanded', String(footerOpen)); },
   'fix-match': () => openMatch(selected), 'open-tmdb': () => openTitlePage('tmdb'), 'open-imdb': () => openTitlePage('imdb'), 'pick-prelude': () => setPrelude(false), 'clear-prelude': () => setPrelude(true), 'close-match': () => { $('#match-dialog')?.close(); matchItem = null; },
   shortcuts: () => $('#shortcuts').showModal(), library: backToLibrary,
+  devices: () => openDevices(),
   toggle, backward: () => seek(offset + video.currentTime - SKIP), forward: () => seek(offset + video.currentTime + SKIP),
   previous: () => step(-1), next: () => step(1), fullscreen: () => api.window('fullscreen'),
   queue: () => { if (fullscreenActive) fullscreenQueueOpen = !fullscreenQueueOpen; else queueOpen = !queueOpen; renderQueue(); },
@@ -1314,6 +1364,7 @@ document.addEventListener('click', event => {
     if (btn.dataset.seasonTab) return showSeason(Number(btn.dataset.seasonTab));
     if (btn.dataset.matchPick) return assignMatch(Number(btn.dataset.matchPick));
     if (btn.dataset.matchNone !== undefined) return assignMatch(null);
+    if (btn.dataset.remoteTitle) return openDevices(btn.dataset.remoteTitle);
     if (btn.dataset.restart) { const old = library.progress[btn.dataset.restart]; if (old) library.progress[btn.dataset.restart] = { ...old, position: 0, updated: Date.now() }; return play(btn.dataset.restart); }
     if (btn.dataset.upgrade && api.canCompareEditions !== false) { await downloads.openUpgrade(btn.dataset.upgrade); goTab('downloads'); return; }
     if (btn.dataset.play) return play(btn.dataset.play, !!btn.closest('.queue-panel'));
@@ -1338,7 +1389,9 @@ document.addEventListener('click', event => {
     const action = actions[btn.dataset.action]; if (action) { btn.classList.add('busy'); try { await action(); } finally { btn.classList.remove('busy'); } }
   });
 });
+document.addEventListener('matro:devices', () => { openDevices(); });
 document.addEventListener('keydown', event => {
+  if (document.querySelector('dialog[open] .remote-device')) return;
   const typing = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) && event.target.type !== 'range';
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); void attempt(actions.files); return; }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && view === 'library') { event.preventDefault(); if (tab !== 'search') goTab('search'); $('#search')?.focus(); return; }
@@ -1380,5 +1433,6 @@ else void attempt(async () => { library = await api.load();
   metadata = library.metadata || {}; metadataEnabled = !!library.metadataEnabled;
   scannerSummary = library.scanner || await api.scannerStatus();
   library.markers ||= {};
+  api.remote?.attach({ playback: remotePlayback, receive: receiveRemote });
   if (api.movieRequests?.openOnLoad) tab = 'movie-requests';
   applyMotion(); renderLibrary(); if (restored.recovered) void attempt(save); });

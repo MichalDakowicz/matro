@@ -8,7 +8,7 @@ import { Icon, IconButton, MediaArt, Pill, ProgressBar, styles as t } from '../c
 import type { ArtProps } from '../components/LibraryParts';
 import { colors, fonts } from '../theme';
 
-export default function TitleScreen({ data, items, onBack, onPlay, onComplete, onEnqueue, onSave, onSaveMany, onRemoveSaved, savedIds, ...art }: ArtProps & { data: Library; items: Item[]; onBack: () => void; onPlay: (item: Item, start?: number) => void; onComplete: (item: Item) => void; onEnqueue: (items: Item[]) => void; onSave?: (item: Item) => void; onSaveMany?: (items: Item[]) => void; onRemoveSaved?: (items: Item[]) => void; savedIds?: Set<string> }) {
+export default function TitleScreen({ data, items, onBack, onPlay, onComplete, onEnqueue, onSave, onSaveMany, onRemoveSaved, savedIds, onDevices, ...art }: ArtProps & { data: Library; items: Item[]; onBack: () => void; onPlay: (item: Item, start?: number) => void; onComplete: (item: Item) => void; onEnqueue: (items: Item[]) => void; onSave?: (item: Item) => void; onSaveMany?: (items: Item[]) => void; onRemoveSaved?: (items: Item[]) => void; savedIds?: Set<string>; onDevices?: (item: Item) => void }) {
   const item = items[0], m = metadataFor(data, item), target = resumeItem(data, items), p = data.progress[target.id];
   const insets = useSafeAreaInsets(), seasons = [...new Set(items.map(i => i.season || 1))];
   const [season, setSeason] = useState(target.season || seasons[0]);
@@ -29,6 +29,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onComplete, o
       <View style={s.circleAction}><IconButton name="plus" label="Add to queue" size={50} onPress={() => onEnqueue(items)} /></View>
       <View style={s.circleAction}><IconButton name="check" label={data.progress[item.id]?.completed ? 'Mark incomplete' : 'Mark complete'} size={50} active={!!data.progress[item.id]?.completed} onPress={() => onComplete(item)} /></View>
     </View>
+    {onDevices && <View style={{ alignSelf: 'flex-start', marginTop: 12 }}><Pill label="Play on device" icon="network" onPress={() => onDevices(target)} /></View>}
     {onSave && item.kind !== 'show' && <View style={{ alignSelf: 'flex-start', marginTop: 12 }}><Pill label="Save offline" icon="download" onPress={() => onSave(target)} /></View>}
     {onRemoveSaved && <View style={{ alignSelf: 'flex-start', marginTop: 12 }}><Pill label="Remove from this device" compact onPress={() => onRemoveSaved(items)} /></View>}
     {m.rating ? <View style={s.ratings}><Text style={[t.mono, { marginBottom: 6 }]}>TMDB</Text><View style={[t.row, { alignItems: 'baseline', gap: 5 }]}><Text style={s.score}>{m.rating.toFixed(1)}</Text><Text style={t.dim}>/10{m.votes ? ` · ${m.votes.toLocaleString()} votes` : ''}</Text></View></View> : null}

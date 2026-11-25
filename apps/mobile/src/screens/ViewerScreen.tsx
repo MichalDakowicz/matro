@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, BackHandler, FlatList, Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Alert, AppState, BackHandler, FlatList, Platform, Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { changeProgress, library, mediaHeaders, request, ServerError, type Item, type Library, type MovieRequest, type ScannerStatus } from '../lib/server';
 import { progressRecovery, recoveryScope } from '../lib/storage';
@@ -8,8 +8,10 @@ import { dismissedProgress, normalizeProgress } from '../../../../packages/core/
 import { colors, fonts } from '../theme';
 import { Icon, Pill, styles as t } from '../components/Matro';
 import { AccountSheet, ContinueRow, Corner, Dock, FeaturedReel, PosterCard } from '../components/LibraryParts';
-import NativePlayer from './NativePlayer';
+import NativePlayer, { type RemotePlayer } from './NativePlayer';
 import TitleScreen from './TitleScreen';
+import { RemoteDevices } from '../components/RemoteDevices';
+import { createRemote, type RemoteCommand, type RemotePlayback, type RemoteState } from '../../../../packages/core/client/remote';
 import DownloadsScreen from './DownloadsScreen';
 import FoldersScreen from './FoldersScreen';
 import OfflineScreen from './OfflineScreen';
@@ -18,14 +20,33 @@ import { useMovieRequestAlerts } from '../lib/movie-request-alerts';
 import { offlineLibrary, rememberLibrary, removeOffline, resumeInterrupted, savedTitle, savedTitles, saveOffline, saveOfflineBatch, watchOffline, type SavedMedia } from '../lib/offline';
 
 type Props = { base: string; onSignedOut: () => void; onChangeServer: () => void };
+type RemoteStart = { run: number; confirm: (ok: boolean) => void };
 const kinds = [{ kind: 'show', title: 'Shows', noun: 'shows' }, { kind: 'movie', title: 'Movies', noun: 'titles' }, { kind: 'audio', title: 'Music & audio', noun: 'files' }];
 export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Props) {
   const [data, setData] = useState<Library | null>(null), [headers, setHeaders] = useState<Record<string, string>>({});
   const dataRef = useRef(data); dataRef.current = data;
   const [error, setError] = useState(''), [query, setQuery] = useState(''), [tab, setTab] = useState('home'), [filter, setFilter] = useState('all');
   const [requestSearch, setRequestSearch] = useState<MovieRequest | null>(null);
-  const [selected, setSelected] = useState<string | null>(null), [playing, setPlaying] = useState<{ item: Item; start?: number; queue: Item[]; saved?: SavedMedia } | null>(null);
+  const [selected, setSelected] = useState<string | null>(null), [playing, setPlaying] = useState<{ item: Item; start?: number; queue: Item[]; saved?: SavedMedia; remoteStart?: RemoteStart } | null>(null);
   const [offline, setOffline] = useState(false), playRun = useRef(0);
+  const [remoteSheet, setRemoteSheet] = useState<{ item?: Item } | null>(null);
+  const remoteSheetOpen = useRef(false); remoteSheetOpen.current = !!remoteSheet;
+  const [remoteState, setRemoteState] = useState<RemoteState>({ enabled: false, devices: [], error: '' });
+  const remotePlayer = useRef<RemotePlayer | null>(null), receiveRemote = useRef<(command: RemoteCommand) => Promise<void>>(async () => {});
+  const registerRemote = useCallback((player: RemotePlayer | null) => { remotePlayer.current = player; }, []);
+  const remote = useMemo(() => Platform.OS === 'android' ? createRemote({
+    post: (path, body, timeout) => request(base, path, { method: 'POST', body }, timeout),
+    playback: () => remotePlayer.current?.playback() || null,
+    receive: command => receiveRemote.current(command),
+    changed: state => { if (remoteSheetOpen.current) setRemoteState(state); },
+  }) : null, [base]);
+  useEffect(() => {
+    if (!remote) return;
+    const active = (state: string | null) => remote.setActive(!offline && state === 'active');
+    active(AppState.currentState);
+    const subscription = AppState.addEventListener('change', active);
+    return () => { subscription.remove(); remote.setActive(false); };
+  }, [offline, remote]);
   const [refreshing, setRefreshing] = useState(false), [account, setAccount] = useState(false), [folder, setFolder] = useState<string | null>(null);
   const revision = useRef<string | undefined>(undefined);
   const alerts = useMovieRequestAlerts(base, !offline && data?.user.role === 'admin' && data.movieRequestPushEnabled === true);
@@ -141,12 +162,39 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     if (offline && !saved) { setError('This title is not saved on this device.'); return; }
     setPlaying({ item, start, queue, saved: offline ? saved : undefined });
   };
+  const playbackQueue = (item: Item, data: Library) => item.kind === 'show'
+    ? allGroups.find(items => items.some(i => i.id === item.id)) || [item]
+    : data.queue.includes(item.id) ? data.queue.flatMap(id => data.items.find(i => i.id === id) || []) : [item];
   const play = (item: Item, start?: number) => {
     if (!data) return;
-    const siblings = allGroups.find(items => items.some(i => i.id === item.id)) || [item];
-    const queue = item.kind === 'show' ? siblings : data.queue.includes(item.id) ? data.queue.flatMap(id => data.items.find(i => i.id === id) || []) : [item];
+    const queue = playbackQueue(item, data);
     void startPlayback(item, queue, start);
     if (!offline) void request(base, '/api/state', { method: 'PUT', body: { queue: queue.map(i => i.id) } }).catch(e => setError(e.message));
+  };
+  async function continueHere({ itemId, position }: Pick<RemotePlayback, 'itemId' | 'position'>) {
+    const current = dataRef.current, item = current?.items.find(item => item.id === itemId);
+    if (offline || !current || !item) throw new Error('That title is unavailable on this device.');
+    const queue = playbackQueue(item, current), run = ++playRun.current;
+    setSelected(null);
+    await new Promise<void>((resolve, reject) => {
+      const confirm = (ok: boolean) => {
+        clearTimeout(timer);
+        if (ok && run === playRun.current) resolve();
+        else reject(new Error('Could not start playback here.'));
+      };
+      const timer = setTimeout(() => confirm(false), 16000);
+      setPlaying({ item, start: position, queue, remoteStart: { run, confirm } });
+    });
+  }
+  receiveRemote.current = async command => {
+    if (command.action === 'start') {
+      await continueHere(command);
+      setAccount(false);
+      setRemoteSheet(null);
+    } else {
+      if (!remotePlayer.current) throw new Error('No title is playing on this device.');
+      remotePlayer.current.receive(command);
+    }
   };
   const saveName = (item: Item) => data && item.kind !== 'show' ? nameFor(data, item) : item.title;
   useEffect(() => {
@@ -177,13 +225,28 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     setAccount(false);
     changeTab('movie-requests');
   }, [alerts.opened, alerts.supported, playing]);
-  if (playing && data) return <NativePlayer key={`${playing.item.id}:${playing.start ?? 'resume'}`} {...art} item={playing.item} data={data} initialPosition={playing.start} queue={playing.queue}
+  const openDevices = remote && !offline && data ? (item?: Item) => { setRemoteState(remote.state()); setRemoteSheet({ item }); } : undefined;
+  const remoteSheetItem = remoteSheet?.item;
+  const remoteDialog = remote && data && !offline ? <RemoteDevices visible={!!remoteSheet} onClose={() => setRemoteSheet(null)} remote={remote} state={remoteState}
+    continueHere={continueHere} title={id => { const item = data.items.find(item => item.id === id); return item && nameFor(data, item); }}
+    outgoing={remoteSheetItem ? {
+      label: 'Play on selected device',
+      snapshot: () => ({ itemId: remoteSheetItem.id, position: data.progress[remoteSheetItem.id]?.completed ? 0 : data.progress[remoteSheetItem.id]?.position || 0 }),
+    } : playing ? {
+      label: 'Continue on selected device',
+      snapshot: () => {
+        const player = remotePlayer.current, playback = player?.playback();
+        return player && playback ? { ...playback, pause: async () => { if (remotePlayer.current === player) await player.pause(); } } : null;
+      },
+    } : undefined} /> : null;
+  if (playing && data) return <><NativePlayer key={`${playing.item.id}:${playing.start ?? 'resume'}:${playing.remoteStart?.run ?? 'local'}`} {...art} item={playing.item} data={data} initialPosition={playing.start} queue={playing.queue}
+    onDevices={openDevices ? () => openDevices() : undefined} registerRemote={remote ? registerRemote : undefined} confirmRemoteStart={playing.remoteStart?.confirm}
     saved={playing.saved} offline={offline} onBack={() => { playRun.current++; setPlaying(null); void load(); }} onSelect={item => void startPlayback(item, playing.queue)} onNext={() => {
       const next = playing.queue[playing.queue.findIndex(i => i.id === playing.item.id) + 1];
       if (next && data.preferences.autoplay !== false) void startPlayback(next, playing.queue);
       else { setPlaying(null); void load(); }
-    }} />;
-  if (detail && data) return <TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onComplete={complete} onEnqueue={enqueue} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} />;
+    }} />{remoteDialog}</>;
+  if (detail && data) return <><TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onDevices={openDevices} onComplete={complete} onEnqueue={enqueue} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} />{remoteDialog}</>;
   const contentStyle = { paddingTop: insets.top + 76, paddingBottom: insets.bottom + 104, paddingHorizontal: 18 };
   const search = tab === 'search';
   const matches = (items: Item[]) => !search || `${nameFor(data!, items[0])} ${metadataFor(data!, items[0]).people?.join(' ')} ${items.map(i => i.title + ' ' + i.path).join(' ')}`.toLowerCase().includes(query.toLowerCase().trim());
@@ -199,7 +262,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   </> : null;
   const browse = data && ['movie', 'show', 'audio'].includes(tab), allBrowse = browse ? groups.filter(items => items[0].kind === tab) : [];
   const browseItems = browse ? allBrowse.filter(items => filter === 'all' || statusOf(data!, items) === filter) : [];
-  return <View style={s.fill}>
+  return <><View style={s.fill}>
     {tab === 'offline' && data ? <OfflineScreen {...art} data={data} offline={offline}
       onOpenTitle={items => { setSavedOnly(true); setSelected(titleKey(items[0])); }}
       onResume={id => { const item = data.items.find(item => item.id === id); if (item) save(item); }}
@@ -215,8 +278,8 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     {data && error ? <Pressable onPress={() => setError('')} style={[s.toast, { bottom: insets.bottom + 86 }]}><Text style={t.text}>{error}</Text></Pressable> : null}
     <Corner username={data?.user.username} onHome={() => changeTab('home')} onProfile={() => setAccount(true)} onHelp={() => Alert.alert('Matro', `${data?.items.length || 0} files in your library.\n\nMetadata and artwork from TMDB.\n\nMovies are prepared on your Matro server and played natively on this device.`, [{ text: 'Refresh', onPress: () => void load() }, { text: 'Close' }])} />
     <Dock tab={tab} onChange={changeTab} audio={!!data?.items.some(i => i.kind === 'audio')} requests={!offline && data?.movieRequestsEnabled ? (data.user.role === 'admin' ? 'Movie requests' : 'Request a movie') : undefined} />
-    <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} onGo={changeTab} onRefresh={() => void load()} onServer={onChangeServer} onSignOut={onSignedOut} />
-  </View>;
+    <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} onGo={changeTab} onRefresh={() => void load()} onServer={onChangeServer} onSignOut={onSignedOut} onDevices={openDevices ? () => { setAccount(false); openDevices(); } : undefined} />
+  </View>{remoteDialog}</>;
 }
 function ShowScanStatus({ base, initial }: { base: string; initial?: ScannerStatus }) {
   const [scan, setScan] = useState(initial);
