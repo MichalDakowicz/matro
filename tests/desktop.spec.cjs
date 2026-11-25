@@ -784,3 +784,30 @@ test('the next episode is preloaded near the end and starts without waiting', as
     expect(first.completed).toBe(true); expect(first.position).toBeGreaterThan(11);
   } finally { await app.close(); }
 });
+
+test('movie browsing combines sorting, watch status and runtime with keyboard focus', async () => {
+  const f = await fixtures();
+  const profile = await fs.mkdtemp(path.join(f.dir, 'browse-profile-'));
+  const items = ['Alpha', 'Bravo', 'Charlie'].map((title, index) => ({
+    ...describe(path.join(f.dir, title + '.mkv')), added: index + 1, duration: index === 1 ? 3600 : 1200,
+  }));
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items,
+    progress: { [items[0].id]: { completed: true, position: 1200, duration: 1200 } },
+  }));
+  const app = await electron.launch(launchOptions(profile));
+  try {
+    const page = await app.firstWindow();
+    await page.getByRole('button', { name: /^Movies/ }).click();
+    const names = page.locator('.grid .card-name');
+    await expect(names).toHaveText(['Alpha', 'Bravo', 'Charlie']);
+    const sort = page.getByLabel('Sort by');
+    await sort.focus();
+    await sort.press('ArrowDown');
+    await expect(sort).toBeFocused();
+    await expect(names).toHaveText(['Charlie', 'Bravo', 'Alpha']);
+    await page.getByLabel('Under 40 minutes').check();
+    await expect(names).toHaveText(['Charlie', 'Alpha']);
+    await page.getByRole('button', { name: 'Unwatched', exact: true }).click();
+    await expect(names).toHaveText(['Charlie']);
+  } finally { await app.close(); }
+});
