@@ -16,7 +16,7 @@ const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(resolv
 
 // Exercise the real hook with asynchronous native replacements and events. The
 // platform boundary is fake; playback URLs, subtitles and hook logic are real.
-function harness(t: any, directPlay = false) {
+function harness(t: any, directPlay = false, savedAtOpen = false) {
   const effects: (() => (() => void) | void)[] = [], states: any[] = [], listeners = new Map<string, Function>();
   const pending: { source: any; resolve: () => void; reject: (error: Error) => void }[] = [], downloads: { ready: (uri: string) => void; cancelled: boolean }[] = [];
   const saved: any[] = [], app = { currentState: 'active', addEventListener: (_: string, callback: Function) => { listeners.set('appState', callback); return { remove() {} }; } };
@@ -28,16 +28,19 @@ function harness(t: any, directPlay = false) {
   };
   const info = { duration: 200, directPlay, audio: [{ index: 1 }], embedded: [], uploaded: [{ id: 1, name: 'English', language: 'en' }] };
   const data = { user: {}, preferences: { tracks: {} }, progress: {}, markers: {} };
+  const localCopy = { uri: 'file:///saved.mp4', info, text: {} };
+  let available = savedAtOpen, inspections = 0;
   const modules: Record<string, any> = {
     react: { useCallback: (fn: Function) => fn, useEffect: (fn: any) => effects.push(fn), useRef: (current: any) => ({ current }), useState: (initial: any) => { const i = states.push(initial) - 1; return [initial, (value: any) => { states[i] = value; }]; } },
     'react-native': { AppState: app, Platform: { OS: 'android' } },
     'expo-video': { useVideoPlayer: () => player },
-    '../lib/server': { inspect: async () => info, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: {} }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry) },
+    '../lib/server': { inspect: async () => { inspections++; return info; }, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: {} }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry) },
     '../../../../packages/core/client/library': { trackKey: () => 'movie', matchTrack: () => undefined },
     '../../../../packages/core/client/watch-progress.js': { isContinueDismissed },
     '../../../../packages/core/client/subtitles': { parseVtt },
     './diskBuffer': { downloadPlayback: (_: any, __: any, ready: any) => { const job = { ready, cancelled: false }; downloads.push(job); return () => { job.cancelled = true; }; } },
     '../lib/storage': { recoveryScope: () => 'test', progressRecovery: { write: async () => {} } },
+    '../lib/offline': { savedTitle: async () => available ? localCopy : undefined },
   };
   const context = { exports: {} as any, require: (name: string) => { assert.ok(modules[name], name); return modules[name]; },
     setTimeout, clearTimeout, setInterval: () => 0, clearInterval: () => {}, AbortController, Date,
@@ -45,10 +48,12 @@ function harness(t: any, directPlay = false) {
   };
   vm.runInNewContext(code, context);
   let ended = 0;
-  const hook = context.exports.usePlayback({ base: 'http://server', data, item: { id: 'movie', kind: 'movie', format: 'MKV' }, onEnd: () => { ended++; } });
+  const hook = context.exports.usePlayback({ base: 'http://server', data, item: { id: 'movie', kind: 'movie', format: 'MKV' }, saved: savedAtOpen ? localCopy : undefined, onEnd: () => { ended++; } });
   const cleanups = effects.map(fn => fn());
   t.after(() => { for (const cleanup of cleanups.reverse()) cleanup?.(); });
-  return { hook, player, pending, downloads, saved, app, states, emit: (name: string, event: any = {}) => listeners.get(name)?.(event), ended: () => ended };
+  return { hook, player, pending, downloads, saved, app, states, localCopy, inspections: () => inspections,
+    finishOfflineSave: () => { available = true; },
+    emit: (name: string, event: any = {}) => listeners.get(name)?.(event), ended: () => ended };
 }
 
 test('a completed download leaves the decoder running and is used on the next seek', async t => {
@@ -81,6 +86,7 @@ test('rapid seeks serialize native loads and skip superseded requests', async t 
 
 test('backward seeks ignore the old clock and old event payloads, and clear subtitles immediately', async t => {
   const h = harness(t, true); await flush(); h.pending[0].resolve(); await flush();
+  assert.equal(h.downloads.length, 0, 'direct play needs no temporary disk copy');
   h.hook.chooseSubtitle(10001); await flush();
   h.player.currentTime = 0; h.emit('timeUpdate');
   h.player.currentTime = 6; h.emit('timeUpdate');
@@ -94,6 +100,23 @@ test('backward seeks ignore the old clock and old event payloads, and clear subt
   h.player.currentTime = 2; h.emit('timeUpdate', { currentTime: 80 });
   await h.hook.persist(); assert.equal(h.saved.at(-1).position, 2);
   assert.equal(h.ended(), 0);
+});
+
+test('online playback selects saved media before inspection', async t => {
+  const h = harness(t, false, true); await flush();
+  assert.equal(h.pending[0].source.uri, h.localCopy.uri);
+  assert.equal(h.inspections(), 0);
+  h.pending[0].resolve(); await flush();
+  assert.equal(h.downloads.length, 0);
+});
+
+test('a stream failure selects a saved copy that became available during playback', async t => {
+  const h = harness(t, true); await flush(); h.pending[0].resolve(); await flush();
+  h.finishOfflineSave();
+  h.player.status = 'error';
+  h.emit('statusChange', { status: 'error' }); await flush();
+  assert.ok(h.states.includes(h.localCopy));
+  assert.equal(h.pending.length, 1, 'recovery does not restart the stream');
 });
 
 test('pausing during a replacement and backgrounding never resume playback on completion', async t => {
