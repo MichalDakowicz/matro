@@ -21,10 +21,26 @@ export function groupTitles(items) {
   return [...groups.values()];
 }
 
+/** @param {number} position @param {number} duration */
+export function reachedPlaybackEnd(position, duration) {
+  return duration > 0 && position >= duration - Math.min(10, duration * .05);
+}
+
+/** @param {number} position @param {number} duration @param {{type: string, start: number}[]} markers */
+export function reachedOutro(position, duration, markers) {
+  return duration > 0 && markers.some(marker => marker.type === 'outro'
+    && marker.start > duration / 2 && marker.start < duration && position >= marker.start);
+}
+
+/** @param {number} position @param {number} duration @param {{type: string, start: number}[]} [markers] */
+export function reachedCompletion(position, duration, markers = []) {
+  return reachedPlaybackEnd(position, duration) || reachedOutro(position, duration, markers);
+}
+
 /** @param {Progress | undefined} entry */
 export function isCompleted(entry) {
   if (!entry) return false;
-  return entry.completed ?? (entry.duration > 0 && entry.position >= entry.duration - Math.min(10, entry.duration * .05));
+  return entry.completed ?? reachedCompletion(entry.position, entry.duration);
 }
 
 /** @param {ProgressMap} progress */

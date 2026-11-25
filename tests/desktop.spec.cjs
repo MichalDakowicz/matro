@@ -465,6 +465,7 @@ test('leaving during an outro marks the episode watched and moves Continue watch
     await expect(page.locator('#seek-preview-section')).toBeHidden();
     await page.locator('#seek').evaluate(el => { el.value = '8'; el.dispatchEvent(new Event('change', { bubbles: true })); });
     await expect(page.locator('#position')).toHaveText('0:08');
+    await expect(page.getByRole('button', { name: 'Next episode', exact: true })).toBeVisible();
     await expect.poll(() => page.locator('video').evaluate(v => v.readyState)).toBeGreaterThanOrEqual(2);
     await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
     expect((await page.evaluate(() => window.matro.load())).progress[items[0].id].completed).toBe(true);
@@ -782,5 +783,47 @@ test('the next episode is preloaded near the end and starts without waiting', as
     // Opening the preload stream must not cut the playing episode short: episode 1 ran to its end.
     const first = (await page.evaluate(() => window.matro.load())).progress[items[0].id];
     expect(first.completed).toBe(true); expect(first.position).toBeGreaterThan(11);
+  } finally { await app.close(); }
+});
+
+test('the sleep timer stops autoplay and Media Session controls the full timeline', async () => {
+  const f = await fixtures(), folder = await fs.mkdtemp(path.join(f.dir, 'sleep-timer-'));
+  const files = [1, 2].map(n => path.join(folder, `Northbound.S01E0${n}.mkv`));
+  for (const file of files) await fs.copyFile(f.mkv, file);
+  const items = files.map(file => describe(file)), profile = path.join(folder, 'profile'); await fs.mkdir(profile);
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items, folders: [], preferences: { autoplay: true, volume: .3, motion: 'off' } }));
+  const app = await electron.launch(launchOptions(profile)), page = await app.firstWindow();
+  try {
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.evaluate(() => {
+      const session = navigator.mediaSession, set = session.setActionHandler.bind(session);
+      window.testMediaActions = {};
+      session.setActionHandler = (action, handler) => { set(action, handler); window.testMediaActions[action] = handler; };
+    });
+    await page.getByRole('button', { name: 'Play now', exact: true }).click();
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.1);
+    expect(await page.evaluate(() => navigator.mediaSession.metadata.artist)).toBe('Northbound');
+    const dispatch = (action, details = {}) => page.evaluate(({ action, details }) => window.testMediaActions[action](details), { action, details });
+    await dispatch('pause');
+    await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
+    const timer = page.getByLabel('Sleep timer');
+    await timer.selectOption('episode');
+    await dispatch('seekto', { seekTime: 10 });
+    await expect(page.locator('#position')).toHaveText('0:10');
+    await dispatch('play');
+    await expect(timer).toHaveValue('off');
+    await expect(page.locator('.player-heading p')).toHaveText('Northbound · S1 E1');
+    await dispatch('nexttrack');
+    await expect(page.locator('.player-heading p')).toHaveText('Northbound · S1 E2');
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.1);
+    await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
+    await page.clock.install();
+    await timer.selectOption('15');
+    await page.clock.fastForward(15 * 60_000);
+    await expect(timer).toHaveValue('off');
+    await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    expect(await page.evaluate(() => [navigator.mediaSession.metadata, window.testMediaActions.nexttrack])).toEqual([null, null]);
   } finally { await app.close(); }
 });

@@ -537,6 +537,16 @@ test('receiver saves manual episode sections, maps the season and removes marker
     await seek(2); await expect(page.locator('#skip-segment')).toBeVisible();
     await page.locator('#skip-segment').click(); await expect(page.locator('#position')).toHaveText('0:03');
     await page.getByRole('button', { name: 'Skip segment settings' }).click();
+    const autoSkip = page.getByLabel('Auto-skip intros and recaps');
+    await expect(autoSkip).not.toBeChecked();
+    await autoSkip.check();
+    await expect.poll(() => JSON.parse(db.prepare('SELECT data FROM user_state WHERE user_id = ?').get(userId).data).preferences.autoSkip).toBe(true);
+    await seek(1);
+    // The helper above paused the element directly, so the play intent is still on: start it the same way.
+    await page.locator('video').evaluate(v => v.play());
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThanOrEqual(3);
+    await expect(page.locator('#skip-segment')).toBeHidden();
+    await page.locator('video').evaluate(v => v.pause());
     const removal = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/segments/remove'));
     await page.getByRole('button', { name: 'Remove intro marker', exact: true }).click();
     const removed = await removal;

@@ -3,7 +3,7 @@ import { AppState, Platform } from 'react-native';
 import { useVideoPlayer } from 'expo-video';
 import { inspect, mediaHeaders, playbackPath, request, saveProgress, type Info, type Item, type Library, type Preferences, type Progress, type Track } from '../lib/server';
 import { matchTrack, titleKey, trackKey } from '../../../../packages/core/client/library';
-import { isContinueDismissed } from '../../../../packages/core/client/watch-progress.js';
+import { isContinueDismissed, reachedCompletion, reachedPlaybackEnd } from '../../../../packages/core/client/watch-progress.js';
 import { parseVtt, type Cue } from '../../../../packages/core/client/subtitles';
 import { downloadPlayback } from './diskBuffer';
 import { progressRecovery, recoveryScope } from '../lib/storage';
@@ -30,10 +30,11 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   });
   const lastLocal = useRef(0), rewatching = useRef(!!data.progress[item.id]?.completed);
   const [markers, setMarkers] = useState(data.markers?.[item.id] || []);
+  const markerRef = useRef(markers);
   useEffect(() => {
     if (offline) return;
     let active = true;
-    const poll = async () => { try { const update = await request(base, '/api/segments'); if (active) setMarkers(update.markers[item.id] || []); } catch { /* Keep the last known markers offline. */ } };
+    const poll = async () => { try { const update = await request(base, '/api/segments'); if (active) { markerRef.current = update.markers[item.id] || []; setMarkers(markerRef.current); } } catch { /* Keep the last known markers offline. */ } };
     void poll();
     if (item.kind === 'show') void request(base, `/api/items/${item.id}/segments`, { method: 'POST', body: {} }, 600000).catch(() => {});
     const timer = setInterval(poll, 5000);
@@ -50,7 +51,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     const hidden = waitingForPlayback
       ? (previous?.hidden || isContinueDismissed(items.filter(i => i.kind === 'show' && titleKey(i) === titleKey(item)), progress) || undefined)
       : false;
-    const reachedEnd = !waitingForPlayback && at.current >= duration - Math.min(10, duration * .05);
+    const reachedEnd = !waitingForPlayback && reachedCompletion(position, duration, markerRef.current);
     const entry = { ...previous, position, duration, hidden, completed: (!rewatching.current && !!previous?.completed) || reachedEnd, updated: Date.now() };
     if (savedEntry.current?.position === entry.position && savedEntry.current.duration === entry.duration && savedEntry.current.completed === entry.completed && savedEntry.current.hidden === hidden) entry.updated = savedEntry.current.updated;
     savedEntry.current = entry;
@@ -187,7 +188,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       // replaceAsync finishes. It must never navigate away or mark a movie watched.
       if (!sourceReady.current || replacing.current || pendingStart.current !== null || !advanced.current || !infoRef.current) return;
       const duration = infoRef.current.duration;
-      if (duration && at.current < duration - Math.min(10, duration * .05)) { recover(); return; }
+      if (!reachedPlaybackEnd(Math.max(at.current, offset.current + player.currentTime), duration)) { recover(); return; }
       intent.current = false; at.current = duration || at.current;
       void persist().catch(() => {}).then(() => endRef.current());
     });

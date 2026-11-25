@@ -257,7 +257,7 @@ app.whenReady().then(async () => {
       }
     }
     if (Array.isArray(data.queue)) state.queue = [...new Set(data.queue.filter(id => ids.has(id)))];
-    if (data.preferences) state.preferences = { autoplay: !!data.preferences.autoplay, volume: Math.max(0, Math.min(1.5, Number(data.preferences.volume) || 0)), tracks: data.preferences.tracks && typeof data.preferences.tracks === 'object' ? data.preferences.tracks : {}, motion: ['on', 'off'].includes(data.preferences.motion) ? data.preferences.motion : 'system', subtitles: subtitleStyle(data.preferences.subtitles) };
+    if (data.preferences) state.preferences = { autoplay: !!data.preferences.autoplay, autoSkip: data.preferences.autoSkip === true, volume: Math.max(0, Math.min(1.5, Number(data.preferences.volume) || 0)), tracks: data.preferences.tracks && typeof data.preferences.tracks === 'object' ? data.preferences.tracks : {}, motion: ['on', 'off'].includes(data.preferences.motion) ? data.preferences.motion : 'system', subtitles: subtitleStyle(data.preferences.subtitles) };
     await persist(); scanner.refresh();
   });
   handle('media:inspect', async id => { const item = find(id); scanner.setPlayback(true); scanner.setCurrent(id); try { const info = await probe(item.path); info.subtitles.push(...(await sidecars(item.path)).map(({ path: _path, ...track }) => track)); return info; } catch (error) { scanner.setPlayback(false); throw error; } });
