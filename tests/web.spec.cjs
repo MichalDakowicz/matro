@@ -450,6 +450,9 @@ test('a receiver plays saved media during an outage and syncs offline changes af
     await optionsDialog.getByLabel('Size preset').selectOption('480p');
     await optionsDialog.getByRole('button', { name: 'Start download' }).click();
     await expect(page.getByRole('status').filter({ hasText: 'Saved for offline playback.' })).toBeVisible();
+    await page.getByRole('button', { name: 'Save offline', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'This title is already saved on this device.' })).toBeVisible();
+    await expect(optionsDialog).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
     hangPlayback = true;
     await page.getByRole('button', { name: /^(Play now|Resume)$/ }).click();

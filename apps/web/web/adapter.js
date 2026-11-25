@@ -294,7 +294,7 @@ export function createAdapter(session) {
     const preferred = latest.preferences?.tracks?.[selected?.groupId || selected?.group];
     const bitmaps = first.subtitles.filter(track => track.bitmap);
     const audio = h('select', { 'aria-label': 'Audio track' }, first.audio.map(track => h('option', { value: track.index, selected: track.index === (matchOfflineTrack(first.audio, preferred?.audio) || first.audio[0])?.index }, trackName(track))));
-    const burn = h('select', { 'aria-label': 'Bitmap subtitles' }, h('option', { value: '' }, 'None'), bitmaps.map(track => h('option', { value: track.index, selected: !preferred?.off && track.index === matchOfflineTrack(bitmaps, preferred?.subtitle)?.index }, trackName(track))));
+    const burn = h('select', { 'aria-label': 'Burn bitmap subtitles into the video' }, h('option', { value: '' }, 'None'), bitmaps.map(track => h('option', { value: track.index, selected: !preferred?.off && track.index === matchOfflineTrack(bitmaps, preferred?.subtitle)?.index }, trackName(track))));
     const quality = h('select', { 'aria-label': 'Size preset' }, qualityOptions(first.video).map(tier => h('option', { value: tier.id }, tier.label)));
     const text = first.subtitles.filter(track => track.text && !track.bitmap);
     const form = h('form', { onsubmit: event => {
@@ -325,6 +325,10 @@ export function createAdapter(session) {
     load, inspect, prepare: inspect, savedPlayback, subtitles, loadSubtitle, stream,
     quality: () => quality, setQuality: id => { quality = knownQuality(id); try { localStorage.setItem('matro-quality', quality); } catch { /* The choice only lasts for this visit. */ } },
     offlineSaveOptions,
+    async offlineUnsaved(ids) {
+      const saved = new Set((await offline.store.list()).filter(record => record.complete).map(record => record.id));
+      return ids.filter(id => !saved.has(id));
+    },
     get offlineSave() { return session.offline ? null : (id, choices) => saveOffline([id], choices); },
     get offlineSaveMany() { return session.offline ? null : saveOffline; },
     dismissContinue: (id, progress) => changeProgress(id, { dismiss: true }, progress),
@@ -385,7 +389,7 @@ export function createAdapter(session) {
       const url = site === 'imdb' && /^ttd{5,12}$/.test(imdbId || '') ? `https://www.imdb.com/title/${imdbId}/` : site === 'tmdb' && Number.isInteger(Number(tmdbId)) ? `https://www.themoviedb.org/${type === 'tv' ? 'tv' : 'movie'}/${Number(tmdbId)}` : null;
       if (url) window.open(url, '_blank', 'noopener');
     },
-    connectSSH: unsupported('SSH sources'), setPrelude: unsupported('Preludes'), 
+    connectSSH: unsupported('SSH sources'), setPrelude: unsupported('Preludes'),
     downloadHostOnly: true,
     get movieRequests() {
       if (session.offline) return null;

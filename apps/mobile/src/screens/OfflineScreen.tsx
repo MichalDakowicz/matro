@@ -27,7 +27,7 @@ export default function OfflineScreen({ data, offline, onResume, onOpenTitle, on
     refresh();
     const unsubscribe = watchOffline(refresh);
     return () => { run++; unsubscribe(); };
-  }, [base, user.id, user.username]);
+  }, [base, user]);
   const active = new Map(jobs.map(job => [job.id, job])), stored = new Map(records.map(record => [record.id, record]));
   const { done, saved, unavailable, bytes } = useMemo(() => {
     const catalog = new Set(data.catalogIds ?? data.items.map(item => item.id));

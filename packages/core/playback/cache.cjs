@@ -80,6 +80,7 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
     };
     const identity = [3, options.file, source.size, source.mtimeMs, options.offset, options.audio, options.burn, options.delay, options.info.video];
     if (QUALITIES[options.quality]) identity.push(options.quality);
+    if (options.copyAudio) identity.push('copy-audio');
     const key = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
     while (entries.has(key)) {
       const existing = entries.get(key);

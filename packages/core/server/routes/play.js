@@ -78,8 +78,11 @@ function register(app) {
     if (audio !== null && !info.audio.some(track => track.index === audio)) throw new HttpError(400, 'Unknown audio track.');
     if (burn !== null && (!info.video || !info.subtitles.some(track => track.index === burn && track.bitmap))) throw new HttpError(400, 'Unknown image subtitle track.');
     if (quality && !info.video) throw new HttpError(400, 'There is no video to resize.');
-    const direct = !quality && burn === null && info.audio.length <= 1 && !info.subtitles.some(track => track.bitmap) && canDirectPlay(item.path, info);
-    const entry = direct ? null : await transcode.offline(item.path, info, { audio, burn, quality });
+    const selectedAudio = audio === null ? info.audio[0] : info.audio.find(track => track.index === audio);
+    const originalAudio = info.audio.find(track => track.default) ?? info.audio[0];
+    const direct = !quality && burn === null && selectedAudio === originalAudio && canDirectPlay(item.path, { ...info, audio: selectedAudio ? [selectedAudio] : [] });
+    const copyAudio = !quality && selectedAudio?.codec === 'aac' && selectedAudio.channels <= 2;
+    const entry = direct ? null : await transcode.offline(item.path, info, { audio, burn, quality, copyAudio });
     const changed = () => new HttpError(409, 'The offline file changed. Retry the download.');
     if (entry?.error) throw new HttpError(422, 'This file could not be prepared for offline playback.');
     if (entry && !entry.done) {
@@ -95,7 +98,7 @@ function register(app) {
       });
       try {
         const { size, mtimeMs, ctimeMs, ino } = await handle.stat();
-        const identity = [2, item.id, audio, size, mtimeMs, ctimeMs, ino];
+        const identity = [2, item.id, direct ? null : audio, size, mtimeMs, ctimeMs, ino];
         if (burn !== null || quality) identity.push(burn, quality);
         const version = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
         if (!download) return { state: 'ready', size, version, type };

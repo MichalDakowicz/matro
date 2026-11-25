@@ -290,6 +290,10 @@ test('offline media preparation is authenticated and serves versioned, seekable 
   const direct = (await call('sam', 'GET', movie)).data;
   assert.equal(direct.state, 'ready');
   assert.equal(direct.file, undefined);
+  const movieInfo = (await call('sam', 'GET', movie.replace('/offline', '/info'))).data;
+  const defaultAudio = movieInfo.audio.find(track => track.default) ?? movieInfo.audio[0];
+  const original = (await call('sam', 'GET', movie + '?quality=original&audio=' + defaultAudio.index)).data;
+  assert.deepEqual(original, direct);
   assert.equal((await call('sam', 'GET', movie + '/file?version=old')).status, 409);
   const headers = { cookie: jar.sam, range: 'bytes=0-31' };
   const first = await fetch(base + movie + '/file?version=' + direct.version, { headers });

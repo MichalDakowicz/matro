@@ -52,7 +52,7 @@ function canCopyVideo(info, burn = null, offset = 0, quality = null) {
   // Copying at an arbitrary timestamp starts at an earlier keyframe and corrupts resume/subtitle timing.
   return !QUALITIES[quality] && offset === 0 && burn === null && info?.video?.codec === 'h264' && (!info.video.pixelFormat || info.video.pixelFormat === 'yuv420p');
 }
-function argumentsFor({ input, offset = 0, audio = null, burn = null, delay = 0, info, remote = false, quality = null }, encoder = SOFTWARE) {
+function argumentsFor({ input, offset = 0, audio = null, burn = null, delay = 0, info, remote = false, quality = null, copyAudio = false }, encoder = SOFTWARE) {
   const tier = QUALITIES[quality], name = encoder[1], vaapi = name === 'h264_vaapi';
   const scale = tier ? cappedScale(tier) : 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
   const filters = vaapi ? `${scale},${VAAPI_UPLOAD}` : scale;
@@ -79,7 +79,9 @@ function argumentsFor({ input, offset = 0, audio = null, burn = null, delay = 0,
   // Wait for the first fragment before writing track timing. An empty moov
   // cannot describe AAC priming / reordered video starts, so the muxer resets
   // their first timestamps independently and stretches the first audio gap.
-  args.push('-map', audio === null ? '0:a:0?' : `0:${audio}`, '-c:a', 'aac', '-ac', '2', '-b:a', `${tier?.audio || 192}k`, '-sn', '-movflags', '+frag_keyframe+delay_moov+default_base_moof', '-frag_duration', '500000', '-f', 'mp4', 'pipe:1');
+  args.push('-map', audio === null ? '0:a:0?' : `0:${audio}`, '-c:a', copyAudio ? 'copy' : 'aac');
+  if (!copyAudio) args.push('-ac', '2', '-b:a', `${tier?.audio || 192}k`);
+  args.push('-sn', '-movflags', '+frag_keyframe+delay_moov+default_base_moof', '-frag_duration', '500000', '-f', 'mp4', 'pipe:1');
   return args;
 }
 module.exports = { selectEncoder, argumentsFor, canCopyVideo, QUALITIES, SOFTWARE };

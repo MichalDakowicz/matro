@@ -53,7 +53,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     }
     finally { if (run === loadRun.current) setRefreshing(false); }
   }, [base, onSignedOut]);
-  useEffect(() => { revision.current = undefined; void load(); }, [base]);
+  useEffect(() => { revision.current = undefined; void load(); }, [load]);
   useEffect(() => {
     let closed = false, checking = false;
     const check = async () => {
@@ -93,7 +93,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       if (folder || tab !== 'home') { setFolder(null); setTab('home'); return true; }
       return false;
     }); return () => sub.remove();
-  }, [playing, selected, tab, folder, load]);
+  }, [playing, selected, tab, folder]);
   const allGroups = useMemo(() => groupLibrary(data?.items || []), [data?.items]);
   const groups = useMemo(() => allGroups.filter(items => !folder || items[0].root === folder), [allGroups, folder]);
   const featured = useMemo(() => data ? [...allGroups].sort((a, b) => {
@@ -103,17 +103,20 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const continues = useMemo(() => data ? continueItems(data, allGroups) : [], [data, allGroups]);
   // Titles opened from the Saved tab show only the episodes that are on this device.
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set()), [savedOnly, setSavedOnly] = useState(false);
+  const offlineUser = data?.user;
   useEffect(() => {
-    if (!data) return;
+    setSavedIds(new Set());
+    setOfflineChoices(null);
+    if (!offlineUser) return;
     let run = 0;
     const refresh = () => {
       const current = ++run;
-      void savedTitles(base, data.user).then(list => { if (current === run) setSavedIds(new Set(list.filter(isSaved).map(record => record.id))); }).catch(() => {});
+      void savedTitles(base, offlineUser).then(list => { if (current === run) setSavedIds(new Set(list.filter(isSaved).map(record => record.id))); }).catch(() => {});
     };
     refresh();
     const stop = watchOffline(refresh);
     return () => { run++; stop(); };
-  }, [base, data?.user.id]);
+  }, [base, offlineUser]);
   const found = allGroups.find(items => titleKey(items[0]) === selected);
   const detail = savedOnly ? found?.filter(item => savedIds.has(item.id)) : found;
   const art = { base, headers };
@@ -171,12 +174,12 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   };
   const saveName = (item: Item) => data && item.kind !== 'show' ? nameFor(data, item) : item.title;
   useEffect(() => {
-    if (!data || offline) return;
-    const resume = () => void resumeInterrupted(base, data.user).catch(() => {});
+    if (!offlineUser || offline) return;
+    const resume = () => void resumeInterrupted(base, offlineUser).catch(() => {});
     resume();
     const subscription = AppState.addEventListener('change', state => { if (state === 'active') resume(); });
     return () => subscription.remove();
-  }, [base, offline, data?.user.id, data?.user.username]);
+  }, [base, offline, offlineUser]);
   const resumeSave = (item: Item) => {
     if (!data || offline) return;
     void saveOffline(base, data.user, item, saveName(item))
@@ -192,13 +195,13 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     { text: 'Cancel', style: 'cancel' },
     { text: 'Remove', style: 'destructive', onPress: () => void Promise.all(list.map(item => removeOffline(base, data!.user, item.id))).then(() => { setSelected(null); setSavedOnly(false); }).catch(e => setError(e.message)) },
   ]);
-  const changeTab = (value: string) => { setSavedOnly(false); setTab(value); setSelected(null); setFolder(null); setFilter('all'); setRequestSearch(null); };
+  const changeTab = useCallback((value: string) => { setSavedOnly(false); setTab(value); setSelected(null); setFolder(null); setFilter('all'); setRequestSearch(null); }, []);
   useEffect(() => {
     if (playing || !alerts.supported || alerts.opened === openedAlerts.current) return;
     openedAlerts.current = alerts.opened;
     setAccount(false);
     changeTab('movie-requests');
-  }, [alerts.opened, alerts.supported, playing]);
+  }, [alerts.opened, alerts.supported, playing, changeTab]);
   if (playing && data) return <NativePlayer key={`${playing.item.id}:${playing.start ?? 'resume'}`} {...art} item={playing.item} data={data} initialPosition={playing.start} queue={playing.queue}
     saved={playing.saved} offline={offline} onBack={() => { playRun.current++; setPlaying(null); void load(); }} onSelect={item => void startPlayback(item, playing.queue)} onNext={() => {
       const next = playing.queue[playing.queue.findIndex(i => i.id === playing.item.id) + 1];

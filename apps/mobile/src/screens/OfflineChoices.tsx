@@ -18,19 +18,22 @@ export default function OfflineChoices({ base, items, preferred, close, save }: 
   const [first, setFirst] = useState<Info | null>(null), [error, setError] = useState('');
   const [choice, setChoice] = useState<OfflineChoice>({ audio: null, burn: null, quality: 'original' });
   const [saving, setSaving] = useState(false);
+  const firstId = items[0].id;
+  const preferredAudio = preferred?.audio, preferredSubtitle = preferred?.subtitle, subtitlesOff = preferred?.off;
   useEffect(() => {
     const run = new AbortController();
-    void inspect(base, items[0].id, run.signal).then(info => {
+    setFirst(null); setError('');
+    void inspect(base, firstId, run.signal).then(info => {
       if (run.signal.aborted) return;
       setChoice({
-        audio: (matchOfflineTrack(info.audio, preferred?.audio) ?? info.audio[0])?.index ?? null,
-        burn: preferred?.off ? null : matchOfflineTrack(info.embedded.filter(track => track.bitmap), preferred?.subtitle)?.index ?? null,
+        audio: (matchOfflineTrack(info.audio, preferredAudio) ?? info.audio[0])?.index ?? null,
+        burn: subtitlesOff ? null : matchOfflineTrack(info.embedded.filter(track => track.bitmap), preferredSubtitle)?.index ?? null,
         quality: 'original',
       });
       setFirst(info);
     }).catch(reason => { if (!run.signal.aborted) setError(reason.message); });
     return () => run.abort();
-  }, [base, items, preferred]);
+  }, [base, firstId, preferredAudio, preferredSubtitle, subtitlesOff]);
   const bitmaps = first?.embedded.filter(track => track.bitmap) ?? [];
   const text = first ? [...first.embedded.filter(track => track.text && !track.bitmap).map(name), ...first.uploaded.map(track => name({ ...track, title: track.name }))] : [];
   async function confirm() {
@@ -56,16 +59,16 @@ export default function OfflineChoices({ base, items, preferred, close, save }: 
   }
   return <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={() => { if (!saving) close(); }}>
     <ScrollView style={{ flex: 1, backgroundColor: colors.ground }} contentContainerStyle={{ padding: 18, paddingTop: insets.top + 18, paddingBottom: insets.bottom + 24, gap: 12 }}>
-      <View style={t.sectionHeading}><Text style={t.sectionTitle}>Save offline</Text><IconButton name="close" label="Close offline choices" disabled={saving} onPress={close} /></View>
+      <View style={t.sectionHeading}><Text accessibilityRole="header" style={t.sectionTitle}>Save offline</Text><IconButton name="close" label="Close offline choices" disabled={saving} onPress={close} /></View>
       {first ? <>
         <Text style={t.muted}>{first.audio.length ? 'Audio' : 'No audio tracks'}</Text>
-        <View style={[t.row, { flexWrap: 'wrap' }]}>{first.audio.map(track => <Pill key={track.index} label={name(track)} primary={choice.audio === track.index} onPress={() => setChoice({ ...choice, audio: track.index })} />)}</View>
+        <View style={[t.row, { flexWrap: 'wrap' }]}>{first.audio.map(track => <Pill key={track.index} label={name(track)} accessibilityLabel={`Audio track: ${name(track)}`} selected={choice.audio === track.index} primary={choice.audio === track.index} disabled={saving} onPress={() => setChoice({ ...choice, audio: track.index })} />)}</View>
         {bitmaps.length > 0 && <><Text style={t.muted}>Burn bitmap subtitles into the video</Text><View style={[t.row, { flexWrap: 'wrap' }]}>
-          <Pill label="None" primary={choice.burn === null} onPress={() => setChoice({ ...choice, burn: null })} />
-          {bitmaps.map(track => <Pill key={track.index} label={name(track)} primary={choice.burn === track.index} onPress={() => setChoice({ ...choice, burn: track.index })} />)}
+          <Pill label="None" accessibilityLabel="Do not burn subtitles into the video" selected={choice.burn === null} primary={choice.burn === null} disabled={saving} onPress={() => setChoice({ ...choice, burn: null })} />
+          {bitmaps.map(track => <Pill key={track.index} label={name(track)} accessibilityLabel={`Burn subtitles: ${name(track)}`} selected={choice.burn === track.index} primary={choice.burn === track.index} disabled={saving} onPress={() => setChoice({ ...choice, burn: track.index })} />)}
         </View></>}
         {first.video && <><Text style={t.muted}>Size preset</Text><View style={[t.row, { flexWrap: 'wrap' }]}>
-          {qualityOptions(first.video).map(tier => <Pill key={tier.id} label={tier.label} primary={choice.quality === tier.id} onPress={() => setChoice({ ...choice, quality: tier.id })} />)}
+          {qualityOptions(first.video).map(tier => <Pill key={tier.id} label={tier.label} accessibilityLabel={`Size preset: ${tier.label}`} selected={choice.quality === tier.id} primary={choice.quality === tier.id} disabled={saving} onPress={() => setChoice({ ...choice, quality: tier.id })} />)}
         </View></>}
         <Text style={t.muted}>{text.length ? `Selectable text subtitles · ${text.join(', ')}` : 'No text subtitles'}</Text>
         {items.length > 1 && <Text style={t.muted}>Tracks shown are from the first episode. Other episodes use matching tracks where available, their first audio otherwise, and include their available text subtitles.</Text>}
