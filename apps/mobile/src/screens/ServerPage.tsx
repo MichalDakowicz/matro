@@ -15,7 +15,7 @@ export default function ServerPage({ base, data, offline, layout, requests, onGo
   const [scanning, setScanning] = useState(false), admin = !offline && data.user.role === 'admin', host = base.replace(/^https?:\/\//, '');
   const count = (items: Item[]) => plural(groupLibrary(items).length, 'title');
   const libraries = admin && data.folders?.length ? data.folders.map(path => ({ key: path, name: folderName(path), path, count: count(data.items.filter(item => item.root === path)), open: () => onBrowseFolder(path) }))
-    : (['show', 'movie', 'audio'] as const).map(kind => ({ key: kind, name: { show: 'Shows', movie: 'Movies', audio: 'Music & audio' }[kind], path: '', count: count(data.items.filter(item => item.kind === kind)), open: () => onGo(kind), total: data.items.filter(item => item.kind === kind).length })).filter(row => row.total);
+    : (['show', 'movie'] as const).map(kind => ({ key: kind, name: { show: 'Shows', movie: 'Movies' }[kind], path: '', count: count(data.items.filter(item => item.kind === kind)), open: () => onGo(kind), total: data.items.filter(item => item.kind === kind).length })).filter(row => row.total);
   const scan = async () => {
     setScanning(true);
     try { await request(base, '/api/admin/rescan', { method: 'POST', body: {} }); await onRefresh(); notify('Scan finished.'); }

@@ -91,7 +91,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   useEffect(() => { if (error && data) { notify(friendly(error)); setError(''); } }, [error, data]);
   const allGroups = useMemo(() => groupLibrary(data?.items || []), [data?.items]);
   const folderGroups = useMemo(() => allGroups.filter(items => items[0].root === folder), [allGroups, folder]);
-  const featured = useMemo(() => data ? [...allGroups].filter(items => items[0].kind !== 'audio').sort((a, b) => {
+  const featured = useMemo(() => data ? [...allGroups].sort((a, b) => {
     const recent = (items: Item[]) => Math.max(0, ...items.map(i => data.progress[i.id]?.hidden ? 0 : data.progress[i.id]?.updated || 0));
     return recent(b) - recent(a) || (b[0].added || 0) - (a[0].added || 0);
   }) : [], [allGroups, data?.progress]);
@@ -216,10 +216,10 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       else { setPlaying(null); void load(); }
     }} />;
   const admin = !offline && data?.user.role === 'admin', layout = { top: insets.top + (offline ? 44 : 0), bottom: insets.bottom };
-  const libraryTab = ['home', 'movie', 'show', 'audio', 'folders'].includes(tab);
+  const libraryTab = ['home', 'movie', 'show', 'folders'].includes(tab);
   const requestsLabel = !offline && data?.movieRequestsEnabled ? (data.user.role === 'admin' ? 'Movie requests' : 'Request a movie') : undefined;
   const dockTab: DockTab = tab === 'search' ? 'search' : tab === 'queue' ? 'queue' : ['server', 'offline', 'downloads', 'movie-requests'].includes(tab) ? 'server' : 'home';
-  const chips = data && libraryTab && !folder ? <LibraryChips tab={tab} audio={data.items.some(i => i.kind === 'audio')} admin={admin} onPick={jump} /> : null;
+  const chips = data && libraryTab && !folder ? <LibraryChips tab={tab} admin={admin} onPick={jump} /> : null;
   const open = (items: Item[]) => setSelected(titleKey(items[0]));
   // From the Queue screen the player gets the queue itself, not the show's episode list.
   const playFromQueue = (item: Item) => { if (data) void startPlayback(item, data.queue.flatMap(id => data.items.find(i => i.id === id) || [])); };
@@ -248,7 +248,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     : tab === 'queue' ? <QueueScreen {...art} data={data} layout={layout} onPlay={playFromQueue} onQueue={setQueue} onAutoplay={setAutoplay} onBrowse={() => jump('home')} />
     : tab === 'server' ? <ServerPage base={base} data={data} offline={offline} layout={layout} requests={requestsLabel} onGo={go} onBrowseFolder={path => push('home', path)} onRefresh={load} onChangeServer={onChangeServer} notify={notify} />
     : folder ? <BrowseView {...common} data={data} groups={folderGroups} title={folder.split(/[\/]/).filter(Boolean).pop()} chips={null} />
-    : ['movie', 'show', 'audio'].includes(tab) ? <BrowseView {...common} data={data} kind={tab} groups={allGroups.filter(items => items[0].kind === tab)} chips={chips} />
+    : ['movie', 'show'].includes(tab) ? <BrowseView {...common} data={data} kind={tab} groups={allGroups.filter(items => items[0].kind === tab)} chips={chips} />
     : <HomeView {...common} data={data} groups={allGroups} featured={featured} continues={continues} chips={chips} onPlay={play} onRemoveContinue={removeContinue} onSeeAll={jump} onAddFolder={() => jump('folders')} />;
   const overlay = !!(detail && data), toastBottom = overlay || keyboard ? insets.bottom + 24 : insets.bottom + dock.bottom + dock.height + 18;
   return <View style={s.fill}>

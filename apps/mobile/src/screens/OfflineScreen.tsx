@@ -8,7 +8,7 @@ import { Pill, ProgressBar, styles as t } from '../components/Matro';
 import { PosterCard, type ArtProps } from '../components/LibraryParts';
 
 const size = (bytes: number) => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-const shelvesOf = [{ kind: 'show', title: 'Shows' }, { kind: 'movie', title: 'Movies' }, { kind: 'audio', title: 'Music & audio' }];
+const shelvesOf = [{ kind: 'show', title: 'Shows' }, { kind: 'movie', title: 'Movies' }];
 // Saved titles are browsed like the rest of the library (posters grouped into shows and movies); only
 // downloads that are still running, waiting or paused are listed as rows above them.
 export default function OfflineScreen({ data, offline, onResume, onOpenTitle, onRemoved, ...art }: ArtProps & {

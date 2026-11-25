@@ -27,3 +27,11 @@ test('recent searches keep the newest first and drop repeats', () => {
   assert.deepEqual(rememberQuery(['a1', 'b1'], 'x'), ['a1', 'b1']);
   assert.equal(rememberQuery(['1', '2', '3'], 'new one', 3).length, 3);
 });
+
+test('the server only has movies and shows, so no screen offers an audio kind', async () => {
+  const { readFileSync } = await import('node:fs');
+  for (const file of ['LibraryScreens', 'OfflineScreen', 'ServerPage', 'ViewerScreen', 'TitleScreen']) {
+    assert.doesNotMatch(readFileSync(new URL(`../screens/${file}.tsx`, import.meta.url), 'utf8'), /kind[^\n]{0,12}'audio'|'audio',\s*'Music|\['audio'/, file);
+  }
+  assert.equal(titleMeta('audio', 2021, 0, 1), '2021');
+});

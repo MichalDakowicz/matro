@@ -14,7 +14,7 @@ export function cleanEpisodeName(name: string, show: string, episode?: number | 
 
 /** Movies show their year; shows their size. */
 export const titleMeta = (kind: string, year: string | number | undefined, seasons: number, episodes: number) =>
-  kind === 'show' ? `${plural(seasons, 'season')} · ${plural(episodes, 'ep')}` : kind === 'audio' ? 'Audio' : year ? String(year) : '';
+  kind === 'show' ? `${plural(seasons, 'season')} · ${plural(episodes, 'ep')}` : year ? String(year) : '';
 
 /** Recent searches: newest first, no repeats, nothing shorter than two letters. */
 export function rememberQuery(list: string[], query: string, limit = 6) {

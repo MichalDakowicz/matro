@@ -27,7 +27,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
   const inSeason = items.filter(i => (i.season || 1) === season);
   // From the episode Play would start now to the end of its season.
   const rest = items.filter(i => (i.season || 1) === (target.season || 1) && (i.episode || 0) >= (target.episode || 0));
-  const facts = [m.year, m.genres?.slice(0, 3).join(' · '), show ? `${plural(seasons.length, 'season')} · ${plural(items.length, 'episode')}` : m.runtime ? runtimeText(m.runtime) : '', item.kind === 'audio' ? 'Audio' : '', item.format].filter(Boolean).join(' · ');
+  const facts = [m.year, m.genres?.slice(0, 3).join(' · '), show ? `${plural(seasons.length, 'season')} · ${plural(items.length, 'episode')}` : m.runtime ? runtimeText(m.runtime) : '', item.format].filter(Boolean).join(' · ');
   const state = (id: string) => savedIds?.has(id) ? 'saved' : savingIds?.has(id) ? 'saving' : 'idle';
   const saveLabel = (id: string) => ({ saved: 'Saved offline', saving: 'Saving…', idle: 'Save offline' })[state(id)];
   const close = (run: () => void) => { setMenu(null); run(); };

@@ -10,11 +10,11 @@ import { ContinueRow, FeaturedReel, PosterCard, Shelf, gridCardWidth, gridColumn
 
 type Layout = { top: number; bottom: number };
 const content = (insets: Layout) => ({ paddingTop: insets.top + 76, paddingBottom: insets.bottom + 120, paddingHorizontal: 18 });
-const kindNames = { show: ['Shows', 'show'], movie: ['Movies', 'title'], audio: ['Music & audio', 'file'] } as const;
+const kindNames = { show: ['Shows', 'show'], movie: ['Movies', 'title'] } as const;
 
-/** Library / Movies / Shows / Music / Folders: the artboard's chips, one level above the dock. */
-export function LibraryChips({ tab, audio, admin, onPick }: { tab: string; audio: boolean; admin: boolean; onPick: (tab: string) => void }) {
-  const chips = [['home', 'All'], ['movie', 'Movies'], ['show', 'Shows'], ...(audio ? [['audio', 'Music']] : []), ...(admin ? [['folders', 'Folders']] : [])];
+/** Library / Movies / Shows / Folders: the artboard's chips, one level above the dock. */
+export function LibraryChips({ tab, admin, onPick }: { tab: string; admin: boolean; onPick: (tab: string) => void }) {
+  const chips = [['home', 'All'], ['movie', 'Movies'], ['show', 'Shows'], ...(admin ? [['folders', 'Folders']] : [])];
   return <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -18 }} contentContainerStyle={{ paddingHorizontal: 18, gap: 8 }}>
     {chips.map(([id, label]) => <Chip key={id} label={label} selected={tab === id} onPress={() => onPick(id)} />)}
   </ScrollView>;
@@ -24,7 +24,7 @@ type HomeProps = ArtProps & { data: Library; groups: Item[][]; featured: Item[][
   onPlay: (item: Item) => void; onOpen: (items: Item[]) => void; onRemoveContinue: (item: Item) => void; onSeeAll: (tab: string) => void; onAddFolder: () => void };
 /** Home: reel first so Play is on screen, then Continue watching, then one short shelf per kind. */
 export function HomeView({ data, groups, featured, continues, layout, chips, refreshing, onRefresh, onPlay, onOpen, onRemoveContinue, onSeeAll, onAddFolder, ...art }: HomeProps) {
-  const shelves = (['show', 'movie', 'audio'] as const).map(kind => ({ kind, all: groups.filter(items => items[0].kind === kind) })).filter(shelf => shelf.all.length);
+  const shelves = (['show', 'movie'] as const).map(kind => ({ kind, all: groups.filter(items => items[0].kind === kind) })).filter(shelf => shelf.all.length);
   return <ScrollView contentContainerStyle={content(layout)} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.text} progressViewOffset={layout.top + 70} />}>
     <View style={{ marginBottom: 20 }}>{chips}</View>
     {!data.items.length ? <View style={{ minHeight: 420, justifyContent: 'center', gap: 18 }}><Text style={t.dim}>Matro · your library</Text><Text style={[t.display, { fontSize: 38, lineHeight: 40 }]}>Your collection.{'\n'}Your kind of player.</Text><Text style={t.muted}>All your films, shows and favourite files in one quiet place. Add a folder on your server to build your library.</Text>{data.user.role === 'admin' && <Pill label="Add folder" icon="folder" onPress={onAddFolder} primary />}</View> : <>
@@ -40,7 +40,7 @@ export function HomeView({ data, groups, featured, continues, layout, chips, ref
 const filters = [['all', 'All'], ['new', 'Unwatched'], ['progress', 'In progress'], ['done', 'Watched']] as const;
 const sorts = [['az', 'A–Z'], ['added', 'Recently added'], ['year', 'Year']] as const;
 type Sort = typeof sorts[number][0];
-/** A poster grid (Movies, Shows, Music or one folder) with one scrolling row of status filters and sorts. */
+/** A poster grid (Movies, Shows or one folder) with one scrolling row of status filters and sorts. */
 export function BrowseView({ data, groups, kind, title, layout, chips, refreshing, onRefresh, onOpen, ...art }: ArtProps & { data: Library; groups: Item[][]; kind?: string; title?: string; layout: Layout; chips: ReactNode; refreshing: boolean; onRefresh: () => void; onOpen: (items: Item[]) => void }) {
   const [filter, setFilter] = useState<string>('all'), [sort, setSort] = useState<Sort>('az');
   const { width } = useWindowDimensions(), columns = gridColumns(width), cardWidth = gridCardWidth(width, columns);
@@ -91,7 +91,7 @@ function ShowScanStatus({ base, initial }: { base: string; initial?: ScannerStat
   </View>;
 }
 
-const searchKinds = [['all', 'All'], ['movie', 'Movies'], ['show', 'Shows'], ['audio', 'Music']] as const;
+const searchKinds = [['all', 'All'], ['movie', 'Movies'], ['show', 'Shows']] as const;
 /** Search: idle shows Recent and a hint; results (artboard rows) appear only once there is a query or a filter. */
 export function SearchView({ data, groups, layout, onOpen, ...art }: ArtProps & { data: Library; groups: Item[][]; layout: Layout; onOpen: (items: Item[]) => void }) {
   const [query, setQuery] = useState(''), [kind, setKind] = useState<string>('all'), [unwatched, setUnwatched] = useState(false), [recents, setRecents] = useState<string[]>([]);
@@ -102,7 +102,7 @@ export function SearchView({ data, groups, layout, onOpen, ...art }: ArtProps & 
   const results = useMemo(() => !searching ? [] : groups.filter(items => (kind === 'all' || items[0].kind === kind) && (!unwatched || statusOf(data, items) === 'new')
     && (!text || `${nameFor(data, items[0])} ${metadataFor(data, items[0]).people?.join(' ')} ${items.map(i => i.title + ' ' + i.path).join(' ')}`.toLowerCase().includes(text))), [groups, data, kind, unwatched, text, searching]);
   const open = (items: Item[]) => { remember(query); onOpen(items); };
-  const meta = (items: Item[]) => { const item = items[0], m = metadataFor(data, item); return [item.kind === 'show' ? 'Series' : item.kind === 'audio' ? 'Music' : 'Movie', m.year, item.kind === 'show' ? plural(new Set(items.map(i => i.season)).size, 'season') : ''].filter(Boolean).join(' · '); };
+  const meta = (items: Item[]) => { const item = items[0], m = metadataFor(data, item); return [item.kind === 'show' ? 'Series' : 'Movie', m.year, item.kind === 'show' ? plural(new Set(items.map(i => i.season)).size, 'season') : ''].filter(Boolean).join(' · '); };
   const tags = (items: Item[]) => [...new Set(items.map(i => i.format))].slice(0, 3).concat(statusOf(data, items) === 'new' ? ['Unwatched'] : statusOf(data, items) === 'done' ? ['Watched'] : ['In progress']);
   return <FlatList data={results} keyExtractor={items => titleKey(items[0])} contentContainerStyle={content(layout)} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
     ListHeaderComponent={<View style={{ gap: 16, marginBottom: 14 }}>
