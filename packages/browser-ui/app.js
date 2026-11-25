@@ -2,7 +2,7 @@ import icons from './icons.json' with { type: 'json' };
 import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
-import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, normalizeProgress, resumeTarget } from '../core/client/watch-progress.js';
+import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, normalizeProgress, queueChange, resumeTarget } from '../core/client/watch-progress.js';
 const api = window.matro;
 if (api?.chooseSource && !document.querySelector('.desktop-source-button')) {
   const button = document.createElement('button'); button.className = 'pill desktop-source-button'; button.textContent = 'Server'; button.setAttribute('aria-label', 'Playback source');
@@ -119,11 +119,32 @@ function hoverSeek(event) {
 const finishMargin = duration => Math.min(10, duration * .05);
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 5000); }
 async function attempt(fn) { try { return await fn(); } catch (error) { toast(error.message || String(error)); return null; } }
-function save(options) {
-  if (!stateLoaded) return Promise.resolve();
+const pendingProgress = new Map();
+async function save(options) {
+  if (!stateLoaded) return;
+  if (api.savePreferences) {
+    if (!pendingProgress.size) return;
+    const progress = Object.fromEntries(pendingProgress);
+    recovery.persist(progress);
+    const result = await api.save({ progress }, options);
+    for (const [id, entry] of Object.entries(progress)) {
+      if (pendingProgress.get(id) === entry) pendingProgress.delete(id);
+      const confirmed = result?.progress?.[id];
+      if (!confirmed) continue;
+      recovery.confirm(id, entry, confirmed);
+      if (library.progress[id] === entry) library.progress[id] = normalizeProgress({ [id]: confirmed })[id];
+    }
+    return;
+  }
   for (const [id, entry] of Object.entries(library.progress)) recovery.write(id, entry);
   recovery.persist(library.progress);
   return api.save({ progress: library.progress, queue: library.queue, preferences: library.preferences, markers: library.markers || {} }, options);
+}
+const savePreferences = patch => api.savePreferences ? api.savePreferences(patch) : save();
+function saveQueue(previous) {
+  if (!api.changeQueue) return save();
+  const change = queueChange(previous, library.queue);
+  if (change.add.length || change.remove.length) return api.changeQueue(change);
 }
 const completed = id => isCompleted(library.progress[id]);
 const orderedEpisodes = item => library.items.filter(i => i.kind === 'show' && sameTitle(i, item)).sort(compareEpisodes);
@@ -134,11 +155,13 @@ function matchTrack(tracks, choice) {
   const score = t => Number(t.title === choice.title) * 4 + Number(t.channels === choice.channels) * 2 + Number(t.codec === choice.codec);
   return tracks.filter(t => t.language === choice.language).sort((a, b) => score(b) - score(a))[0] || null;
 }
-function rememberTracks() {
+function rememberTracks(changed) {
   library.preferences.tracks ||= {};
-  library.preferences.tracks[titleKey(current)] = { audio: trackChoice(info.audio.find(t => t.index === audio)), subtitle: trackChoice(info.subtitles.find(t => t.index === subtitle)), off: subtitle === null, delay };
+  const key = titleKey(current), fields = { audio: trackChoice(info.audio.find(t => t.index === audio)), subtitle: trackChoice(info.subtitles.find(t => t.index === subtitle)), off: subtitle === null, delay };
+  const patch = Object.fromEntries(changed.map(field => [field, fields[field]]));
+  library.preferences.tracks[key] = { ...library.preferences.tracks[key], ...patch };
   // A preloaded next episode used the old choice; prepare it again with this one.
-  discardPrepared(); void attempt(save);
+  discardPrepared(); void attempt(() => savePreferences({ tracks: { [key]: patch } }));
 }
 // Title metadata comes from TMDB when configured; everything falls back to file names.
 const metaKey = item => item.kind === 'show' ? titleKey(item) : item.id;
@@ -159,18 +182,21 @@ async function markComplete(id) {
   const done = !completed(id);
   if (api.setCompleted) {
     const patch = normalizeProgress(await api.setCompleted(id, done, old));
-    if (patch[id].updated >= (library.progress[id]?.updated || 0)) applyProgress(patch);
+    if (!library.progress[id] || library.progress[id] === old) applyProgress(patch);
   } else {
     const hidden = item.kind === 'show' && (!!old.hidden || isContinueDismissed(orderedEpisodes(item), library.progress));
-    library.progress[id] = { ...old, completed: done, hidden, updated: Date.now() };
+    applyProgress({ [id]: { ...old, completed: done, hidden, updated: Date.now() } }, true);
     await save();
   }
   if (view === 'player') { renderQueue(); renderSegments(); }
   else { const selectedId = selected?.id; renderLibrary(); if (selectedId) detail(selectedId); }
 }
-function applyProgress(patch) {
+function applyProgress(patch, local = false) {
   Object.assign(library.progress, patch);
-  for (const [id, entry] of Object.entries(patch)) recovery.write(id, entry);
+  for (const [id, entry] of Object.entries(patch)) {
+    recovery.write(id, entry);
+    if (local && api.savePreferences) pendingProgress.set(id, entry);
+  }
   recovery.persist(patch);
 }
 async function removeContinue(id) {
@@ -179,7 +205,7 @@ async function removeContinue(id) {
   const previous = { ...library.progress };
   const resolved = api.dismissContinue ? normalizeProgress(await api.dismissContinue(id)) : {};
   const patch = dismissedProgress(siblings, previous, library.progress, resolved);
-  applyProgress(patch);
+  applyProgress(patch, !api.dismissContinue);
   if (!api.dismissContinue) await save();
   if (view === 'library') rerender();
 }
@@ -211,8 +237,9 @@ function remember() {
   const entry = { ...old, position, duration: info.duration, completed: (!rewatchingShow && !!old.completed) || (!hidden && reachedEnd), hidden, updated: Date.now() };
   rewatchingShow = false;
   const sameVisibility = current.kind === 'show' ? old.hidden === hidden : !!old.hidden === hidden;
-  if (old.position === position && old.duration === info.duration && old.completed === entry.completed && sameVisibility) entry.updated = old.updated;
+  if (old.position === position && old.duration === info.duration && old.completed === entry.completed && sameVisibility) return true;
   library.progress[current.id] = entry;
+  if (api.savePreferences) pendingProgress.set(current.id, entry);
   recovery.write(current.id, library.progress[current.id]);
   return true;
 }
@@ -754,31 +781,42 @@ function closeDetail() {
 function enqueue(id, all = false) {
   const item = library.items.find(i => i.id === id); if (!item) return;
   const ids = all ? library.items.filter(i => sameTitle(i, item) && i.kind === 'show').sort((a, b) => a.season - b.season || a.episode - b.episode).map(i => i.id) : [id];
-  library.queue = [...new Set([...library.queue, ...ids])]; void attempt(save); toast(`${all ? 'Episodes' : displayName(item)} added to queue`); if (view === 'player') renderQueue();
+  const previous = library.queue;
+  library.queue = [...new Set([...previous, ...ids])];
+  void attempt(() => api.changeQueue ? api.changeQueue({ add: ids, remove: [] }) : save());
+  toast(`${all ? 'Episodes' : displayName(item)} added to queue`); if (view === 'player') renderQueue();
 }
 function ib(name, label, action, extra = '') { return `<button class="icon-button ${extra}" data-action="${action}" aria-label="${label}" title="${label}">${icon(name)}</button>`; }
+let stopping = Promise.resolve();
+function stopPlayback(token, keepUrl) {
+  stopping = stopping.catch(() => {}).then(() => { if (token === generation) return api.stop(keepUrl); });
+  return stopping;
+}
 async function play(id, keepQueue = false, compareEdition = false) {
-  if (compareEdition) library.queue = [id];
-  else {
-    const editions = Object.values(library.movieEditions || {}).find(group => group.editions.includes(id));
-    if (editions?.favorite && library.items.some(item => item.id === editions.favorite)) {
-      id = editions.favorite;
-      library.queue = [...new Set(library.queue.map(queued => editions.editions.includes(queued) ? id : queued))];
-    }
-  }
+  const editions = !compareEdition && Object.values(library.movieEditions || {}).find(group => group.editions.includes(id));
+  const favorite = editions?.favorite && library.items.some(item => item.id === editions.favorite);
+  if (favorite) id = editions.favorite;
   const item = library.items.find(i => i.id === id); if (!item) return;
+  const token = ++generation; subtitleGeneration++;
   // Starting playback from the library always opens with the queue closed; next, previous and autoplay keep it as it was.
   if (view !== 'player') queueOpen = false;
-  hidePreview(); remember(); await save(); const token = ++generation; subtitleGeneration++; loading = true; frameRun++; selected = null;
+  hidePreview(); remember(); await save(); if (token !== generation) return;
+  loading = true; frameRun++; selected = null;
   // A preloaded stream is used only if its track choice still matches what this title would pick now.
   const fresh = prepared?.id === id && (({ audio: a, subtitle: s, delay: d }) => a === prepared.audio && s === prepared.subtitle && d === prepared.delay)(chooseTracks(item, prepared.info));
   const ready = fresh ? prepared : null; if (ready) prepared = null; discardPrepared();
   resetPlayer();
-  await api.stop(ready?.url); current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
+  await stopPlayback(token, ready?.url);
+  if (token !== generation) { if (ready) releaseBuffer(ready.element); return; }
+  current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
+  const previousQueue = library.queue;
+  if (compareEdition) library.queue = [id];
+  else if (favorite) library.queue = [...new Set(library.queue.map(queued => editions.editions.includes(queued) ? id : queued))];
   if (item.kind === 'show') {
     rewatchingShow = completed(id);
     dismissedShow = isContinueDismissed(orderedEpisodes(item), library.progress);
   }
+  if (api.changeQueue) void attempt(() => saveQueue(previousQueue));
   if (item.kind === 'show' && (!keepQueue || library.queue.some(queued => { const entry = library.items.find(i => i.id === queued); return !entry || entry.kind !== 'show' || !sameTitle(entry, item); }))) {
     library.queue = orderedEpisodes(item).map(i => i.id);
   } else if (!library.queue.includes(id)) {
@@ -794,17 +832,22 @@ async function play(id, keepQueue = false, compareEdition = false) {
       const metadata = await api.inspect(id); if (token !== generation) return; info = metadata;
       ({ audio, subtitle, delay } = chooseTracks(item, info));
       if (info.subtitles.find(t => t.index === subtitle)?.text) {
-        try { subtitleText = await api.subtitles({ id, index: subtitle }); } catch { subtitle = null; subtitleText = null; }
+        const text = await api.subtitles({ id, index: subtitle }).catch(() => null);
         if (token !== generation) return;
+        subtitleText = text;
+        if (text === null) subtitle = null;
       }
     }
-    if (item.kind !== 'show' && library.progress[id]) library.progress[id].hidden = false;
     updateMetadata();
     const start = startAt(item, info.duration);
     // Starting an already watched title begins a new viewing session with a resumable position.
-    if (item.kind !== 'show' && completed(id) && !start) library.progress[id] = { ...library.progress[id], position: 0, completed: false, updated: Date.now() };
+    if (item.kind !== 'show' && library.progress[id] && (library.progress[id].hidden || completed(id) && !start)) {
+      const entry = library.progress[id];
+      applyProgress({ [id]: { ...entry, ...(completed(id) && !start ? { position: 0, completed: false } : {}), hidden: false, updated: Date.now() } }, true);
+    }
     if (ready) await adoptStream(ready, token); else await loadStream(start, true, token);
-    await save(); void detectMarkers(id);
+    if (token !== generation) return;
+    await save(); if (token === generation) void detectMarkers(id);
   } catch (error) { if (token === generation) { loading = false; playbackError = error.message; showMessage(); } }
 }
 function chooseTracks(item, details) {
@@ -971,7 +1014,7 @@ function updateTime() {
 }
 function updateToggle() { const btn = $('#play-toggle'); if (!btn) return; btn.innerHTML = icon(playIntent ? 'pause' : 'play'); btn.setAttribute('aria-label', playIntent ? 'Pause' : 'Play'); }
 function toggle() { if (!video || !video.getAttribute('src')) return; playIntent = !playIntent; void api.playbackState(playIntent); if (playIntent) void attempt(() => video.play()); else video.pause(); updateToggle(); }
-function setVolume(value) { if (!video) return; const volume = Math.round(Math.max(0, Math.min(MAX_VOLUME, value)) * 100) / 100; applyVolume(volume); video.muted = false; library.preferences.volume = volume; updateVolume(); const btn = document.querySelector('[data-action="mute"]'); if (btn) btn.innerHTML = icon('volume'); void attempt(save); }
+function setVolume(value) { if (!video) return; const volume = Math.round(Math.max(0, Math.min(MAX_VOLUME, value)) * 100) / 100; applyVolume(volume); video.muted = false; library.preferences.volume = volume; updateVolume(); const btn = document.querySelector('[data-action="mute"]'); if (btn) btn.innerHTML = icon('volume'); void attempt(() => savePreferences({ volume })); }
 function showMessage() {
   const message = $('#stage-message'); if (!message) return;
   message.classList.toggle('error', !!playbackError);
@@ -1105,7 +1148,7 @@ function applySubStyle() {
   set('--cue-bg', `rgb(0 0 0 / ${SUB_BACKGROUNDS.find(([id]) => id === style.background)?.[2] ?? .45})`);
   set('--cue-weight', style.bold ? '700' : '400'); set('--cue-style', style.italic ? 'italic' : 'normal'); set('--cue-shadow', SUB_EDGES.find(([id]) => id === style.edge)?.[2] || 'none');
 }
-function setSubStyle(change, render = true) { library.preferences.subtitles = { ...subStyle(), ...change }; applySubStyle(); if (render) renderTracks(); void attempt(save); }
+function setSubStyle(change, render = true) { library.preferences.subtitles = { ...subStyle(), ...change }; applySubStyle(); if (render) renderTracks(); void attempt(() => savePreferences({ subtitles: change })); }
 function subStylePanel(bitmap) {
   const style = subStyle(), off = bitmap ? 'disabled title="Bitmap subtitles keep their original look"' : '';
   const chips = (label, key, options) => `<div class="size-options" role="group" aria-label="${label}">${options.map(([id, name]) => `<button class="${style[key] === id ? 'selected' : ''}" data-sub-style="${key}:${id}" aria-pressed="${style[key] === id}" ${off}>${name}</button>`).join('')}</div>`;
@@ -1158,15 +1201,15 @@ function refreshCues() {
 async function pickSubtitle(value) {
   const token = ++subtitleGeneration; const id = current.id;
   const wasBitmap = !!bitmapTrack();
-  if (value === 'off') { subtitle = null; subtitleText = null; rememberTracks(); applySubtitle(); renderTracks(); if (wasBitmap) await restartStream(); return; }
+  if (value === 'off') { subtitle = null; subtitleText = null; rememberTracks(['subtitle', 'off']); applySubtitle(); renderTracks(); if (wasBitmap) await restartStream(); return; }
   const selectedTrack = info.subtitles.find(track => track.index === Number(value));
-  if (selectedTrack?.bitmap) { subtitle = selectedTrack.index; subtitleText = null; rememberTracks(); applySubtitle(); renderTracks(); await restartStream(); return; }
+  if (selectedTrack?.bitmap) { subtitle = selectedTrack.index; subtitleText = null; rememberTracks(['subtitle', 'off']); applySubtitle(); renderTracks(); await restartStream(); return; }
   const text = await api.subtitles({ id, index: Number(value) }); if (token !== subtitleGeneration || current.id !== id) return;
-  subtitle = Number(value); subtitleText = text; rememberTracks(); applySubtitle(); renderTracks();
+  subtitle = Number(value); subtitleText = text; rememberTracks(['subtitle', 'off']); applySubtitle(); renderTracks();
   if (wasBitmap) await restartStream();
 }
 async function restartStream() { const token = ++generation; await loadStream(offset + video.currentTime, playIntent, token); }
-async function changeSubtitleDelay(change) { delay = Math.max(-60, Math.min(60, Math.round((delay + change) * 10) / 10)); adjustCues(); renderTracks(); rememberTracks(); if (bitmapTrack()) await restartStream(); }
+async function changeSubtitleDelay(change) { delay = Math.max(-60, Math.min(60, Math.round((delay + change) * 10) / 10)); adjustCues(); renderTracks(); rememberTracks(['delay']); if (bitmapTrack()) await restartStream(); }
 function resetPlayer() {
   // load() resets currentTime and queues media events. Invalidate the stream
   // first so those events cannot overwrite the checkpoint we just saved.
@@ -1177,7 +1220,11 @@ function resetPlayer() {
   if (video) { video.pause(); releaseBuffer(video); video.removeAttribute('src'); video.load(); }
 }
 async function backToLibrary() {
-  hidePreview(); discardPrepared(); if (fullscreenActive) await api.window('fullscreen'); remember(); await save(); ++generation; ++subtitleGeneration; resetPlayer(); await api.stop();
+  const token = ++generation; ++subtitleGeneration;
+  hidePreview(); discardPrepared(); if (fullscreenActive) await api.window('fullscreen');
+  if (token !== generation) return;
+  remember(); await save(); if (token !== generation) return;
+  resetPlayer(); await stopPlayback(token); if (token !== generation) return;
   if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); current = null; video = null; renderLibrary();
 }
 // Page transitions run through the View Transitions API and are skipped when motion is reduced.
@@ -1237,8 +1284,8 @@ const actions = {
   queue: () => { if (fullscreenActive) fullscreenQueueOpen = !fullscreenQueueOpen; else queueOpen = !queueOpen; renderQueue(); },
   tracks: () => openPanel('tracks'), segments: () => openPanel('segments'), mute: () => { video.muted = !video.muted; const btn = document.querySelector('[data-action="mute"]'); btn.innerHTML = icon(video.muted ? 'mute' : 'volume'); btn.setAttribute('aria-label', video.muted ? 'Unmute (M)' : 'Mute (M)'); updateVolume(); },
   speed: () => { const rates = [.5, .75, 1, 1.25, 1.5, 2]; video.playbackRate = rates[(rates.indexOf(video.playbackRate) + 1) % rates.length]; document.querySelector('[data-action="speed"]').textContent = `${video.playbackRate}×`; },
-  autoplay: async () => { library.preferences.autoplay = !library.preferences.autoplay; await save(); renderQueue(); },
-  'clear-watched': async () => { library.queue = library.queue.filter(id => id === current.id || !completed(id)); await save(); renderQueue(); },
+  autoplay: async () => { library.preferences.autoplay = !library.preferences.autoplay; await savePreferences({ autoplay: library.preferences.autoplay }); renderQueue(); },
+  'clear-watched': async () => { const previous = library.queue; library.queue = previous.filter(id => id === current.id || !completed(id)); await saveQueue(previous); renderQueue(); },
   'delay-down': () => changeSubtitleDelay(-.1),
   'delay-up': () => changeSubtitleDelay(.1),
   'subtitle-file': async () => {
@@ -1246,7 +1293,7 @@ const actions = {
     if (!loaded || current?.id !== id || token !== subtitleGeneration) return;
     const wasBitmap = !!bitmapTrack(); subtitleText = loaded.text;
     // Saved next to the video, it is a regular track from now on and is remembered like one.
-    if (loaded.track) { if (!info.subtitles.some(t => t.index === loaded.track.index)) info.subtitles.push(loaded.track); subtitle = loaded.track.index; rememberTracks(); toast(loaded.warning || 'Subtitles saved next to the video.'); }
+    if (loaded.track) { if (!info.subtitles.some(t => t.index === loaded.track.index)) info.subtitles.push(loaded.track); subtitle = loaded.track.index; rememberTracks(['subtitle', 'off']); toast(loaded.warning || 'Subtitles saved next to the video.'); }
     else { subtitle = 'external'; if (loaded.warning) toast(loaded.warning); }
     applySubtitle(); renderTracks(); if (wasBitmap) await restartStream();
   },
@@ -1308,7 +1355,7 @@ document.addEventListener('click', event => {
     if (btn.dataset.seasonTab) return showSeason(Number(btn.dataset.seasonTab));
     if (btn.dataset.matchPick) return assignMatch(Number(btn.dataset.matchPick));
     if (btn.dataset.matchNone !== undefined) return assignMatch(null);
-    if (btn.dataset.restart) { const old = library.progress[btn.dataset.restart]; if (old) library.progress[btn.dataset.restart] = { ...old, position: 0, updated: Date.now() }; return play(btn.dataset.restart); }
+    if (btn.dataset.restart) { const id = btn.dataset.restart, old = library.progress[id]; if (old) applyProgress({ [id]: { ...old, position: 0, updated: Date.now() } }, true); return play(id); }
     if (btn.dataset.upgrade && api.canCompareEditions !== false) { await downloads.openUpgrade(btn.dataset.upgrade); goTab('downloads'); return; }
     if (btn.dataset.play) return play(btn.dataset.play, !!btn.closest('.queue-panel'));
     if (btn.dataset.detail) return openDetail(btn.dataset.detail, btn);
@@ -1317,15 +1364,15 @@ document.addEventListener('click', event => {
     if (btn.dataset.tab) return goTab(btn.dataset.tab);
     if (btn.dataset.themeMode) { window.matroTheme.set(btn.dataset.themeMode); return; }
     if (btn.dataset.motion) {
-      library.preferences.motion = btn.dataset.motion; applyMotion(); await save();
+      library.preferences.motion = btn.dataset.motion; applyMotion(); await savePreferences({ motion: library.preferences.motion });
       document.querySelectorAll('[data-motion]').forEach(chip => chip.setAttribute('aria-pressed', String(chip.dataset.motion === btn.dataset.motion)));
       reel.hover = null; updateReel(); return;
     }
     if (btn.dataset.statusFilter) { statusFilter = btn.dataset.statusFilter; renderLibrary(); return; }
     if (btn.dataset.folder !== undefined) { folderFilter = library.folders[Number(btn.dataset.folder)]; tab = 'home'; renderLibrary(); $('.shell')?.scrollTo(0, 0); return; }
     if (btn.dataset.removeFolder !== undefined) { library = await api.removeFolder(library.folders[Number(btn.dataset.removeFolder)]); renderLibrary(); return; }
-    if (btn.dataset.removeQueue) { library.queue = library.queue.filter(id => id !== btn.dataset.removeQueue); await save(); renderQueue(); return; }
-    if (btn.dataset.audio) { const position = offset + video.currentTime, playing = playIntent; audio = Number(btn.dataset.audio); rememberTracks(); updateMetadata(); renderTracks(); const token = ++generation; await loadStream(position, playing, token); return; }
+    if (btn.dataset.removeQueue) { const previous = library.queue; library.queue = previous.filter(id => id !== btn.dataset.removeQueue); await saveQueue(previous); renderQueue(); return; }
+    if (btn.dataset.audio) { const position = offset + video.currentTime, playing = playIntent; audio = Number(btn.dataset.audio); rememberTracks(['audio']); updateMetadata(); renderTracks(); const token = ++generation; await loadStream(position, playing, token); return; }
     if (btn.dataset.subtitle) return pickSubtitle(btn.dataset.subtitle);
     if (btn.dataset.subStyle) { const [key, value] = btn.dataset.subStyle.split(':'); const style = subStyle(); setSubStyle({ [key]: ['bold', 'italic'].includes(key) ? !style[key] : value }); return; }
     if (btn.dataset.chapter !== undefined) return seek(info.chapters[Number(btn.dataset.chapter)].start);
@@ -1370,7 +1417,9 @@ api?.onSegments(update => {
 });
 if (!api) { root.innerHTML = '<main class="page"><h1 class="page-title">Open Matro in its desktop app.</h1><p class="page-sub">Run npm start from the project folder.</p></main>'; }
 else void attempt(async () => { library = await api.load();
-  const restored = await recovery.restore(library.progress, library.items.map(item => item.id)); library.progress = normalizeProgress(restored.progress); stateLoaded = true;
+  const original = library.progress;
+  const restored = await recovery.restore(original, library.items.map(item => item.id)); library.progress = normalizeProgress(restored.progress); stateLoaded = true;
+  if (api.savePreferences && restored.recovered) for (const [id, entry] of Object.entries(restored.progress)) if (entry !== original[id]) pendingProgress.set(id, library.progress[id]);
   metadata = library.metadata || {}; metadataEnabled = !!library.metadataEnabled;
   scannerSummary = library.scanner || await api.scannerStatus();
   library.markers ||= {};

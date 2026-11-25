@@ -32,7 +32,7 @@ function harness(t: any, directPlay = false) {
     react: { useCallback: (fn: Function) => fn, useEffect: (fn: any) => effects.push(fn), useRef: (current: any) => ({ current }), useState: (initial: any) => { const i = states.push(initial) - 1; return [initial, (value: any) => { states[i] = value; }]; } },
     'react-native': { AppState: app, Platform: { OS: 'android' } },
     'expo-video': { useVideoPlayer: () => player },
-    '../lib/server': { inspect: async () => info, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: {} }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry) },
+    '../lib/server': { inspect: async () => info, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: {} }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry), updateWatchOptions: async () => {} },
     '../../../../packages/core/client/library': { trackKey: () => 'movie', matchTrack: () => undefined },
     '../../../../packages/core/client/watch-progress.js': { isContinueDismissed },
     '../../../../packages/core/client/subtitles': { parseVtt },

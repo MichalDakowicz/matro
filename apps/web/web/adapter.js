@@ -1,6 +1,6 @@
 // window.matro for the browser: the desktop renderer calls this object where Electron would call its main process.
 // Everything here turns those calls into requests to the server.
-import { get, post, put, patch, del, api } from './http.js';
+import { get, post, del, api } from './http.js';
 import { h, say, dialog, languageSelect } from './dom.js';
 import { createOffline, networkLost } from './offline.js';
 import { toVtt } from './offline-store.js';
@@ -17,6 +17,15 @@ export function createAdapter(session) {
   const noop = () => () => {};
   const watchers = new Set();
   const offline = createOffline(session.user);
+  const accountId = session.user.id;
+  const stateRequest = (method, url, body, options) => api(method, url, body, { ...options, accountId });
+  let updates = Promise.resolve();
+  const updateState = body => {
+    if (session.offline) return Promise.resolve();
+    const update = updates.catch(() => {}).then(() => stateRequest('PUT', '/api/state', body));
+    updates = update;
+    return update;
+  };
   let polling = 0;
   const unsupported = what => () => Promise.reject(new Error(`${what} is a desktop feature.`));
   const headOnly = (message = 'Only the head account can add or remove media.') => { if (session.user.role !== 'admin') throw new Error(message); };
@@ -31,16 +40,16 @@ export function createAdapter(session) {
   async function load() {
     if (session.offline) return latest = await offline.library();
     let data;
-    try { data = await get('/api/library'); }
+    try { data = await stateRequest('GET', '/api/library'); }
     catch (error) {
       if (!networkLost(error)) throw error;
       latest = await offline.library();
       session.offline = true;
       return latest;
     }
-    if (await offline.sync(body => put('/api/state', body)).catch(() => false)) data = await get('/api/library').catch(() => data);
+    if (await offline.sync(({ progress }) => stateRequest('PUT', '/api/state', { progress })).catch(() => false)) data = await stateRequest('GET', '/api/library');
     if (offlineSync) await offlineSync.catch(() => {});
-    offlineSync = offline.flushSubtitles(({ id, query, body }) => api('POST', `/api/items/${id}/subtitles?${query}`, body)).catch(() => {});
+    offlineSync = offline.flushSubtitles(({ id, query, body }) => stateRequest('POST', `/api/items/${id}/subtitles?${query}`, body)).catch(() => {});
     data.metadata = artwork(data.metadata);
     await offline.remember(data).catch(() => {});
     acceptLibrary(data);
@@ -58,9 +67,9 @@ export function createAdapter(session) {
       if (session.offline || closed || checking || document.hidden || !before?.catalogRevision) return;
       checking = true;
       try {
-        const { catalogRevision } = await get('/api/library/revision');
+        const { catalogRevision } = await stateRequest('GET', '/api/library/revision');
         if (closed || latest !== before || catalogRevision === before.catalogRevision) return;
-        const data = await get('/api/library');
+        const data = await stateRequest('GET', '/api/library');
         data.metadata = artwork(data.metadata);
         if (closed || latest !== before) return;
         acceptLibrary(data);
@@ -219,26 +228,28 @@ export function createAdapter(session) {
       }));
       if (failure) throw failure;
     },
-    dismissContinue: session.offline ? undefined : async id => (await patch(`/api/items/${encodeURIComponent(id)}/progress`, { dismiss: true })).progress,
-    setCompleted: session.offline ? undefined : async (id, completed, checkpoint) => (await patch(`/api/items/${encodeURIComponent(id)}/progress`, { completed, checkpoint })).progress,
-    save: (state, { keepalive = false } = {}) => {
-      const body = { progress: state.progress, queue: state.queue, preferences: state.preferences };
+    dismissContinue: session.offline ? undefined : async id => (await stateRequest('PATCH', `/api/items/${encodeURIComponent(id)}/progress`, { dismiss: true })).progress,
+    setCompleted: session.offline ? undefined : async (id, completed, checkpoint) => (await stateRequest('PATCH', `/api/items/${encodeURIComponent(id)}/progress`, { completed, checkpoint })).progress,
+    savePreferences: preferences => updateState({ preferences }),
+    changeQueue: queueChange => updateState({ queueChange }),
+    save: ({ progress }, { keepalive = false } = {}) => {
+      const body = { progress };
       // Keepalive has a small shared in-flight byte quota. Reserve it for exit;
       // ordinary overlapping checkpoints must not consume that quota.
-      if (session.offline) return offline.queue({ progress: body.progress });
-      return put('/api/state', body, { keepalive: keepalive && new Blob([JSON.stringify(body)]).size < 60000 }).catch(error => {
+      if (session.offline) return offline.queue(body);
+      return stateRequest('PUT', '/api/state', body, { keepalive: keepalive && new Blob([JSON.stringify(body)]).size < 60000 }).catch(error => {
         if (!networkLost(error)) throw error;
-        return offline.queue({ progress: body.progress });
+        return offline.queue(body);
       });
     },
     stop: async keepUrl => {
       offline.release(keepUrl);
-      if (!session.offline) await post('/api/playback/stop', { keepPreload: !!keepUrl && new URL(keepUrl, location.origin).searchParams.get('preload') === '1' }).catch(error => { if (!networkLost(error)) throw error; });
-    }, playbackState: value => post('/api/playback/state', typeof value === 'object' ? value : { playing: !!value }).catch(() => {}),
+      if (!session.offline) await stateRequest('POST', '/api/playback/stop', { keepPreload: !!keepUrl && new URL(keepUrl, location.origin).searchParams.get('preload') === '1' }).catch(error => { if (!networkLost(error)) throw error; });
+    }, playbackState: value => stateRequest('POST', '/api/playback/state', typeof value === 'object' ? value : { playing: !!value }).catch(() => {}),
     preview: async ({ id, time, hover }) => `/api/items/${id}/frame?t=${Math.max(0, Number(time) || 0)}&w=${hover ? 320 : 480}`,
-    segments: async ({ id, force }) => (await post(`/api/items/${id}/segments`, { force })).markers,
-    saveMarkers: async edits => (await post('/api/segments/manual', edits)).markers,
-    removeMarker: async ({ id, marker }) => (await post(`/api/items/${id}/segments/remove`, { marker })).markers,
+    segments: async ({ id, force }) => (await stateRequest('POST', `/api/items/${id}/segments`, { force })).markers,
+    saveMarkers: async edits => (await stateRequest('POST', '/api/segments/manual', edits)).markers,
+    removeMarker: async ({ id, marker }) => (await stateRequest('POST', `/api/items/${id}/segments/remove`, { marker })).markers,
     scannerStatus: async () => (await get('/api/segments')).scanner,
     rescan: async () => { if (session.user.role === 'admin') await post('/api/admin/rescan'); return load(); },
     addFolder: async () => { headOnly(); const path = await chooseFolder(); if (path) { const r = await post('/api/admin/folders', { path }); say(r.ok ? `Added. Found ${r.items} video${r.items === 1 ? '' : 's'}.` : r.error); } return load(); },

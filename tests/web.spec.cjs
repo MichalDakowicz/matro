@@ -363,6 +363,83 @@ for (const kind of ['movie', 'episode']) test(`leaving playback keeps the latest
   }
 });
 
+test('the latest playback selection wins and a stale receiver cannot write into a new account', async () => {
+  const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'watch-sync-'));
+  const media = path.join(root, 'media');
+  for (const name of ['Alpha', 'Beta', 'Gamma']) {
+    await fs.mkdir(path.join(media, name), { recursive: true });
+    await fs.copyFile(f.mkv, path.join(media, name, name + '.mkv'));
+  }
+  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} } });
+  let browser;
+  try {
+    const head = await app.createUser('head', 'watch-sync-test', 'admin');
+    const viewer = await app.createUser('viewer', 'watch-sync-test', 'viewer');
+    await library.addFolder(media);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: base, MATRO_METADATA: 'off' };
+    delete env.ELECTRON_RUN_AS_NODE;
+    browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
+    const page = await browser.firstWindow();
+    await page.getByRole('textbox', { name: 'Username', exact: true }).fill('head');
+    await page.getByLabel('Password', { exact: true }).fill('watch-sync-test');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.getByRole('button', { name: 'Profile: head' }).waitFor();
+    const ids = await page.evaluate(async () => {
+      const { items } = await fetch('/api/library').then(res => res.json());
+      await fetch('/api/state', { method: 'PUT', headers: { 'x-matro': '1', 'content-type': 'application/json' }, body: JSON.stringify({ queue: items.map(item => item.id) }) });
+      return Object.fromEntries(items.map(item => [item.title, item.id]));
+    });
+    await page.reload();
+    await page.getByRole('button', { name: 'Open Alpha', exact: true }).click();
+    await playAndPauseAfterAdvance(page);
+    await page.getByRole('button', { name: 'Queue', exact: true }).click();
+    await page.evaluate(({ Beta, Gamma }) => {
+      const original = window.matro.save;
+      window.matro.save = (...args) => {
+        window.matro.save = original;
+        return new Promise((resolve, reject) => { window.releaseCheckpoint = () => original(...args).then(resolve, reject); });
+      };
+      const video = document.querySelector('video'), time = video.currentTime;
+      Object.defineProperty(video, 'currentTime', { configurable: true, get: () => time + 1 });
+      document.querySelector(`.qplay[data-play="${Beta}"]`).click();
+      document.querySelector(`.qplay[data-play="${Gamma}"]`).click();
+      delete video.currentTime;
+    }, ids);
+    await expect(page.getByRole('heading', { name: 'Gamma', exact: true })).toBeVisible();
+    await page.evaluate(() => window.releaseCheckpoint());
+    await expect(page.getByRole('heading', { name: 'Gamma', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Beta', exact: true })).toHaveCount(0);
+    await expect.poll(() => page.locator('video').evaluate(video => video.currentTime)).toBeGreaterThan(.2);
+    await page.getByRole('button', { name: 'Pause', exact: true }).click();
+    await expect.poll(() => page.locator('video').evaluate(video => video.paused)).toBe(true);
+
+    const switched = browser.waitForEvent('window');
+    await browser.evaluate(async ({ BrowserWindow }, url) => {
+      const next = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+      await next.loadURL(url);
+    }, base);
+    const other = await switched;
+    const changed = await other.evaluate(async () => {
+      const headers = { 'x-matro': '1', 'content-type': 'application/json' };
+      await fetch('/api/logout', { method: 'POST', headers });
+      return (await fetch('/api/login', { method: 'POST', headers, body: JSON.stringify({ username: 'viewer', password: 'watch-sync-test' }) })).ok;
+    });
+    expect(changed).toBe(true);
+    const rejected = page.waitForResponse(res => res.url().endsWith('/api/state') && res.status() === 409 && res.request().headers()['x-matro-account'] === String(head)
+      && res.request().postDataJSON()?.preferences?.volume === .1);
+    await page.evaluate(() => { void window.matro.savePreferences({ volume: .1 }).catch(() => {}); });
+    await rejected;
+    await expect(page.getByRole('button', { name: 'Profile: viewer' })).toBeVisible();
+    expect(db.prepare('SELECT data FROM user_state WHERE user_id = ?').get(viewer)).toBeUndefined();
+  } finally {
+    await browser?.close(); app.scanner.close(); app.downloads.close(); app.closePlayback();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  }
+});
+
 test('Vite production UI signs in, plays through the HTTP adapter and saves progress', async () => {
   const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'web-ui-'));
   const media = path.join(root, 'media'); await fs.mkdir(media);

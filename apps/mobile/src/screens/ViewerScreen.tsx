@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, BackHandler, FlatList, Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { changeProgress, library, mediaHeaders, request, ServerError, type Item, type Library, type MovieRequest, type ScannerStatus } from '../lib/server';
-import { progressRecovery, recoveryScope } from '../lib/storage';
+import { accountChanged, changeProgress, library, mediaHeaders, request, ServerError, syncDismissal, updateWatchOptions, type Item, type Library, type MovieRequest, type ScannerStatus } from '../lib/server';
+import { progressRecovery, recoveryScope, rememberProgress } from '../lib/storage';
 import { continueItems, groupLibrary, metadataFor, nameFor, statusOf, titleKey } from '../../../../packages/core/client/library';
-import { dismissedProgress, normalizeProgress } from '../../../../packages/core/client/watch-progress.js';
+import { normalizeProgress, queueChange } from '../../../../packages/core/client/watch-progress.js';
+import { applyDismissals } from '../../../../packages/core/client/recovery';
 import { colors, fonts } from '../theme';
 import { Icon, Pill, styles as t } from '../components/Matro';
 import { AccountSheet, ContinueRow, Corner, Dock, FeaturedReel, PosterCard } from '../components/LibraryParts';
@@ -15,7 +16,7 @@ import FoldersScreen from './FoldersScreen';
 import OfflineScreen from './OfflineScreen';
 import MovieRequestsScreen from './MovieRequestsScreen';
 import { useMovieRequestAlerts } from '../lib/movie-request-alerts';
-import { offlineLibrary, rememberLibrary, removeOffline, resumeInterrupted, savedTitle, savedTitles, saveOffline, saveOfflineBatch, watchOffline, type SavedMedia } from '../lib/offline';
+import { offlineLibrary, removeOffline, resumeInterrupted, savedTitle, savedTitles, saveOffline, saveOfflineBatch, watchOffline, type SavedMedia } from '../lib/offline';
 
 type Props = { base: string; onSignedOut: () => void; onChangeServer: () => void };
 const kinds = [{ kind: 'show', title: 'Shows', noun: 'shows' }, { kind: 'movie', title: 'Movies', noun: 'titles' }, { kind: 'audio', title: 'Music & audio', noun: 'files' }];
@@ -27,49 +28,53 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const [selected, setSelected] = useState<string | null>(null), [playing, setPlaying] = useState<{ item: Item; start?: number; queue: Item[]; saved?: SavedMedia } | null>(null);
   const [offline, setOffline] = useState(false), playRun = useRef(0);
   const [refreshing, setRefreshing] = useState(false), [account, setAccount] = useState(false), [folder, setFolder] = useState<string | null>(null);
-  const revision = useRef<string | undefined>(undefined);
+  const revision = useRef<string | undefined>(undefined), loading = useRef(false);
   const alerts = useMovieRequestAlerts(base, !offline && data?.user.role === 'admin' && data.movieRequestPushEnabled === true);
   const openedAlerts = useRef(0);
   const { width } = useWindowDimensions(), insets = useSafeAreaInsets(), columns = Math.max(3, Math.floor((width - 24) / 108)), cardWidth = (width - 36 - (columns - 1) * 12) / columns;
   const load = useCallback(async () => {
+    if (loading.current) return;
+    loading.current = true;
+    const accountId = dataRef.current?.user.id;
     setRefreshing(true); setError('');
     try {
-      const next = await library(base), auth = await mediaHeaders(base);
+      const next = await library(base, accountId), auth = await mediaHeaders(base);
       revision.current = next.catalogRevision;
       setData({ ...next, progress: normalizeProgress(next.progress) }); setHeaders(auth); setOffline(false);
-      void rememberLibrary(base, next).catch(() => {});
     }
     catch (e) {
-      if (e instanceof ServerError && [401, 403].includes(e.status || 0)) { onSignedOut(); return; }
+      if (accountChanged(e) || e instanceof ServerError && e.status === 403) { onSignedOut(); return; }
       const cached = await offlineLibrary(base).catch(() => null);
-      if (cached) { setData({ ...cached, progress: normalizeProgress(cached.progress) }); setHeaders({}); setOffline(true); }
+      if (cached && (accountId === undefined || cached.user.id === accountId)) { setData({ ...cached, progress: normalizeProgress(cached.progress) }); setHeaders({}); setOffline(true); }
       else setError(e instanceof Error ? e.message : 'Could not load the library.');
     }
-    finally { setRefreshing(false); }
+    finally { loading.current = false; setRefreshing(false); }
   }, [base, onSignedOut]);
   useEffect(() => { revision.current = undefined; void load(); }, [base]);
   useEffect(() => {
     let closed = false, checking = false;
     const check = async () => {
       const before = revision.current;
-      if (offline || closed || checking || AppState.currentState === 'background' || !before) return;
+      if (closed || checking || AppState.currentState === 'background') return;
+      if (offline) { await load(); return; }
+      const accountId = dataRef.current?.user.id;
+      if (!before || accountId === undefined) return;
       checking = true;
       try {
-        const { catalogRevision } = await request(base, '/api/library/revision');
+        const { catalogRevision } = await request(base, '/api/library/revision', { accountId });
         if (closed || revision.current !== before || catalogRevision === before) return;
-        const next = await library(base);
+        const next = await library(base, accountId);
         if (closed || revision.current !== before) return;
         revision.current = next.catalogRevision;
-        void rememberLibrary(base, next).catch(() => {});
         setData(current => current && { ...current, items: next.items, folders: next.folders, metadata: next.metadata, scanner: next.scanner, catalogRevision: next.catalogRevision });
       } catch (error) {
-        if (!closed && error instanceof ServerError && error.status === 401) onSignedOut();
+        if (!closed && accountChanged(error)) onSignedOut();
       } finally { checking = false; }
     };
     const timer = setInterval(check, 5000);
-    const subscription = AppState.addEventListener('change', state => { if (state === 'active') void check(); });
+    const subscription = AppState.addEventListener('change', state => { if (state === 'active') void load(); });
     return () => { closed = true; clearInterval(timer); subscription.remove(); };
-  }, [base, offline, onSignedOut]);
+  }, [base, load, offline, onSignedOut]);
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (playing) return false;
@@ -103,35 +108,52 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const art = { base, headers };
   const updateProgress = async (item: Item, dismiss: boolean) => {
     if (!data) return;
-    const checkpoint = data.progress[item.id];
+    const checkpoint = data.progress[item.id], scope = recoveryScope(base, data.user);
     try {
-      if (offline) {
+      if (dismiss) {
         const siblings = allGroups.find(items => titleKey(items[0]) === titleKey(item)) || [item];
-        const duration = checkpoint?.duration || (await savedTitle(base, data.user, item.id))?.info.duration || 0;
-        const patch = dismiss ? dismissedProgress(siblings, data.progress, data.progress, {})
-          : { [item.id]: { ...checkpoint, position: checkpoint?.position || 0, duration, completed: !checkpoint?.completed, updated: Date.now() } };
-        setData(latest => latest ? { ...latest, progress: { ...latest.progress, ...patch } } : latest);
-        await Promise.all(Object.entries(patch).map(([id, entry]) => progressRecovery.write(recoveryScope(base, data.user), id, entry)));
+        const operation = { id: item.id, at: siblings.reduce((at, sibling) => Math.max(at, data.progress[sibling.id]?.updated || 0), Date.now()) };
+        await progressRecovery.dismiss(scope, operation);
+        setData(latest => latest?.user.id === data.user.id ? { ...latest, progress: applyDismissals(siblings, latest.progress, { [item.id]: operation }) } : latest);
+        if (!offline) {
+          const resolved = normalizeProgress(await syncDismissal(base, data.user, operation));
+          setData(latest => {
+            if (latest?.user.id !== data.user.id) return latest;
+            const patch = Object.fromEntries(Object.entries(resolved).filter(([id, entry]) => entry.updated >= (latest.progress[id]?.updated || 0)));
+            return { ...latest, progress: { ...latest.progress, ...patch } };
+          });
+        }
         return;
       }
-      const { progress } = await changeProgress(base, item.id, dismiss ? { dismiss: true } : { completed: !checkpoint?.completed, checkpoint });
-      const current = dataRef.current;
-      if (!current || current.user.id !== data.user.id) return;
+      if (offline) {
+        const duration = checkpoint?.duration || (await savedTitle(base, data.user, item.id))?.info.duration || 0;
+        const entry = { ...checkpoint, position: checkpoint?.position || 0, duration, completed: !checkpoint?.completed, updated: Date.now() };
+        await progressRecovery.write(scope, item.id, entry);
+        setData(latest => latest?.user.id === data.user.id ? { ...latest, progress: { ...latest.progress, [item.id]: entry } } : latest);
+        return;
+      }
+      const { progress } = await changeProgress(base, data.user.id, item.id, { completed: !checkpoint?.completed, checkpoint });
       const resolved = normalizeProgress(progress);
-      if (!dismiss && resolved[item.id].updated < (current.progress[item.id]?.updated || 0)) return;
-      const siblings = allGroups.find(items => titleKey(items[0]) === titleKey(item)) || [item];
-      const patch = dismiss ? dismissedProgress(siblings, data.progress, current.progress, resolved) : resolved;
-      setData(latest => latest ? { ...latest, progress: { ...latest.progress, ...patch } } : latest);
-      const scope = recoveryScope(base, data.user);
-      await Promise.all(Object.entries(patch).map(([id, entry]) => progressRecovery.write(scope, id, entry)));
-    } catch (e) { setError(e instanceof Error ? e.message : 'Could not save progress.'); }
+      setData(latest => latest?.user.id === data.user.id && latest.progress[item.id] === checkpoint ? { ...latest, progress: { ...latest.progress, ...resolved } } : latest);
+      await rememberProgress(base, data.user, resolved);
+      if (checkpoint) await progressRecovery.confirm(scope, { [item.id]: checkpoint }, resolved);
+    } catch (e) {
+      if (accountChanged(e)) onSignedOut();
+      else setError(e instanceof Error ? e.message : 'Could not save progress.');
+    }
   };
   const complete = (item: Item) => void updateProgress(item, false);
   const removeContinue = (item: Item) => void updateProgress(item, true);
+  const updateQueue = (queue: string[], change: ReturnType<typeof queueChange>) => {
+    if (!data) return;
+    setData(latest => latest?.user.id === data.user.id ? { ...latest, queue } : latest);
+    if (offline || !change.add.length && !change.remove.length) return;
+    void updateWatchOptions(base, data.user, { queueChange: change }).catch(e => { if (accountChanged(e)) onSignedOut(); else setError(e.message); });
+  };
   const enqueue = (items: Item[]) => {
     if (!data) return;
-    const queue = [...new Set([...data.queue, ...items.map(i => i.id)])]; setData({ ...data, queue });
-    if (!offline) void request(base, '/api/state', { method: 'PUT', body: { queue } }).catch(e => setError(e.message));
+    const add = items.map(i => i.id);
+    updateQueue([...new Set([...data.queue, ...add])], { add, remove: [] });
   };
   const startPlayback = async (item: Item, queue: Item[], start?: number) => {
     if (!data) return;
@@ -146,7 +168,10 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     const siblings = allGroups.find(items => items.some(i => i.id === item.id)) || [item];
     const queue = item.kind === 'show' ? siblings : data.queue.includes(item.id) ? data.queue.flatMap(id => data.items.find(i => i.id === id) || []) : [item];
     void startPlayback(item, queue, start);
-    if (!offline) void request(base, '/api/state', { method: 'PUT', body: { queue: queue.map(i => i.id) } }).catch(e => setError(e.message));
+    if (!offline) {
+      const ids = queue.map(i => i.id);
+      updateQueue(ids, queueChange(data.queue, ids));
+    }
   };
   const saveName = (item: Item) => data && item.kind !== 'show' ? nameFor(data, item) : item.title;
   useEffect(() => {

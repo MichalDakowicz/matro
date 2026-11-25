@@ -26,7 +26,7 @@ export async function mediaHeaders(base: string): Promise<Record<string, string>
   const token = await tokenStorage?.get(base);
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
-export async function request(base: string, path: string, init: { method?: string; body?: unknown } = {}, ms = 15000) {
+export async function request(base: string, path: string, init: { method?: string; body?: unknown; accountId?: number } = {}, ms = 15000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
   try {
@@ -37,6 +37,7 @@ export async function request(base: string, path: string, init: { method?: strin
       headers: {
         'x-matro': '1',
         'x-matro-client': 'native',
+        ...(init.accountId === undefined ? {} : { 'x-matro-account': String(init.accountId) }),
         ...await mediaHeaders(base),
         ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
       },
@@ -117,11 +118,12 @@ export type ScannerStatus = { ready: number; total: number; message: string; com
 export type Library = { markers?: Record<string, Segment[]>; scanner?: ScannerStatus; user: MatroUser; items: Item[]; folders?: string[]; progress: Record<string, Progress>; queue: string[]; preferences: Preferences; metadata: Record<string, Metadata>; catalogRevision?: string; movieRequestsEnabled?: boolean; movieRequestPushEnabled?: boolean };
 export type Track = { index: number; language: string; title: string; bitmap?: boolean; text?: boolean; codec?: string; channels?: number; default?: boolean };
 export type Info = { duration: number; directPlay: boolean; video?: { codec: string; height: number; width: number } | null; chapters?: { start: number; title: string }[]; audio: Track[]; embedded: Track[]; uploaded: { id: number; language: string; name: string }[] };
-export const library = async (base: string): Promise<Library> => { await ensureNativeSession(base); return request(base, '/api/library'); };
+export const library = async (base: string, accountId?: number): Promise<Library> => { await ensureNativeSession(base); return request(base, '/api/library', { accountId }); };
 export const inspect = (base: string, id: string): Promise<Info> => request(base, `/api/items/${encodeURIComponent(id)}/info`);
-export const saveProgress = (base: string, id: string, entry: Progress) => request(base, '/api/state', { method: 'PUT', body: { progress: { [id]: entry } } });
-export const changeProgress = (base: string, id: string, body: { dismiss: true } | { completed: boolean; checkpoint?: Progress }): Promise<{ progress: Record<string, Progress> }> =>
-  request(base, `/api/items/${encodeURIComponent(id)}/progress`, { method: 'PATCH', body });
+export const writeWatchState = (base: string, accountId: number, body: { progress?: Record<string, Progress>; queueChange?: { add: string[]; remove: string[] }; preferences?: Preferences }): Promise<{ progress?: Record<string, Progress> }> =>
+  request(base, '/api/state', { method: 'PUT', body, accountId });
+export const changeProgress = (base: string, accountId: number, id: string, body: { dismiss: true; dismissedAt?: number } | { completed: boolean; checkpoint?: Progress }): Promise<{ progress: Record<string, Progress> }> =>
+  request(base, `/api/items/${encodeURIComponent(id)}/progress`, { method: 'PATCH', body, accountId });
 export function playbackPath(id: string, info: Info, position: number, audio: number | null, burn: number | null, delay = 0) {
   const root = `/api/items/${encodeURIComponent(id)}`;
   if (info.directPlay && burn === null && (audio === null || audio === info.audio[0]?.index)) return { path: root + '/direct', offset: 0, start: position };

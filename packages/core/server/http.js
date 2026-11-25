@@ -124,6 +124,8 @@ function createServer({ router, publicDir, authenticate, config }) {
       const user = authenticate(token);
       const { route, params } = found;
       if (route.auth !== 'none' && !user) throw new HttpError(401, 'Sign in first.');
+      const account = req.headers['x-matro-account'];
+      if (account !== undefined && (!user || account !== String(user.id))) throw new HttpError(409, 'The signed-in account changed. Open Matro again.');
       if (route.auth === 'admin' && user.role !== 'admin') throw new HttpError(403, 'Only the head account can do that.');
       if (route.auth === 'viewer' && user.role !== 'viewer') throw new HttpError(403, 'Only viewer accounts can request movies.');
       const forwarded = config.trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();

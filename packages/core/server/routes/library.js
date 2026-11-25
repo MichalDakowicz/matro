@@ -27,10 +27,21 @@ function register(app) {
     items: db.prepare('SELECT i.id, i.path, i.title, i.group_id, i.group_title, i.kind, i.season, i.episode, i.added, f.path AS folder FROM items i JOIN folders f ON f.id = i.folder_id ORDER BY i.path'),
     episodes: db.prepare("SELECT id FROM items WHERE kind = 'show' AND group_id = ?"),
     folders: db.prepare('SELECT path FROM folders ORDER BY path'),
-    get: db.prepare('SELECT data FROM user_state WHERE user_id = ?'),
+    get: db.prepare('SELECT data, updated FROM user_state WHERE user_id = ?'),
     set: db.prepare('INSERT INTO user_state (user_id, data, updated) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated = excluded.updated')
   };
-  const stateOf = userId => { const row = q.get.get(userId); try { return { ...DEFAULT_STATE(), ...(row ? JSON.parse(row.data) : {}) }; } catch { return DEFAULT_STATE(); } };
+  const stateOf = userId => {
+    const row = q.get.get(userId);
+    let state;
+    try { state = { ...DEFAULT_STATE(), ...(row ? JSON.parse(row.data) : {}) }; } catch { state = DEFAULT_STATE(); }
+    state.progress = Object.assign(Object.create(null), state.progress);
+    state.progressTimes = Object.assign(Object.create(null), state.progressTimes);
+    // Recover rows written before the server owned the public update timestamp.
+    for (const [id, entry] of Object.entries(state.progress)) {
+      if (isObject(entry) && entry.updated > row?.updated) entry.updated = row.updated;
+    }
+    return state;
+  };
 
   router.add('GET', '/api/library', ctx => {
     tmdb.sync(); // new titles are matched in the background; the page polls /api/metadata for them
@@ -38,7 +49,7 @@ function register(app) {
     // Viewers see folder names and paths relative to them, never where the files live on the server.
     const items = q.items.all().map(r => ({ id: r.id, path: admin ? r.path : path.relative(r.folder, r.path), root: label(r.folder), title: r.title, group: r.group_title,
       groupId: r.group_id, titlePath: r.group_id, kind: r.kind, season: r.season, episode: r.episode, format: path.extname(r.path).slice(1).toUpperCase(), added: r.added }));
-    const state = stateOf(ctx.user.id); scanner.refresh();
+    const { progressTimes, queueEdited, ...state } = stateOf(ctx.user.id); scanner.refresh();
     return { user: { id: ctx.user.id, username: ctx.user.username, role: ctx.user.role }, folders: [...new Set(q.folders.all().map(f => label(f.path)))], items, ...state, markers: scanner.markers(state.markers, state.markerDismissals),
       scanner: scanner.snapshot(), metadata: tmdb.snapshot(), metadataEnabled: tmdb.enabled, catalogRevision: library.state.revision, movieRequestsEnabled: true,
       movieRequestPushEnabled: admin && app.movieRequests.push.enabled };
@@ -107,47 +118,59 @@ function register(app) {
     await sendFile(ctx.req, ctx.res, file, 'image/jpeg', { 'Cache-Control': 'private, max-age=604800' }).catch(() => { throw new HttpError(404, 'No such artwork.'); });
   });
 
-  // A device can only add or advance a title's progress, never drop one: a stale or half-started page saving old data cannot erase what another device wrote.
-  const mergeProgress = (kept, sent) => {
-    const out = { ...kept };
+  const validCheckpoint = entry => isObject(entry) && Number.isFinite(entry.position) && entry.position >= 0
+    && Number.isFinite(entry.duration ?? 0) && entry.duration !== null && (entry.duration ?? 0) >= 0
+    && Number.isFinite(entry.updated ?? 0) && entry.updated !== null && (entry.updated ?? 0) >= 0;
+  const checkpointTime = (entry, now) => Math.min(entry.updated ?? 0, now);
+  const previousTime = (state, id) => state.progressTimes[id] ?? state.progress[id]?.updated ?? 0;
+  const sameCheckpoint = (a, b) => a.position === b.position && a.duration === b.duration && a.completed === b.completed && !!a.hidden === !!b.hidden;
+  function mergeProgress(state, sent, now) {
+    const confirmed = Object.create(null);
     for (const [id, entry] of Object.entries(sent)) {
-      const previous = out[id];
-      if (!isObject(entry)) { out[id] = entry; continue; }
-      if (!isObject(previous)) {
+      if (!validCheckpoint(entry)) continue;
+      const previous = state.progress[id];
+      const timestamp = checkpointTime(entry, now);
+      // An echoed server snapshot also counts as a duplicate.
+      const order = entry.updated === previous?.updated ? 0 : timestamp - previousTime(state, id);
+      if (!isObject(previous) || order > 0 || (order === 0 && (!previous.hidden || entry.hidden === true))) {
+        const next = { position: entry.position, duration: entry.duration ?? 0, updated: now };
+        if (typeof entry.completed === 'boolean') next.completed = entry.completed;
+        if (typeof entry.hidden === 'boolean') next.hidden = entry.hidden;
         // A first paused checkpoint can belong to a show dismissed on another device.
-        const item = entry.hidden === undefined ? library.item(id) : null;
-        const dismissed = item?.kind === 'show' && isContinueDismissed(q.episodes.all(item.group_id), kept);
-        out[id] = dismissed ? { ...entry, hidden: true } : entry;
-        continue;
+        const item = !previous && next.hidden === undefined ? library.item(id) : null;
+        if (next.hidden === undefined && (previous?.hidden || item?.kind === 'show' && isContinueDismissed(q.episodes.all(item.group_id), state.progress))) next.hidden = true;
+        // Preserve recency on retries and on a visibility-only dismissal.
+        if (!isObject(previous) || !sameCheckpoint(previous, next)) {
+          if (previous && order === 0 && next.hidden) next.updated = previous.updated ?? now;
+          state.progressTimes[id] = order === 0 && previous ? previousTime(state, id) : timestamp;
+          state.progress[id] = next;
+        }
       }
-      const order = (entry.updated || 0) - (previous.updated || 0);
-      // Dismissing preserves playback recency. A duplicate checkpoint cannot undo it.
-      if (order > 0 || (order === 0 && (!previous.hidden || entry.hidden))) {
-        // A seek can update the resume point without changing the server's current visibility.
-        out[id] = previous.hidden && entry.hidden === undefined ? { ...entry, hidden: true } : entry;
-      }
+      if (state.progress[id]) confirmed[id] = state.progress[id];
     }
-    return out;
-  };
+    return confirmed;
+  }
   router.add('PATCH', '/api/items/:id/progress', async ctx => {
     const body = await readJson(ctx.req);
     const item = library.item(ctx.params.id);
     if (!item) throw new HttpError(404, 'No such title.');
     if (!isObject(body) || (body.dismiss === true) === (typeof body.completed === 'boolean')) throw new HttpError(400, 'Bad progress change.');
-    const state = stateOf(ctx.user.id), siblings = item.kind === 'show' ? q.episodes.all(item.group_id) : [item];
+    const state = stateOf(ctx.user.id), siblings = item.kind === 'show' ? q.episodes.all(item.group_id) : [item], now = Date.now();
     let progress;
     if (body.dismiss === true) {
-      progress = Object.fromEntries(siblings.filter(i => isObject(state.progress[i.id]))
+      if (body.dismissedAt !== undefined && (!Number.isFinite(body.dismissedAt) || body.dismissedAt < 0)) throw new HttpError(400, 'Bad dismissal time.');
+      const cutoff = Math.min(body.dismissedAt ?? now, now);
+      progress = Object.fromEntries(siblings.filter(i => isObject(state.progress[i.id]) && previousTime(state, i.id) <= cutoff)
         .map(i => [i.id, { ...state.progress[i.id], hidden: true }]));
     } else {
       const previous = isObject(state.progress[item.id]) ? state.progress[item.id] : {}, checkpoint = body.checkpoint;
       // A recovered local position can be ahead of the server. Ignore older client snapshots.
-      const newer = isObject(checkpoint) && Number.isFinite(checkpoint.updated) && checkpoint.updated > (previous.updated || 0)
-        && Number.isFinite(checkpoint.position) && checkpoint.position >= 0 && Number.isFinite(checkpoint.duration) && checkpoint.duration >= 0;
+      const newer = validCheckpoint(checkpoint) && checkpoint.updated !== previous.updated && checkpointTime(checkpoint, now) > previousTime(state, item.id);
       const source = newer ? checkpoint : previous;
       const hidden = item.kind === 'show' && (!!previous.hidden || isContinueDismissed(siblings, state.progress));
       progress = { [item.id]: { ...previous, position: source.position ?? 0, duration: source.duration ?? 0, completed: body.completed,
-        hidden, updated: Math.max(Date.now(), Number.isFinite(source.updated) ? source.updated + 1 : 0) } };
+        hidden, updated: now } };
+      state.progressTimes[item.id] = now;
     }
     Object.assign(state.progress, progress);
     q.set.run(ctx.user.id, JSON.stringify(state), Date.now());
@@ -155,9 +178,29 @@ function register(app) {
   });
   router.add('PUT', '/api/state', async ctx => {
     const body = await readJson(ctx.req, 4 * 1024 * 1024), state = stateOf(ctx.user.id);
-    if (body.progress !== undefined) { if (!isObject(body.progress)) throw new HttpError(400, 'Bad progress.'); state.progress = mergeProgress(state.progress, body.progress); }
-    if (body.queue !== undefined) { if (!Array.isArray(body.queue) || body.queue.length > 1000 || body.queue.some(id => typeof id !== 'string')) throw new HttpError(400, 'Bad queue.'); state.queue = body.queue; }
-    if (body.preferences !== undefined) { if (!isObject(body.preferences)) throw new HttpError(400, 'Bad preferences.'); state.preferences = body.preferences; }
+    const now = Date.now();
+    let progress;
+    if (body.progress !== undefined) {
+      if (!isObject(body.progress)) throw new HttpError(400, 'Bad progress.');
+      progress = mergeProgress(state, body.progress, now);
+    }
+    if (body.queue !== undefined && !validQueue(body.queue)) throw new HttpError(400, 'Bad queue.');
+    if (body.queueChange !== undefined) {
+      const { add, remove } = body.queueChange || {};
+      if (!validQueue(add) || !validQueue(remove)) throw new HttpError(400, 'Bad queue change.');
+      const removed = new Set(remove);
+      const queue = [...new Set([...state.queue.filter(id => !removed.has(id)), ...add])];
+      if (!validQueue(queue)) throw new HttpError(400, 'The queue is full.');
+      state.queue = queue;
+      state.queueEdited = true;
+    } else if (body.queue !== undefined && (!state.queueEdited || body.progress === undefined)) {
+      // Older explicit queue requests still work. An older playback snapshot cannot replace an edited queue.
+      state.queue = body.queue;
+    }
+    if (body.preferences !== undefined) {
+      if (!isObject(body.preferences)) throw new HttpError(400, 'Bad preferences.');
+      state.preferences = mergePreferences(state.preferences, body.preferences);
+    }
     if (body.markers !== undefined) {
       if (!isObject(body.markers)) throw new HttpError(400, 'Bad markers.');
       // An older tab can still add new manual marks, but a checkpoint's
@@ -172,7 +215,20 @@ function register(app) {
         if (kept.length) state.markers[id] = kept;
       }
     }
-    q.set.run(ctx.user.id, JSON.stringify({ progress: state.progress, queue: state.queue, preferences: state.preferences, markers: state.markers, markerDismissals: state.markerDismissals }), Date.now());
+    q.set.run(ctx.user.id, JSON.stringify(state), now);
+    return progress ? { ok: true, progress } : undefined;
   });
+}
+const validQueue = queue => Array.isArray(queue) && queue.length <= 1000 && queue.every(id => typeof id === 'string');
+function mergePreferences(previous, patch) {
+  const { tracks, subtitles, ...fields } = patch;
+  const preferences = { ...previous, ...fields };
+  if (tracks === null) delete preferences.tracks;
+  else if (isObject(tracks)) {
+    preferences.tracks = { ...previous.tracks, ...Object.fromEntries(Object.entries(tracks).filter(([, choice]) => isObject(choice))
+      .map(([key, choice]) => [key, { ...previous.tracks?.[key], ...choice }])) };
+  }
+  if (isObject(subtitles)) preferences.subtitles = { ...previous.subtitles, ...subtitles };
+  return preferences;
 }
 module.exports = { register };

@@ -50,6 +50,16 @@ export function createRecovery(storage, scope, onError = () => {}) {
         }
       }).catch(() => { for (const [id, , json] of changed) if (queued.get(id) === json) queued.delete(id); });
     },
+    confirm(id, sent, entry) {
+      if (!valid(entry)) return;
+      const key = prefix + id, previous = JSON.stringify(sent), value = JSON.stringify(entry);
+      try { if (storage().getItem(key) === previous) storage().setItem(key, value); } catch { failed(); }
+      void open().then(db => {
+        if (!db) return;
+        const store = db.transaction(STORE, 'readwrite').objectStore(STORE), existing = store.get(key);
+        existing.onsuccess = () => { if (JSON.stringify(existing.result) === previous) store.put(entry, key); };
+      }).catch(() => {});
+    },
     async restore(progress, ids) {
       const merged = { ...progress }; let recovered = false;
       const accept = (id, entry) => {

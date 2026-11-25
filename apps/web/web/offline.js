@@ -119,12 +119,16 @@ export function createOffline(user) {
     if (!saved) throw new Error('Connect to your Matro server to load the library.');
     const records = await store.list(), ids = new Set(records.filter(record => record.complete).map(record => record.id));
     const queued = await backend.get('pending');
-    return { ...saved, ...queued, items: saved.items.filter(item => ids.has(item.id)), folders: [], metadataEnabled: false };
+    return { ...saved, progress: { ...saved.progress, ...queued?.progress }, items: saved.items.filter(item => ids.has(item.id)), folders: [], metadataEnabled: false };
   }
   return {
     store, download, library, cancel, jobs,
     async remember(data) { await backend.set('library', data); await db.set(activeKey, scope); },
-    queue: body => serialize(() => backend.set('pending', body)),
+    queue: ({ progress }) => serialize(async () => {
+      const queued = (await backend.get('pending'))?.progress || {};
+      for (const [id, entry] of Object.entries(progress)) if (!queued[id] || entry.updated >= queued[id].updated) queued[id] = entry;
+      await backend.set('pending', { progress: queued });
+    }),
     sync: save => serialize(async () => {
       const body = await backend.get('pending');
       if (!body) return false;
