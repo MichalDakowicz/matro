@@ -32,8 +32,7 @@ function register(app) {
   };
   const stateOf = userId => { const row = q.get.get(userId); try { return { ...DEFAULT_STATE(), ...(row ? JSON.parse(row.data) : {}) }; } catch { return DEFAULT_STATE(); } };
 
-  router.add('GET', '/api/library', async ctx => {
-    await tmdb.ready().catch(() => {});
+  router.add('GET', '/api/library', ctx => {
     tmdb.sync(); // new titles are matched in the background; the page polls /api/metadata for them
     const admin = ctx.user.role === 'admin', label = folder => admin ? folder : path.basename(folder);
     // Viewers see folder names and paths relative to them, never where the files live on the server.

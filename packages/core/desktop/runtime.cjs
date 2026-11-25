@@ -194,7 +194,7 @@ app.whenReady().then(async () => {
     });
     return downloadArtwork(items);
   });
-  handle('library:load', async () => { await refreshMetadata(); return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
+  handle('library:load', async () => { await metadata.loaded; void refreshMetadata(); return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
   handle('library:ssh', async options => {
     const root = remote.register(options);
     const wasSaved = state.folders.includes(root);

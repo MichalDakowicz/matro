@@ -71,20 +71,33 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
   let writes = Promise.resolve();
   const readLocal = createLocalMetadata(artwork, keyFor);
   let local = {}, localTask = Promise.resolve();
-  function syncLocal(items) {
+  // With `all` (every item in the library), only `items` are read again and the other titles keep what they had.
+  function syncLocal(items, all) {
     const task = localTask.then(async () => {
       await loaded;
-      const next = await readLocal(items);
+      let next = await readLocal(items, !!all);
+      if (all) {
+        const scope = new Set(items.map(keyFor)), live = new Set(all.map(keyFor));
+        next = { ...Object.fromEntries(Object.entries(local).filter(([key]) => live.has(key) && !scope.has(key))), ...next };
+      }
       if (JSON.stringify(next) === JSON.stringify(local)) return false;
       for (const key of new Set([...Object.keys(local), ...Object.keys(next)])) {
         if (local[key]?.tmdbId !== next[key]?.tmdbId) failed.delete(key);
       }
       local = next;
+      await dropStaleLocalArt();
       changed();
       return true;
     });
     localTask = task.catch(() => {});
     return task;
+  }
+  // A changed poster leaves its old local-<hash>.jpg copy behind; keep only the ones the current titles use.
+  async function dropStaleLocalArt() {
+    const used = new Set(Object.values(local).flatMap(fields => [fields.poster, fields.backdrop]).filter(Boolean).map(name => path.basename(name)));
+    for (const name of await fsp.readdir(artwork).catch(() => [])) {
+      if (/^local-[a-f0-9]{64}\.jpg$/.test(name) && !used.has(name)) await fsp.rm(path.join(artwork, name), { force: true }).catch(() => {});
+    }
   }
   const pending = new Map(), failed = new Set(), edits = new Map();
   const loaded = (async () => {

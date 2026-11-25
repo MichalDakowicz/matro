@@ -11,8 +11,8 @@ const { createMovieRequests } = require('./movie-requests');
 
 function createApp({ dataDir = config.dataDir, tmdb: tmdbOptions, downloads: downloadOptions, movieRequests: requestOptions } = {}) {
   const db = open(require('node:path').join(dataDir, 'matro.db'));
-  const auth = createAuth(db), library = createLibrary(db, { excludedFiles: root => app.downloads.pendingLibraryFiles(root), onScan: () => app.tmdb.refreshLocal(), onChange: () => app.scanner?.invalidate() }), router = createRouter();
-  const app = { dataDir, db, auth, library, router, tmdb: createTmdb(db, { ...tmdbOptions, dataDir }), invites: createInvites(db) };
+  const auth = createAuth(db), library = createLibrary(db, { excludedFiles: root => app.downloads.pendingLibraryFiles(root), onScan: folderId => app.tmdb.refreshLocal(folderId), onChange: () => app.scanner?.invalidate() }), router = createRouter();
+  const app = { dataDir, db, auth, library, router, tmdb: createTmdb(db, { ...tmdbOptions, dataDir, onLocalChange: () => library.changed() }), invites: createInvites(db) };
   app.scanner = require('./segments').createScanner({ dataDir, db });
   app.downloads = createDownloads({ dataDir, library, tmdb: app.tmdb, ...downloadOptions });
   app.movieRequests = createMovieRequests(db, requestOptions);

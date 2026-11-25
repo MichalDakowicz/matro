@@ -95,7 +95,7 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, onScan, 
       }
       if (!error) for (const id of known) { q.dropItem.run(id); catalogChanged = true; }
     });
-    const metadataChanged = !error && await onScan?.().catch(() => false);
+    const metadataChanged = !error && await onScan?.(folderId).catch(() => false);
     if (catalogChanged || metadataChanged) changed();
     if (autoProbe) probeSoon();
     if (error) return { folder: folder.path, ok: false, error, items: q.existing.all(folderId).length, removed: 0 };
@@ -230,7 +230,7 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, onScan, 
       if (probeAgain) { probeAgain = false; probeSoon(); }
     });
   }
-  return { folders: () => q.folders.all(), addFolder, removeFolder, rescan, rescanAll, item: id => q.item.get(id), info, probeSoon, state,
+  return { changed, folders: () => q.folders.all(), addFolder, removeFolder, rescan, rescanAll, item: id => q.item.get(id), info, probeSoon, state,
     byPath: p => { const folder = q.byPath.get(p); return folder?.removed === 0 ? folder : undefined; }, coveringFolder };
 }
 module.exports = { createLibrary };

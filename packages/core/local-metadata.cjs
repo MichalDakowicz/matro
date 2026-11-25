@@ -28,9 +28,11 @@ async function regularFile(file, maxSize) {
   return stat.isFile() && stat.size > 0 && stat.size <= maxSize ? stat : null;
 }
 
+// Only JPEG art is read (poster.jpg, <name>-poster.jpg, fanart.jpg, folder.jpg, ...). PNG and WebP files are ignored.
+// With `partial`, the files cached for other titles are kept for the next read.
 function createLocalMetadata(artwork, keyFor) {
   let files = new Map();
-  return async items => {
+  return async (items, partial = false) => {
     const roots = new Map(), directoryFor = new Map(), directories = new Map(), jobs = new Map();
     for (const item of items) {
       if (!path.isAbsolute(item.path || '') || (item.kind !== 'movie' && item.kind !== 'show')) continue;
@@ -67,6 +69,8 @@ function createLocalMetadata(artwork, keyFor) {
           const signature = stat.size + ':' + stat.mtimeMs + ':' + stat.ctimeMs;
           const cached = files.get(file);
           let value = cached?.signature === signature ? cached.value : undefined;
+          // A copy dropped as stale must be written again.
+          if (typeof value === 'string' && !(await fs.stat(path.join(artwork, path.basename(value))).catch(() => null))) value = undefined;
           if (value === undefined) {
             const handle = await fs.open(file, 'r');
             try {
@@ -116,7 +120,7 @@ function createLocalMetadata(artwork, keyFor) {
         results[key] = { ...nfo, ...(poster ? { poster } : {}), ...(backdrop ? { backdrop } : {}) };
       }
     }
-    files = currentFiles;
+    files = partial ? new Map([...files, ...currentFiles]) : currentFiles;
     return results;
   };
 }

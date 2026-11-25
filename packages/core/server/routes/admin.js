@@ -43,8 +43,9 @@ function register(app) {
   router.add('GET', '/api/admin/folders', { auth: 'admin' }, () => ({ folders: library.folders(), scanning: library.state.scanning, mediaDir: config.mediaDir }));
   router.add('POST', '/api/admin/folders', { auth: 'admin' }, async ctx => library.addFolder((await readJson(ctx.req)).path));
   router.add('DELETE', '/api/admin/folders/:id', { auth: 'admin' }, async ctx => {
-    library.removeFolder(Number(ctx.params.id));
-    await tmdb.refreshLocal().catch(() => {});
+    const id = Number(ctx.params.id);
+    library.removeFolder(id);
+    await tmdb.refreshLocal(id).catch(() => {});
   });
   router.add('POST', '/api/admin/rescan', { auth: 'admin' }, async () => library.rescanAll());
 
