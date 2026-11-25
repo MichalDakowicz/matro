@@ -105,11 +105,11 @@ export function createAdapter(session) {
     }
     const info = await get(`/api/items/${id}/info`);
     const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay,
-      subtitles: [...info.embedded.map(({ forced: _f, ...t }) => t), ...info.uploaded.map(u => track(u))] };
+      subtitles: [...info.embedded, ...info.uploaded.map(u => track(u))] };
     details.set(id, result);
     return result;
   }
-  const track = u => ({ index: SIDECAR + u.id, language: u.language, title: `${u.name}${KIND[u.kind] || ''}`, codec: 'vtt', text: true, bitmap: false, sidecar: true, uploaded: true, uploadId: u.id, addedBy: u.addedBy });
+  const track = u => ({ index: SIDECAR + u.id, language: u.language, title: `${u.name}${KIND[u.kind] || ''}`, codec: 'vtt', text: true, bitmap: false, sidecar: true, uploaded: true, uploadId: u.id, addedBy: u.addedBy, forced: u.kind === 'forced', sdh: u.kind === 'sdh' });
 
   // Subtitle files any signed-in person can add to a title, with the name and language everyone will see.
   async function loadSubtitle(id) {

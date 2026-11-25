@@ -44,6 +44,8 @@ async function importFiles(files) {
   }
   await persist(); scanner?.invalidate(); void metadata?.sync(state.items); return state;
 }
+const languageCode = value => typeof value === 'string' && /^[a-z]{2,3}$/.test(value) ? value : '';
+const trackDefaults = value => ({ audio: languageCode(value?.audio), subtitles: ['forced', 'always'].includes(value?.subtitles) ? value.subtitles : 'off', subtitleLanguage: languageCode(value?.subtitleLanguage) });
 const subtitleStyle = value => {
   const style = value && typeof value === 'object' ? value : {}, pick = (key, options, fallback) => options.includes(style[key]) ? style[key] : fallback;
   return { size: Math.max(.5, Math.min(2, Number(style.size) || 1)), font: pick('font', ['sans', 'classic', 'serif', 'mono', 'casual'], 'sans'), background: pick('background', ['none', 'light', 'dark', 'solid'], 'light'), bold: !!style.bold, italic: !!style.italic, edge: pick('edge', ['none', 'outline', 'shadow'], 'none') };
@@ -136,7 +138,7 @@ app.whenReady().then(async () => {
   streams = await createStreamServer({ dir: path.join(app.getPath('userData'), 'playback') });
   protocol.handle('matro', request => {
     const url = new URL(request.url);
-    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/playback-buffer.js': 'playback-buffer.js', '/recovery.js': 'recovery.js', '/core/client/watch-progress.js': '../core/client/watch-progress.js', '/icons.json': 'icons.json', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-discovery.js': 'downloads-discovery.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg', '/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
+    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/playback-buffer.js': 'playback-buffer.js', '/recovery.js': 'recovery.js', '/core/client/watch-progress.js': '../core/client/watch-progress.js', '/core/client/track-preferences.js': '../core/client/track-preferences.js', '/icons.json': 'icons.json', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-discovery.js': 'downloads-discovery.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg', '/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
     const artwork = url.hostname === 'app' && url.pathname.startsWith('/artwork/') && metadata.artworkFile(url.pathname.slice('/artwork/'.length));
     if (artwork) return net.fetch(pathToFileURL(artwork).href);
     const file = url.hostname === 'app' && files[url.pathname];
@@ -257,7 +259,7 @@ app.whenReady().then(async () => {
       }
     }
     if (Array.isArray(data.queue)) state.queue = [...new Set(data.queue.filter(id => ids.has(id)))];
-    if (data.preferences) state.preferences = { autoplay: !!data.preferences.autoplay, volume: Math.max(0, Math.min(1.5, Number(data.preferences.volume) || 0)), tracks: data.preferences.tracks && typeof data.preferences.tracks === 'object' ? data.preferences.tracks : {}, motion: ['on', 'off'].includes(data.preferences.motion) ? data.preferences.motion : 'system', subtitles: subtitleStyle(data.preferences.subtitles) };
+    if (data.preferences) state.preferences = { autoplay: !!data.preferences.autoplay, volume: Math.max(0, Math.min(1.5, Number(data.preferences.volume) || 0)), tracks: data.preferences.tracks && typeof data.preferences.tracks === 'object' ? data.preferences.tracks : {}, motion: ['on', 'off'].includes(data.preferences.motion) ? data.preferences.motion : 'system', subtitles: subtitleStyle(data.preferences.subtitles), trackDefaults: trackDefaults(data.preferences.trackDefaults) };
     await persist(); scanner.refresh();
   });
   handle('media:inspect', async id => { const item = find(id); scanner.setPlayback(true); scanner.setCurrent(id); try { const info = await probe(item.path); info.subtitles.push(...(await sidecars(item.path)).map(({ path: _path, ...track }) => track)); return info; } catch (error) { scanner.setPlayback(false); throw error; } });

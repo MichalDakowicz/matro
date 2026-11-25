@@ -2,6 +2,7 @@ import icons from './icons.json' with { type: 'json' };
 import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
+import { initialTracks, LANGUAGES, SUBTITLE_MODES, trackDefaults } from '../core/client/track-preferences.js';
 import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, normalizeProgress, queueChange, resumeTarget } from '../core/client/watch-progress.js';
 const api = window.matro;
 if (api?.chooseSource && !document.querySelector('.desktop-source-button')) {
@@ -150,11 +151,6 @@ const completed = id => isCompleted(library.progress[id]);
 const orderedEpisodes = item => library.items.filter(i => i.kind === 'show' && sameTitle(i, item)).sort(compareEpisodes);
 function statusLabel(id) { return completed(id) ? ' · Completed' : library.progress[id]?.position > 0 ? ' · In progress' : ''; }
 function trackChoice(t) { return t ? { language: t.language, title: t.title, codec: t.codec, channels: t.channels } : null; }
-function matchTrack(tracks, choice) {
-  if (!choice) return null;
-  const score = t => Number(t.title === choice.title) * 4 + Number(t.channels === choice.channels) * 2 + Number(t.codec === choice.codec);
-  return tracks.filter(t => t.language === choice.language).sort((a, b) => score(b) - score(a))[0] || null;
-}
 function rememberTracks(changed) {
   library.preferences.tracks ||= {};
   const key = titleKey(current), fields = { audio: trackChoice(info.audio.find(t => t.index === audio)), subtitle: trackChoice(info.subtitles.find(t => t.index === subtitle)), off: subtitle === null, delay };
@@ -303,8 +299,21 @@ function dock() {
   return `<div class="dock-wrap"><button class="dock-back" data-action="close-detail" aria-label="Close details" title="Back (Esc)">${icon('back')}</button><nav class="dock" aria-label="Library">${items.filter(([id]) => !api.hiddenTabs?.includes(id)).map(([id, label, glyph]) => `<button class="dock-item" data-tab="${id}" ${['downloads', 'movie-requests'].includes(id) ? `aria-label="${esc(label)}"` : ''} ${tab === id && !folderFilter ? `aria-current="page" title="Back to the landing page"` : ''}>${icon(glyph)}<span class="dock-label">${esc(label)}</span>${['movie', 'show', 'audio'].includes(id) ? `<span class="sr-only"> ${groups(id).length}</span>` : ''}</button>`).join('')}</nav></div>`;
 }
 let footerOpen = false;
+const SUBTITLE_MODE_LABELS = { off: 'Off', forced: 'Forced only', always: 'Always' };
+const languageLabel = code => { try { return new Intl.DisplayNames(undefined, { type: 'language' }).of(code) || code; } catch { return code; } };
+const languageOptions = (value, blank) => `<option value="">${blank}</option>${LANGUAGES.map(code => `<option value="${code}"${code === value ? ' selected' : ''}>${esc(languageLabel(code))}</option>`).join('')}`;
+// Where a title nothing was chosen for starts: the account's audio language and subtitle mode. Choices made per show still win.
+function trackDefaultsSetting() {
+  const d = trackDefaults(library.preferences);
+  return `<span class="theme-setting track-defaults" role="group" aria-label="Default audio and subtitles"><span>Audio</span><select data-track-default="audio" aria-label="Preferred audio language">${languageOptions(d.audio, 'Original')}</select><span>Subtitles</span>${SUBTITLE_MODES.map(mode => `<button class="chip" data-subtitle-mode="${mode}" aria-pressed="${d.subtitles === mode}">${SUBTITLE_MODE_LABELS[mode]}</button>`).join('')}<select id="subtitle-language" data-track-default="subtitleLanguage" aria-label="Preferred subtitle language" ${d.subtitles === 'always' ? '' : 'hidden'}>${languageOptions(d.subtitleLanguage, 'Choose…')}</select></span>`;
+}
+function setTrackDefaults(change) {
+  library.preferences.trackDefaults = { ...trackDefaults(library.preferences), ...change };
+  discardPrepared(); void attempt(() => savePreferences({ trackDefaults: library.preferences.trackDefaults }));
+}
+
 function footer() {
-  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
+  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span>${trackDefaultsSetting()}<button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
 }
 const sectionGrid = (title, items, count, more) => items.length ? `<section class="section"><div class="section-heading"><h2>${title}</h2><span>${count}${more ? ` · <button class="text-button" data-tab="${more}">See all</button>` : ''}</span></div><div class="grid">${items.map(poster).join('')}</div></section>` : '';
 const kinds = [['show', 'Shows', 'shows'], ['movie', 'Movies', 'titles'], ['audio', 'Music & audio', 'files']];
@@ -852,11 +861,7 @@ async function play(id, keepQueue = false, compareEdition = false) {
 }
 function chooseTracks(item, details) {
   const choice = library.preferences.tracks?.[titleKey(item)];
-  return {
-    audio: matchTrack(details.audio, choice?.audio)?.index ?? details.audio.find(a => a.default)?.index ?? details.audio[0]?.index ?? null,
-    subtitle: choice?.off ? null : matchTrack(details.subtitles.filter(t => t.text || t.bitmap), choice?.subtitle)?.index ?? null,
-    delay: choice?.delay || 0
-  };
+  return { ...initialTracks(details, choice, library.preferences), delay: choice?.delay || 0 };
 }
 function startAt(item, duration) {
   const progress = library.progress[item.id];
@@ -1363,6 +1368,11 @@ document.addEventListener('click', event => {
     if (btn.dataset.enqueueShow) return enqueue(btn.dataset.enqueueShow, true);
     if (btn.dataset.tab) return goTab(btn.dataset.tab);
     if (btn.dataset.themeMode) { window.matroTheme.set(btn.dataset.themeMode); return; }
+    if (btn.dataset.subtitleMode) {
+      setTrackDefaults({ subtitles: btn.dataset.subtitleMode });
+      document.querySelectorAll('[data-subtitle-mode]').forEach(chip => chip.setAttribute('aria-pressed', String(chip === btn)));
+      $('#subtitle-language').hidden = btn.dataset.subtitleMode !== 'always'; return;
+    }
     if (btn.dataset.motion) {
       library.preferences.motion = btn.dataset.motion; applyMotion(); await savePreferences({ motion: library.preferences.motion });
       document.querySelectorAll('[data-motion]').forEach(chip => chip.setAttribute('aria-pressed', String(chip.dataset.motion === btn.dataset.motion)));
@@ -1379,6 +1389,7 @@ document.addEventListener('click', event => {
     const action = actions[btn.dataset.action]; if (action) { btn.classList.add('busy'); try { await action(); } finally { btn.classList.remove('busy'); } }
   });
 });
+document.addEventListener('change', event => { const select = event.target.closest?.('[data-track-default]'); if (select) setTrackDefaults({ [select.dataset.trackDefault]: select.value }); });
 document.addEventListener('keydown', event => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) && event.target.type !== 'range';
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); void attempt(actions.files); return; }

@@ -1,4 +1,4 @@
-import type { Item, Library, Metadata, Track, TrackChoice } from './server';
+import type { Item, Library, Metadata } from './server';
 import { compareEpisodes, continueWatching, groupTitles, isCompleted, resumeTarget } from './watch-progress.js';
 export const trackKey = (item: Item) => item.groupId || item.group;
 export const titleKey = (item: Item) => item.kind === 'show' ? item.groupId || item.group : item.id;
@@ -15,11 +15,7 @@ export function groupLibrary(items: Item[]) {
 export const resumeItem = (data: Library, items: Item[]) => resumeTarget(items, data.progress);
 export const statusOf = (data: Library, items: Item[]) => items.every(i => isCompleted(data.progress[i.id])) ? 'done' : items.some(i => data.progress[i.id]?.position > 0 || isCompleted(data.progress[i.id])) ? 'progress' : 'new';
 export const continueItems = (data: Library, groups: Item[][]) => continueWatching(groups, data.progress);
-export function matchTrack(tracks: Track[], choice?: TrackChoice | null) {
-  if (!choice) return null;
-  const score = (track: Track) => Number(track.title === choice.title) * 4 + Number(track.channels === choice.channels) * 2 + Number(track.codec === choice.codec);
-  return tracks.filter(t => t.language === choice.language).sort((a, b) => score(b) - score(a))[0] || null;
-}
+export { initialTracks, matchTrack } from './track-preferences.js';
 export function languageName(value: string) {
   if (!value || value === 'und') return 'Unknown language';
   const aliases: Record<string, string> = { eng: 'en', pol: 'pl', jpn: 'ja', spa: 'es', fre: 'fr', fra: 'fr', ger: 'de', deu: 'de', ita: 'it', rus: 'ru', por: 'pt', chi: 'zh', zho: 'zh', kor: 'ko' };

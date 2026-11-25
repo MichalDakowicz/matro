@@ -2,8 +2,9 @@ import { memo, useMemo, useRef, useState } from 'react';
 import { Animated, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import type { Item, Library } from '../lib/server';
-import { episodeName, formatTime, metadataFor, nameFor, resumeItem, statusOf } from '../../../../packages/core/client/library';
+import type { Item, Library, TrackDefaults } from '../lib/server';
+import { episodeName, formatTime, languageName, metadataFor, nameFor, resumeItem, statusOf } from '../../../../packages/core/client/library';
+import { LANGUAGES, trackDefaults } from '../../../../packages/core/client/track-preferences.js';
 import { colors, fonts } from '../theme';
 import { Brand, Icon, IconButton, MediaArt, Pill, ProgressBar, styles as t, type Glyph } from './Matro';
 export type ArtProps = { base: string; headers: Record<string, string> };
@@ -76,7 +77,20 @@ export function Dock({ tab, onChange, audio, requests }: { tab: string; onChange
   if (requests) items.push({ id: 'movie-requests', label: requests, icon: 'requests' });
   return <View style={[s.dockWrap, { bottom: insets.bottom + 14 }]}><View style={s.dock}>{items.map(item => <Pressable key={item.id} onPress={() => onChange(tab === item.id ? 'home' : item.id)} accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.id }} style={({ pressed }) => [s.dockItem, tab === item.id && { backgroundColor: '#ffffff1f' }, pressed && { opacity: .65 }]}><Icon name={item.icon} color={tab === item.id ? colors.text : '#bebab3'} /></Pressable>)}</View></View>;
 }
-export function AccountSheet({ visible, onClose, data, base, offline, onGo, onRefresh, onServer, onSignOut }: { visible: boolean; onClose: () => void; data: Library | null; base: string; offline: boolean; onGo: (tab: string) => void; onRefresh: () => void; onServer: () => void; onSignOut: () => void }) {
+const modes = [['off', 'Off'], ['forced', 'Forced only'], ['always', 'Always']] as const;
+// Where a title nothing was chosen for starts. Choices made for a show in the player still win.
+function TrackDefaultsRows({ value, onChange }: { value: ReturnType<typeof trackDefaults>; onChange: (value: TrackDefaults) => void }) {
+  const languages = (selected: string, pick: (code: string) => void, blank: string) => <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+    {[['', blank], ...LANGUAGES.map(code => [code, languageName(code)])].map(([code, label]) => <Pill key={code} compact primary={selected === code} label={label} onPress={() => pick(code)} />)}
+  </ScrollView>;
+  return <View style={{ gap: 8, marginBottom: 18 }}>
+    <Text style={t.dim}>Dub and subtitles for new titles</Text>
+    {languages(value.audio, audio => onChange({ ...value, audio }), 'Original audio')}
+    <View style={[t.row, { gap: 8 }]}>{modes.map(([mode, label]) => <Pill key={mode} compact primary={value.subtitles === mode} label={label} onPress={() => onChange({ ...value, subtitles: mode })} />)}</View>
+    {value.subtitles === 'always' && languages(value.subtitleLanguage, subtitleLanguage => onChange({ ...value, subtitleLanguage }), 'Choose…')}
+  </View>;
+}
+export function AccountSheet({ visible, onClose, data, base, offline, onGo, onRefresh, onServer, onSignOut, onTrackDefaults }: { onTrackDefaults?: (value: TrackDefaults) => void; visible: boolean; onClose: () => void; data: Library | null; base: string; offline: boolean; onGo: (tab: string) => void; onRefresh: () => void; onServer: () => void; onSignOut: () => void }) {
   const insets = useSafeAreaInsets();
   const go = (tab: string) => { onClose(); onGo(tab); };
   return <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
@@ -89,6 +103,7 @@ export function AccountSheet({ visible, onClose, data, base, offline, onGo, onRe
         <View><Text style={s.stat}>{data?.items.length || 0}</Text><Text style={t.dim}>Files</Text></View>
         <View><Text style={s.stat}>{Object.values(data?.progress || {}).filter(p => p.completed).length}</Text><Text style={t.dim}>Watched</Text></View>
       </View>
+      {data && !offline && onTrackDefaults && <TrackDefaultsRows value={trackDefaults(data.preferences)} onChange={onTrackDefaults} />}
       <View style={{ gap: 10 }}>
         {data && <Pill label="Saved for offline" icon="download" onPress={() => go('offline')} />}
         {!offline && data?.user.role === 'admin' && <View style={[t.row, { gap: 10 }]}>

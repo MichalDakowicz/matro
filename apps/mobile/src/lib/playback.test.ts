@@ -33,7 +33,7 @@ function harness(t: any, directPlay = false) {
     'react-native': { AppState: app, Platform: { OS: 'android' } },
     'expo-video': { useVideoPlayer: () => player },
     '../lib/server': { inspect: async () => info, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: {} }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry), updateWatchOptions: async () => {} },
-    '../../../../packages/core/client/library': { trackKey: () => 'movie', matchTrack: () => undefined },
+    '../../../../packages/core/client/library': { trackKey: () => 'movie', initialTracks: (details: any) => ({ audio: details.audio[0]?.index ?? null, subtitle: null }) },
     '../../../../packages/core/client/watch-progress.js': { isContinueDismissed },
     '../../../../packages/core/client/subtitles': { parseVtt },
     './diskBuffer': { downloadPlayback: (_: any, __: any, ready: any) => { const job = { ready, cancelled: false }; downloads.push(job); return () => { job.cancelled = true; }; } },

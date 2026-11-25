@@ -222,6 +222,7 @@ body.in-player .desktop-source-button{display:none}
 :root[data-theme=light] body.in-player,:root[data-theme=light] .player-layout{color-scheme:dark;--ink:255 255 255;--ink-inv:10 10 11;--bg-rgb:10 10 11;--panel-rgb:22 22 24;--glass:26 26 28;--glass-hi:42 42 45;--glass-solid:18 18 20;--bg:#0a0a0b;--panel:#161618;--text:#ece9e4;--muted:#a9a59d;--dim:#8f8c87;--soft:#bebab3;--faint:#6f6c68;--line:#ffffff14;--white:#f3f1ec;--primary:#f3f1ec;--primary-hi:#fff;--on-primary:#0a0a0b;--good:#9fd6b0;--warn:#e3a58b;color:var(--text)}
 /* Theme setting beside Motion in the footer */
 .theme-setting{display:flex;align-items:center;gap:6px}.theme-setting>span{margin-right:4px}.theme-setting .chip{height:28px;padding:0 11px;font-size:12px}
+.track-defaults{flex-wrap:wrap}.track-defaults select{height:28px;max-width:150px;padding:0 8px;border:1px solid var(--line);border-radius:8px;color:var(--text);background:var(--panel);font-size:12px}.track-defaults select[hidden]{display:none}
 
 :root[data-theme=light] .brand-mark{filter:invert(1)}:root[data-theme=light] body.in-player .brand-mark{filter:none}
 /* Continue-watching cards: the fade under the text follows the page, not black. */
