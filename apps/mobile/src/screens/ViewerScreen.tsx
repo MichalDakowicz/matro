@@ -133,6 +133,12 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     const queue = [...new Set([...data.queue, ...items.map(i => i.id)])]; setData({ ...data, queue });
     if (!offline) void request(base, '/api/state', { method: 'PUT', body: { queue } }).catch(e => setError(e.message));
   };
+  // Changes made inside the player: the queue (and what is saved as Up next) and account switches such as autoplay.
+  const changeQueue = (queue: Item[]) => {
+    if (!data) return;
+    const ids = queue.map(i => i.id); setPlaying(current => current && { ...current, queue }); setData({ ...data, queue: ids });
+    if (!offline) void request(base, '/api/state', { method: 'PUT', body: { queue: ids } }).catch(e => setError(e.message));
+  };
   const startPlayback = async (item: Item, queue: Item[], start?: number) => {
     if (!data) return;
     const run = ++playRun.current;
@@ -178,7 +184,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     changeTab('movie-requests');
   }, [alerts.opened, alerts.supported, playing]);
   if (playing && data) return <NativePlayer key={`${playing.item.id}:${playing.start ?? 'resume'}`} {...art} item={playing.item} data={data} initialPosition={playing.start} queue={playing.queue}
-    saved={playing.saved} offline={offline} onBack={() => { playRun.current++; setPlaying(null); void load(); }} onSelect={item => void startPlayback(item, playing.queue)} onNext={() => {
+    saved={playing.saved} offline={offline} onQueue={changeQueue} onComplete={complete} onPreferences={patch => setData(current => current && { ...current, preferences: { ...current.preferences, ...patch } })} onBack={() => { playRun.current++; setPlaying(null); void load(); }} onSelect={item => void startPlayback(item, playing.queue)} onNext={() => {
       const next = playing.queue[playing.queue.findIndex(i => i.id === playing.item.id) + 1];
       if (next && data.preferences.autoplay !== false) void startPlayback(next, playing.queue);
       else { setPlaying(null); void load(); }

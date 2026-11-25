@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import vm from 'node:vm';
 import { playbackPath } from '../../../../packages/core/client/server.ts';
 import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
+import * as playerTools from '../player/playerTools.ts';
 import { isContinueDismissed } from '../../../../packages/core/client/watch-progress.js';
 
 const require = createRequire(import.meta.url);
@@ -16,7 +17,7 @@ const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(resolv
 
 // Exercise the real hook with asynchronous native replacements and events. The
 // platform boundary is fake; playback URLs, subtitles and hook logic are real.
-function harness(t: any, directPlay = false) {
+function harness(t: any, directPlay = false, markers: { type: string; start: number; end: number; source: string }[] = [], preferences: Record<string, unknown> = {}) {
   const effects: (() => (() => void) | void)[] = [], states: any[] = [], listeners = new Map<string, Function>();
   const pending: { source: any; resolve: () => void; reject: (error: Error) => void }[] = [], downloads: { ready: (uri: string) => void; cancelled: boolean }[] = [];
   const saved: any[] = [], app = { currentState: 'active', addEventListener: (_: string, callback: Function) => { listeners.set('appState', callback); return { remove() {} }; } };
@@ -27,15 +28,16 @@ function harness(t: any, directPlay = false) {
     addListener(name: string, callback: Function) { listeners.set(name, callback); return { remove() {} }; },
   };
   const info = { duration: 200, directPlay, audio: [{ index: 1 }], embedded: [], uploaded: [{ id: 1, name: 'English', language: 'en' }] };
-  const data = { user: {}, preferences: { tracks: {} }, progress: {}, markers: {} };
+  const data = { user: {}, preferences: { tracks: {}, ...preferences }, progress: {}, markers: { movie: markers } };
   const modules: Record<string, any> = {
     react: { useCallback: (fn: Function) => fn, useEffect: (fn: any) => effects.push(fn), useRef: (current: any) => ({ current }), useState: (initial: any) => { const i = states.push(initial) - 1; return [initial, (value: any) => { states[i] = value; }]; } },
     'react-native': { AppState: app, Platform: { OS: 'android' } },
     'expo-video': { useVideoPlayer: () => player },
-    '../lib/server': { inspect: async () => info, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: {} }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry) },
+    '../lib/server': { inspect: async () => info, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: data.markers }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry) },
     '../../../../packages/core/client/library': { trackKey: () => 'movie', matchTrack: () => undefined },
     '../../../../packages/core/client/watch-progress.js': { isContinueDismissed },
     '../../../../packages/core/client/subtitles': { parseVtt },
+    './playerTools': playerTools,
     './diskBuffer': { downloadPlayback: (_: any, __: any, ready: any) => { const job = { ready, cancelled: false }; downloads.push(job); return () => { job.cancelled = true; }; } },
     '../lib/storage': { recoveryScope: () => 'test', progressRecovery: { write: async () => {} } },
   };
@@ -63,6 +65,19 @@ test('a completed download leaves the decoder running and is used on the next se
   assert.equal(h.downloads[0].cancelled, false, 'the cached file stays alive while in use');
   h.pending[1].resolve(); await flush();
   assert.equal(h.player.currentTime, 30);
+});
+
+test('auto-skip jumps past an intro only when it is enabled and playback is running', async t => {
+  const intro = [{ type: 'intro', start: 5, end: 15, source: 'manual' }];
+  for (const autoSkip of [true, false]) {
+    const h = harness(t, true, intro, { autoSkip }); await flush(); h.pending[0].resolve(); await flush();
+    h.player.currentTime = 0; h.emit('timeUpdate'); h.player.currentTime = 6; h.emit('timeUpdate', { currentTime: 6 }); await flush();
+    assert.equal(h.player.currentTime, autoSkip ? 15 : 6, `autoSkip ${autoSkip}`);
+    h.player.currentTime = 16; h.emit('timeUpdate', { currentTime: 16 }); assert.equal(h.player.currentTime, 16, 'outside the range nothing is skipped');
+  }
+  const paused = harness(t, true, intro, { autoSkip: true }); await flush(); paused.pending[0].resolve(); await flush();
+  paused.player.currentTime = 0; paused.emit('timeUpdate'); paused.player.playing = false; paused.player.currentTime = 6; paused.emit('timeUpdate', { currentTime: 6 });
+  assert.equal(paused.player.currentTime, 6, 'a paused player is left alone');
 });
 
 test('rapid seeks serialize native loads and skip superseded requests', async t => {

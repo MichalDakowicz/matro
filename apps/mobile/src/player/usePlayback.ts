@@ -4,12 +4,13 @@ import { useVideoPlayer } from 'expo-video';
 import { inspect, mediaHeaders, playbackPath, request, saveProgress, type Info, type Item, type Library, type Preferences, type Progress, type Track } from '../lib/server';
 import { matchTrack, titleKey, trackKey } from '../../../../packages/core/client/library';
 import { isContinueDismissed } from '../../../../packages/core/client/watch-progress.js';
+import { autoSkipTarget } from './playerTools';
 import { parseVtt, type Cue } from '../../../../packages/core/client/subtitles';
 import { downloadPlayback } from './diskBuffer';
 import { progressRecovery, recoveryScope } from '../lib/storage';
 import type { SavedMedia } from '../lib/offline';
 
-export function usePlayback({ base, data, item, initialPosition, saved, offline = false, onEnd }: { base: string; data: Library; item: Item; initialPosition?: number; saved?: SavedMedia; offline?: boolean; onEnd: () => void }) {
+export function usePlayback({ base, data, item, initialPosition, saved, offline = false, background = false, onEnd }: { base: string; data: Library; item: Item; initialPosition?: number; saved?: SavedMedia; offline?: boolean; background?: boolean; onEnd: () => void }) {
   const initial = initialPosition ?? (data.progress[item.id]?.completed ? 0 : data.progress[item.id]?.position || 0);
   const pref = data.preferences.tracks?.[trackKey(item)];
   const [info, setInfo] = useState<Info | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState(''), [position, setPosition] = useState(initial), [buffered, setBuffered] = useState(initial), [playing, setPlaying] = useState(false), [caption, setCaption] = useState('');
@@ -30,6 +31,11 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   });
   const lastLocal = useRef(0), rewatching = useRef(!!data.progress[item.id]?.completed);
   const [markers, setMarkers] = useState(data.markers?.[item.id] || []);
+  const markersRef = useRef(markers), seekRef = useRef<(value: number) => void>(() => {}), lastSkip = useRef(0), backgroundRef = useRef(background);
+  markersRef.current = markers; backgroundRef.current = background;
+  const [settings, setSettings] = useState<Preferences>(data.preferences);
+  // Background audio keeps the decoder alive with the screen off and shows a media notification. Both need the expo-video plugin option.
+  useEffect(() => { player.staysActiveInBackground = background; player.showNowPlayingNotification = background; }, [player, background]);
   useEffect(() => {
     if (offline) return;
     let active = true;
@@ -103,7 +109,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
         if (!mounted.current || run !== generation.current) return;
         pendingStart.current = { time: start, since: Date.now() };
         player.currentTime = start; player.playbackRate = rateRef.current; replacing.current = false; sourceReady.current = true;
-        if (intent.current && AppState.currentState === 'active') player.play(); else { player.pause(); setBusy(false); }
+        if (intent.current && (AppState.currentState === 'active' || backgroundRef.current)) player.play(); else { player.pause(); setBusy(false); }
       });
       replacement.current = apply;
       await apply;
@@ -163,6 +169,9 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
         if (currentTime > playbackStart.current + .03) sampledPlayback.current = true;
       } else playbackStart.current = null;
       if (Math.abs(next - at.current) > .05) moved.current = Date.now();
+      // Auto-skip only while playing, and never right after a skip, so a seek that lands inside the range cannot loop.
+      const skipTo = prefs.current.autoSkip === true && sourceReady.current && player.playing && Date.now() - lastSkip.current > 1500 ? autoSkipTarget(markersRef.current, next, infoRef.current?.duration || 0) : null;
+      if (skipTo !== null) { lastSkip.current = Date.now(); seekRef.current(skipTo); }
       at.current = next; setPosition(next); setBuffered(disk.current ? infoRef.current?.duration || 0 : offset.current + Math.max(0, player.bufferedPosition));
       const subtitleTime = next - choices.current.delay;
       setCaption(cues.current.filter(cue => cue.start <= subtitleTime && cue.end > subtitleTime).map(cue => cue.text).join('\n'));
@@ -191,7 +200,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       intent.current = false; at.current = duration || at.current;
       void persist().catch(() => {}).then(() => endRef.current());
     });
-    const appState = AppState.addEventListener('change', state => { if (state !== 'active') { intent.current = false; player.pause(); void persist().catch(() => {}); } });
+    const appState = AppState.addEventListener('change', state => { if (state !== 'active' && !backgroundRef.current) { intent.current = false; player.pause(); void persist().catch(() => {}); } });
     const timer = setInterval(() => { if (AppState.currentState === 'active' && intent.current && (player.playing || player.status === 'loading') && Date.now() - moved.current > 25000) { moved.current = Date.now(); recover(); } }, 2000);
     return () => { void request(base, '/api/playback/state', { method: 'POST', body: { playing: false } }).catch(() => {}); clearInterval(checkpoint); time.remove(); status.remove(); playing.remove(); end.remove(); appState.remove(); clearInterval(timer); };
   }, [base, player, persist, recover]);
@@ -203,6 +212,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     else void load(target, intent.current);
     void persist().catch(() => {});
   }, [player, load, persist]);
+  seekRef.current = seek;
   const toggle = () => { const shouldPlay = replacing.current ? !intent.current : !player.playing; intent.current = shouldPlay; setPlaying(shouldPlay); moved.current = Date.now(); if (shouldPlay && !replacing.current) player.play(); else { player.pause(); void persist().catch(() => {}); } };
   const chooseAudio = (index: number) => { choices.current.audio = index; setAudio(index); remember(); void load(at.current); };
   const chooseSubtitle = (index: number | null) => {
@@ -216,7 +226,13 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     const next = Math.max(-60, Math.min(60, Math.round(value * 10) / 10)); choices.current.delay = next; setDelayValue(next); remember();
     if (infoRef.current?.embedded.find(t => t.index === choices.current.subtitle)?.bitmap) { if (bitmapTimer.current) clearTimeout(bitmapTimer.current); bitmapTimer.current = setTimeout(() => void load(at.current), 400); }
   };
+  // Account-wide switches (autoplay, auto-skip, subtitle style) share the debounced preferences write that track choices use.
+  const setPreference = (patch: Partial<Preferences>) => {
+    prefs.current = { ...prefs.current, ...patch }; setSettings(prefs.current);
+    if (prefTimer.current) clearTimeout(prefTimer.current);
+    prefTimer.current = setTimeout(() => { void request(base, '/api/state', { method: 'PUT', body: { preferences: prefs.current } }).catch(() => {}); }, 400);
+  };
   const setSubtitleSize = (value: number) => { choices.current.size = value; setSubtitleSizeValue(value); remember(); };
   const changeSpeed = () => { const values = [.75, 1, 1.25, 1.5, 2], next = values[(values.indexOf(rateRef.current) + 1) % values.length]; rateRef.current = next; player.playbackRate = next; setRate(next); };
-  return { player, info, markers, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, subtitleSize, rate, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setSubtitleSize, changeSpeed, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
+  return { player, info, markers, applyMarkers: setMarkers, settings, setPreference, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, subtitleSize, rate, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setSubtitleSize, changeSpeed, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
 }

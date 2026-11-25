@@ -39,7 +39,8 @@
       [
         "expo-video",
         {
-          "supportsPictureInPicture": true
+          "supportsPictureInPicture": true,
+          "supportsBackgroundPlayback": true
         }
       ],
       "expo-secure-store",
