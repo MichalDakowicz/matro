@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Appearance, View, useColorScheme } from 'react-native';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
@@ -9,8 +9,8 @@ import LoginScreen from './screens/LoginScreen';
 import ServerScreen from './screens/ServerScreen';
 import ViewerScreen from './screens/ViewerScreen';
 import * as SystemUI from 'expo-system-ui';
-import { colors, fontAssets, setPreferredScheme } from './theme';
-import { resolveScheme } from './palette';
+import { colors, fontAssets, setPreferredScheme, useSceneActive } from './theme';
+import { needsRemount, resolveScheme } from './palette';
 import { loadThemeChoice, useThemeChoice } from './lib/theme-choice';
 import * as SecureStore from 'expo-secure-store';
 import { configureTokenStorage } from './lib/server';
@@ -35,6 +35,9 @@ export default function App() {
   const choice = useThemeChoice(), [themeReady, setThemeReady] = useState(false);
   const scheme = resolveScheme(choice, useColorScheme());
   setPreferredScheme(scheme); // before any child renders, so every colors.* read below follows it
+  // Remount to re-theme, but never under a playing video: a System flip waits until the player closes.
+  const playerUp = useSceneActive(), mounted = useRef({ scheme, generation: 0 });
+  if (needsRemount(mounted.current.scheme, scheme, playerUp)) mounted.current = { scheme, generation: mounted.current.generation + 1 };
   useEffect(() => { void loadThemeChoice().finally(() => setThemeReady(true)); }, []);
   // Native dialogs, the keyboard and the window background follow the choice too.
   useEffect(() => { Appearance.setColorScheme(choice === 'system' ? 'unspecified' : choice); }, [choice]);
@@ -85,7 +88,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <View key={scheme} style={{ flex: 1, backgroundColor: colors.ground }}>{screen}</View>
+      <View key={mounted.current.generation} style={{ flex: 1, backgroundColor: colors.ground }}>{screen}</View>
       <StatusBar style={scheme === 'light' ? 'dark' : 'light'} />
     </SafeAreaProvider>
   );

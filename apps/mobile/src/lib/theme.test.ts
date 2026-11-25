@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { palettes, resolveScheme } from '../palette.ts';
+import { needsRemount, palettes, resolveScheme } from '../palette.ts';
 
 const src = join(import.meta.dirname, '..');
 const css = readFileSync(join(src, '../../../packages/browser-ui/styles.css'), 'utf8');
@@ -47,4 +47,10 @@ test('screens use theme tokens, not raw colours or frozen style sheets', () => {
     assert.deepEqual(hex.map(match => match[0].trim().slice(0, 80)), [], `${file} has raw hex colours`);
     assert.equal((text.match(/StyleSheet\.create\(/g) || []).length, (text.match(/themed\(\(\) => StyleSheet\.create\(/g) || []).length, `${file} builds a style sheet outside themed()`);
   }
+});
+
+test('the app re-themes by remounting, but never while the player is up', () => {
+  assert.equal(needsRemount('dark', 'light', false), true);
+  assert.equal(needsRemount('dark', 'light', true), false); // scheduled dark mode during playback
+  assert.equal(needsRemount('light', 'light', false), false);
 });

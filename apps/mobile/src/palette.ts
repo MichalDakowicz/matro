@@ -65,3 +65,6 @@ export const overArt = { text: '#f3f1ec', dim: '#d6d2ca', shade: '#000a', shadeD
 /** "System" follows the phone; an unknown system scheme falls back to dark, the app's original look. */
 export const resolveScheme = (choice: ThemeChoice, system: string | null | undefined): Scheme =>
   choice === 'system' ? (system === 'light' ? 'light' : 'dark') : choice;
+
+/** The tree remounts to re-theme, but never while the player is up: a System flip (scheduled dark mode) waits until it closes. */
+export const needsRemount = (shown: Scheme, wanted: Scheme, playerUp: boolean) => shown !== wanted && !playerUp;

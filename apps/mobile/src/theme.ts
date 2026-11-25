@@ -4,6 +4,7 @@
 // `colors` and `themed()` follow the active scheme, so existing `colors.x` reads and style sheets keep working:
 // build style sheets with `themed(() => StyleSheet.create({ ... }))` and read `colors.*` while rendering.
 // A StyleSheet.create at module level (or colors read at module level) is frozen to one scheme.
+import { useSyncExternalStore } from 'react';
 import { Geist_400Regular } from '@expo-google-fonts/geist/400Regular';
 import { Geist_500Medium } from '@expo-google-fonts/geist/500Medium';
 import { Geist_600SemiBold } from '@expo-google-fonts/geist/600SemiBold';
@@ -19,7 +20,14 @@ let preferred: Scheme = 'dark', override: Scheme | null = null;
 export const activeScheme = (): Scheme => override ?? preferred;
 export const setPreferredScheme = (scheme: Scheme) => { preferred = scheme; };
 /** The player draws over video and is dark in both schemes; set from the screen that renders it. */
-export const setSceneOverride = (scheme: Scheme | null) => { override = scheme; };
+export const setSceneOverride = (scheme: Scheme | null) => {
+  const was = override !== null;
+  override = scheme;
+  if (was !== (scheme !== null)) queueMicrotask(() => sceneListeners.forEach(listener => listener())); // not during a render
+};
+const sceneListeners = new Set<() => void>();
+/** True while the player is up, so the app can hold a re-theme until it closes. */
+export const useSceneActive = () => useSyncExternalStore(listener => { sceneListeners.add(listener); return () => { sceneListeners.delete(listener); }; }, () => override !== null);
 
 export const colors: Palette = new Proxy(palettes.dark, { get: (_, key: string) => palettes[activeScheme()][key as keyof Palette] });
 
