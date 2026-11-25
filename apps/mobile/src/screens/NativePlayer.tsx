@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, AppState, BackHandler, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, BackHandler, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { VideoView } from 'expo-video';
+import { isPictureInPictureSupported, VideoView } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
 import Slider from '@react-native-community/slider';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -17,7 +17,9 @@ import type { SavedMedia } from '../lib/offline';
 
 type Props = ArtProps & { item: Item; data: Library; initialPosition?: number; saved?: SavedMedia; offline?: boolean; queue: Item[]; onBack: () => void; onSelect: (item: Item) => void; onNext: () => void };
 export default function NativePlayer({ base, headers, item, data, initialPosition, saved, offline, queue, onBack, onSelect, onNext }: Props) {
-  const p = usePlayback({ base, data, item, initialPosition, saved, offline, onEnd: onNext });
+  const [supportsPiP] = useState(() => Platform.OS === 'android' && isPictureInPictureSupported());
+  const videoView = useRef<VideoView>(null);
+  const p = usePlayback({ base, data, item, initialPosition, saved, offline, supportsPiP, onEnd: onNext });
   const [controls, setControls] = useState(true), [sheet, setSheet] = useState<'tracks' | 'queue' | null>(null), [scrub, setScrub] = useState<number | null>(null);
   const insets = useSafeAreaInsets(), { width, height } = useWindowDimensions(), landscape = width > height, opacity = useRef(new Animated.Value(1)).current;
   const dragging = useRef(false);
@@ -61,6 +63,16 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
   useEffect(() => { if (!p.playing || p.busy || p.error) setControls(true); }, [p.playing, p.busy, p.error]);
   const select = async (next: Item) => { setSheet(null); await p.persist().catch(() => {}); p.player.pause(); onSelect(next); };
   const skip = (delta: number) => { setControls(true); p.seek(p.position + delta); };
+  const enterPictureInPicture = async () => {
+    const view = videoView.current;
+    if (!view) return;
+    p.pictureInPicture.request();
+    try { await view.startPictureInPicture(); }
+    catch {
+      p.pictureInPicture.failed();
+      Alert.alert('Picture-in-picture unavailable', 'Check the picture-in-picture permission in Android settings.');
+    }
+  };
   const videoAspect = p.info?.video?.width && p.info.video.height ? p.info.video.width / p.info.video.height : 16 / 9;
   const pictureHeight = Math.min(height, width / videoAspect), captionBottom = Math.max((height - pictureHeight) / 2 + pictureHeight * .06, controls ? (landscape ? 110 : 225 + insets.bottom) : insets.bottom + 16);
   const allSubs = [...(p.info?.embedded || []), ...(p.info?.uploaded || []).map(track => ({ index: 10000 + track.id, language: track.language, title: track.name, text: true, codec: 'vtt' }))];
@@ -75,10 +87,14 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
     <Pressable accessibilityLabel="Change playback speed" onPress={() => { setControls(true); p.changeSpeed(); }} style={s.speed}><Text style={t.text}>{p.rate}×</Text></Pressable>
     <IconButton name="tracks" label="Audio and subtitles" active={sheet === 'tracks'} onPress={() => { setControls(true); setSheet('tracks'); }} />
     <IconButton name="queue" label="Queue" active={sheet === 'queue'} onPress={() => { setControls(true); setSheet('queue'); }} />
+    {p.allowPiP && <IconButton name="pictureInPicture" label="Picture-in-picture" disabled={p.busy || !!p.error} onPress={() => void enterPictureInPicture()} />}
     <IconButton name="fullscreen" label={landscape ? 'Exit fullscreen' : 'Fullscreen'} onPress={toggleFullscreen} />
   </View>;
   return <View style={s.fill}>
-    <VideoView player={p.player} nativeControls={false} contentFit="contain" fullscreenOptions={{ enable: false }} style={StyleSheet.absoluteFill} />
+    <VideoView ref={videoView} player={p.player} nativeControls={false} contentFit="contain" fullscreenOptions={{ enable: false }} style={StyleSheet.absoluteFill}
+      allowsPictureInPicture={p.allowPiP} startsPictureInPictureAutomatically={p.autoPiP}
+      onPictureInPictureStart={() => { p.pictureInPicture.started(); setSheet(null); }}
+      onPictureInPictureStop={() => { p.pictureInPicture.stopped(); setControls(true); }} />
     <Pressable style={StyleSheet.absoluteFill} onPress={() => setControls(!controls)} accessibilityLabel="Show or hide playback controls" />
     {p.caption ? <Text pointerEvents="none" style={[s.caption, { bottom: captionBottom, fontSize: 20 * p.subtitleSize, lineHeight: 27 * p.subtitleSize, maxWidth: landscape ? '80%' : '92%' }]}>{p.caption}</Text> : null}
     {p.busy || p.error ? <View pointerEvents="box-none" style={s.message}>{p.error ? <><Text style={[t.sectionTitle, { textAlign: 'center' }]}>Couldn’t play this file.</Text><Text style={[t.muted, { textAlign: 'center' }]}>{p.error}</Text><Pill label="Try again" onPress={p.retry} /></> : <><ActivityIndicator color={colors.text} /><Text style={t.dim}>Getting your file ready</Text><Text style={t.muted}>Preparing playback…</Text></>}</View> : null}

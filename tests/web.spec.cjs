@@ -5,6 +5,53 @@ const { fixtures } = require('./fixtures.cjs');
 const { createApp } = require('../packages/core/server');
 const { ffmpeg, run } = require('../packages/core/desktop/media.cjs');
 
+test('web picture-in-picture can return to inline playback and hides without API support', async () => {
+  const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'web-pip-'));
+  const media = path.join(root, 'media'); await fs.mkdir(media);
+  await fs.copyFile(f.mkv, path.join(media, 'Northbound.mkv'));
+  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} } });
+  let browser;
+  try {
+    const user = await app.createUser('head', 'fixture-web-pip', 'admin');
+    await library.addFolder(media);
+    const id = db.prepare('SELECT id FROM items').get().id;
+    const saved = () => JSON.parse(db.prepare('SELECT data FROM user_state WHERE user_id = ?').get(user)?.data || '{}').progress?.[id]?.position || 0;
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: `http://127.0.0.1:${server.address().port}` };
+    delete env.ELECTRON_RUN_AS_NODE;
+    browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
+    const page = await browser.firstWindow();
+    await browser.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].show(); });
+    await page.setViewportSize({ width: 375, height: 800 });
+    await page.getByLabel('Username', { exact: true }).fill('head');
+    await page.getByLabel('Password', { exact: true }).fill('fixture-web-pip');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.evaluate(() => window.matroTheme.set('light'));
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: 'Play now', exact: true }).click();
+    const pip = page.locator('[data-action="picture-in-picture"]'), video = page.locator('video');
+    await expect.poll(() => video.evaluate(v => v.videoWidth)).toBeGreaterThan(0);
+    if (await page.evaluate(() => document.pictureInPictureEnabled && typeof HTMLVideoElement.prototype.requestPictureInPicture === 'function')) {
+      const before = saved();
+      await pip.press('Enter');
+      await expect(pip).toHaveAttribute('aria-pressed', 'true');
+      await expect.poll(saved, { timeout: 11000 }).toBeGreaterThan(before + 1);
+      await page.evaluate(() => document.exitPictureInPicture());
+      await expect(pip).toHaveAttribute('aria-pressed', 'false');
+      await expect(video).toBeVisible();
+    }
+    await video.evaluate(v => {
+      Object.defineProperty(document, 'pictureInPictureEnabled', { configurable: true, value: false });
+      v.dispatchEvent(new Event('resize'));
+    });
+    await expect(pip).toBeHidden();
+  } finally {
+    await browser?.close();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  }
+});
+
 test('viewers request a movie and the owner searches for a release without starting a transfer', async () => {
   const root = await fs.mkdtemp(path.join(require('node:os').tmpdir(), 'matro-request-ui-'));
   const queries = [], hash = 'a'.repeat(40);
