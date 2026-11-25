@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { setImmediate } from 'node:timers/promises';
 import vm from 'node:vm';
 import * as client from '../../../../packages/core/client/server.ts';
+import * as offlineRules from '../../../../packages/core/client/offline-rules.js';
 
 const ts = createRequire(import.meta.url)('typescript');
 const transpile = (path: string) => ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
@@ -64,6 +65,7 @@ function setup(entries = new Map<string, string>(), files = new Map<string, numb
     '@react-native-async-storage/async-storage': fixture.storage,
     'expo-file-system': fixture,
     'expo/fetch': { fetch: (...args: Parameters<typeof fixture.fetch>) => fixture.fetch(...args) },
+    '../../../../packages/core/client/offline-rules.js': offlineRules,
     './storage': { recoveryScope: () => 'test', progressRecovery: { restore: async (_: string, entries: unknown) => entries } },
     './offline-notifications': {
       holdService() { fixture.holds++; return () => { fixture.holds--; }; },

@@ -1,3 +1,4 @@
+import { DOWNLOAD_SLOTS, RetryableDownloadError, fetchPiece, isTextCaption, offlinePath, optionalCaption, prepareDownload, retrying } from '../../../packages/core/client/offline-rules.js';
 import { createStore, newRequestId, resumable } from './offline-store.js';
 import { ApiError, api } from './http.js';
 
@@ -53,33 +54,6 @@ export async function lastOfflineUser() {
 }
 export const forgetOfflineSession = () => db.delete(activeKey);
 
-const wait = (ms, signal) => new Promise((resolve, reject) => {
-  const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, ms);
-  function abort() { clearTimeout(timer); reject(signal.reason); }
-  if (signal.aborted) abort();
-  else signal.addEventListener('abort', abort, { once: true });
-});
-
-// A dropped connection or a 5xx answer is retried with backoff; the server's own refusals (4xx) and a changed file are not.
-export async function retrying(signal, run) {
-  for (let tries = 0;; tries++) {
-    try { return await run(); }
-    catch (error) {
-      if (signal.aborted || error.fatal || error instanceof ApiError && error.status < 500 || tries >= 6) throw error;
-      await wait(Math.min(30000, 1500 * 2 ** tries), signal);
-    }
-  }
-}
-
-export function preparationTracker() {
-  let best = -Infinity, advancedAt = 0;
-  return (progress, now = Date.now()) => {
-    if (!Number.isFinite(progress)) return false;
-    if (progress > best) { best = progress; advancedAt = now; }
-    return now - advancedAt >= 30 * 60 * 1000;
-  };
-}
-
 function mergeProgress(previous, incoming) {
   const merged = { ...previous };
   for (const [id, entry] of Object.entries(incoming || {})) {
@@ -92,7 +66,7 @@ function mergeProgress(previous, incoming) {
   return merged;
 }
 
-export function createOffline(user, { inspect, subtitles, sendSubtitle }) {
+export function createOffline(user, { inspect, subtitlePath, sendSubtitle }) {
   const scope = scopeFor(user);
   const backend = {
     get: key => db.get(scope + key), set: (key, value) => db.set(scope + key, value), delete: key => db.delete(scope + key),
@@ -118,39 +92,23 @@ export function createOffline(user, { inspect, subtitles, sendSubtitle }) {
     }
     signal.throwIfAborted();
     job.active = true; emit();
-    const root = `/api/items/${encodeURIComponent(id)}/offline`;
+    const root = offlinePath(id);
     try {
-      let info = await retrying(signal, () => inspect(id, { signal })), status;
-      const stalled = preparationTracker();
-      for (;;) {
-        signal.throwIfAborted();
-        status = await retrying(signal, () => api('GET', root, undefined, { signal }));
-        if (status.state === 'ready') break;
-        if (status.state !== 'preparing') throw new Error('The server could not prepare this title.');
-        if (stalled(status.progress)) throw Object.assign(new Error('Server preparation has stalled. Resume to check again.'), { resume: true });
-        job.prepared = typeof status.progress === 'number' ? status.progress : null; emit();
-        await wait(2000, signal);
-      }
+      let info = await retrying(signal, () => inspect(id, { signal, deadline: true }));
+      const status = await prepareDownload(signal, () => api('GET', root, undefined, { signal, deadline: true }), progress => {
+        job.prepared = progress ?? null; emit();
+      });
       job.prepared = null;
-      const texts = {};
-      const tracks = [];
+      const texts = {}, tracks = [];
+      const send = (path, headers, requestSignal) => fetch(path, { credentials: 'same-origin', signal: requestSignal, headers });
       for (const track of info.subtitles) {
-        if (signal.aborted) throw signal.reason;
-        if (!track.text || track.bitmap) continue;
-        try { texts[track.index] = await subtitles({ id, index: track.index, signal }); tracks.push(track); } catch { /* A missing subtitle does not prevent saving the video. */ }
+        if (!isTextCaption(track)) continue;
+        const caption = await optionalCaption(requestSignal => send(subtitlePath(id, track.index), {}, requestSignal), signal);
+        if (caption !== undefined) { texts[track.index] = caption; tracks.push(track); }
       }
       info = { ...info, audio: info.audio.slice(0, 1), subtitles: tracks };
       let first = true;
-      const fetchRange = (start, end) => retrying(signal, async () => {
-        const res = await fetch(`${root}/file?version=${encodeURIComponent(status.version)}`, {
-          credentials: 'same-origin', signal, headers: { range: `bytes=${start}-${end}` },
-        });
-        if (res.status !== 206 || res.headers.get('content-range') !== `bytes ${start}-${end}/${status.size}`) {
-          await res.body?.cancel();
-          throw Object.assign(new Error('The server could not resume this download. Try again.'), { fatal: res.status < 500, resume: res.status >= 500 });
-        }
-        return res.blob();
-      });
+      const fetchRange = async (start, end) => new Blob([await fetchPiece(send, root, status, { start, end }, signal)]);
       await store.download({ id, ...status, info, subtitles: texts, title: item.title, requestId, fetchRange, signal,
         onProgress(have, size) {
           if (first) { first = false; job.started = Date.now(); job.initial = have; }
@@ -158,7 +116,7 @@ export function createOffline(user, { inspect, subtitles, sendSubtitle }) {
         } });
     } catch (error) {
       if (!signal.aborted && error.name !== 'AbortError') {
-        await updateJob(item, record => ({ ...record, state: error.resume || networkLost(error) ? record.state : 'failed', error: error.message }));
+        await updateJob(item, record => ({ ...record, state: error instanceof RetryableDownloadError || networkLost(error) ? record.state : 'failed', error: error.message }));
       }
       throw error;
     }
@@ -167,12 +125,13 @@ export function createOffline(user, { inspect, subtitles, sendSubtitle }) {
   function pump() {
     if (stopped) return;
     for (const job of jobs.values()) {
-      if (running >= 2) break;
+      if (running >= DOWNLOAD_SLOTS) break;
       if (job.running) continue;
       job.running = true; running++;
       const { id } = job.item, { signal } = job.controller;
       void Promise.resolve().then(() => withLock(`download:${id}`, { signal }, () => runJob(job)))
         .finally(() => {
+          job.controller.abort();
           running--; jobs.delete(id); emit(); pump();
         }).then(job.resolve, job.reject);
     }

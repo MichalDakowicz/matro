@@ -17,7 +17,7 @@ const artwork = value => typeof value === 'string' ? (value.startsWith('artwork/
 export function createAdapter(session) {
   const noop = () => () => {};
   const watchers = new Set();
-  const offline = createOffline(session.user, { inspect: inspectRemote, subtitles: fetchSubtitles, sendSubtitle });
+  const offline = createOffline(session.user, { inspect: inspectRemote, subtitlePath, sendSubtitle });
   let polling = 0;
   const unsupported = what => () => Promise.reject(new Error(`${what} is a desktop feature.`));
   const headOnly = (message = 'Only the head account can add or remove media.') => { if (session.user.role !== 'admin') throw new Error(message); };
@@ -99,8 +99,8 @@ export function createAdapter(session) {
       throw error;
     }
   }
-  async function inspectRemote(id, { signal } = {}) {
-    const info = await api('GET', `/api/items/${id}/info`, undefined, { signal });
+  async function inspectRemote(id, { signal, deadline } = {}) {
+    const info = await api('GET', `/api/items/${id}/info`, undefined, { signal, deadline });
     const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay,
       subtitles: [...info.embedded.map(({ forced: _f, ...t }) => t), ...info.uploaded.map(u => track(u))] };
     details.set(id, result);
@@ -166,8 +166,11 @@ export function createAdapter(session) {
       throw error;
     }
   }
+  function subtitlePath(id, index) {
+    return `/api/items/${id}/subtitles/${index >= SIDECAR ? `u${index - SIDECAR}` : `e${index}`}`;
+  }
   async function fetchSubtitles({ id, index, signal }) {
-    const res = await fetch(`/api/items/${id}/subtitles/${index >= SIDECAR ? `u${index - SIDECAR}` : `e${index}`}`, { credentials: 'same-origin', signal });
+    const res = await fetch(subtitlePath(id, index), { credentials: 'same-origin', signal });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not load subtitles.');
     return res.text();
   }

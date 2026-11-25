@@ -1,6 +1,9 @@
 // Portable native client. Sessions are supplied by the platform's secure storage;
 // media requests carry the same revocable bearer session as API requests.
 
+import { fetchWithDeadline } from './offline-rules.js';
+export { fetchWithDeadline } from './offline-rules.js';
+
 export type MatroUser = { id: number; username: string; role: string };
 export type Status = { setup: boolean; user: MatroUser | null };
 
@@ -25,42 +28,6 @@ export function configureTokenStorage(storage: NonNullable<typeof tokenStorage>)
 export async function mediaHeaders(base: string): Promise<Record<string, string>> {
   const token = await tokenStorage?.get(base);
   return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
-// Keep the signal attached through the body read, with a fresh deadline after headers arrive.
-// `read` may call `touch` as data arrives to restart the body deadline, making `bodyMs` an idle limit for large bodies.
-export async function fetchWithDeadline<R, T>(
-  send: (signal: AbortSignal) => Promise<R>,
-  read: (response: R, touch: () => void) => Promise<T>,
-  { signal, requestMs = 15000, bodyMs = 30000 }: { signal?: AbortSignal; requestMs?: number; bodyMs?: number } = {},
-): Promise<T> {
-  const controller = new AbortController();
-  const cancel = () => controller.abort();
-  signal?.addEventListener('abort', cancel);
-  if (signal?.aborted) cancel();
-  async function phase<V>(run: (touch: () => void) => Promise<V>, ms: number, message: string) {
-    if (controller.signal.aborted) throw new Error('Request cancelled.');
-    let timedOut = false;
-    let rejectAbort: () => void;
-    const aborted = new Promise<never>((_, reject) => {
-      rejectAbort = () => reject(new Error(timedOut ? message : 'Request cancelled.'));
-      controller.signal.addEventListener('abort', rejectAbort);
-    });
-    const arm = () => setTimeout(() => { timedOut = true; cancel(); }, ms);
-    let timer = arm();
-    const touch = () => { clearTimeout(timer); timer = arm(); };
-    try { return await Promise.race([aborted, run(touch)]); }
-    finally { clearTimeout(timer); controller.signal.removeEventListener('abort', rejectAbort!); }
-  }
-  try {
-    const response = await phase(() => send(controller.signal), requestMs, 'The server took too long to respond.');
-    return await phase(touch => read(response, touch), bodyMs, 'The server took too long to send the response.');
-  } catch (error) {
-    cancel();
-    throw error;
-  } finally {
-    signal?.removeEventListener('abort', cancel);
-  }
 }
 
 export async function request(base: string, path: string, init: { method?: string; body?: unknown; signal?: AbortSignal } = {}, ms = 15000) {
