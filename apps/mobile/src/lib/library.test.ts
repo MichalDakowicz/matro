@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { continueItems, groupLibrary, matchTrack, metadataFor, resumeItem, trackKey } from '../../../../packages/core/client/library.ts';
+import { dayLabel, watchHistory } from '../../../../packages/core/client/watch-progress.js';
 import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
 import type { Item, Library } from '../../../../packages/core/client/server.ts';
 const episode = (id: string, number: number): Item => ({ id, title: id, groupId: 'show', group: 'Show', kind: 'show', season: 1, episode: number, format: 'MKV' });
@@ -63,4 +64,16 @@ test('track preferences follow language/title across episode stream-index change
 test('native subtitle parsing retains timing and line breaks without rendering HTML', () => {
   const cues = parseVtt('WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.500\n<i>Hello</i>\nworld\n\n00:03.000 --> 00:04.000\nNext');
   assert.deepEqual(cues, [{ start: 1, end: 2.5, text: 'Hello\nworld' }, { start: 3, end: 4, text: 'Next' }]);
+});
+
+test('watch history lists played titles newest first, skips marked-only ones and honours the period', () => {
+  const list = [episode('one', 1), episode('two', 2), episode('three', 3), episode('four', 4)], day = 864e5, now = new Date(2026, 10, 25, 12).getTime();
+  const progress = {
+    one: { position: 30, duration: 100, updated: now - 8 * day }, two: { position: 99, duration: 100, completed: true, updated: now - day },
+    three: { position: 0, duration: 100, completed: true, updated: now }, four: { position: 5, duration: 100, updated: 0 }, gone: { position: 9, duration: 10, updated: now },
+  };
+  assert.deepEqual(watchHistory(list, progress).map(row => row.item.id), ['two', 'one']);
+  assert.deepEqual(watchHistory(list, progress, { since: now - 7 * day }).map(row => row.item.id), ['two']);
+  assert.deepEqual(watchHistory(list, progress, { limit: 1 }).map(row => row.item.id), ['two']);
+  assert.equal(dayLabel(now - 3600e3, now), 'Today'); assert.equal(dayLabel(now - day, now), 'Yesterday');
 });

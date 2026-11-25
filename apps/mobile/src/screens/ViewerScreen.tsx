@@ -15,6 +15,7 @@ import DownloadsScreen from './DownloadsScreen';
 import FoldersScreen from './FoldersScreen';
 import OfflineScreen from './OfflineScreen';
 import MovieRequestsScreen from './MovieRequestsScreen';
+import HistoryScreen from './HistoryScreen';
 import QueueScreen from './QueueScreen';
 import ServerPage from './ServerPage';
 import { BrowseView, HomeView, LibraryChips, SearchView } from './LibraryScreens';
@@ -218,7 +219,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const admin = !offline && data?.user.role === 'admin', layout = { top: insets.top + (offline ? 44 : 0), bottom: insets.bottom };
   const libraryTab = ['home', 'movie', 'show', 'audio', 'folders'].includes(tab);
   const requestsLabel = !offline && data?.movieRequestsEnabled ? (data.user.role === 'admin' ? 'Movie requests' : 'Request a movie') : undefined;
-  const dockTab: DockTab = tab === 'search' ? 'search' : tab === 'queue' ? 'queue' : ['server', 'offline', 'downloads', 'movie-requests'].includes(tab) ? 'server' : 'home';
+  const dockTab: DockTab = tab === 'search' ? 'search' : tab === 'queue' ? 'queue' : ['server', 'offline', 'downloads', 'movie-requests', 'history'].includes(tab) ? 'server' : 'home';
   const chips = data && libraryTab && !folder ? <LibraryChips tab={tab} audio={data.items.some(i => i.kind === 'audio')} admin={admin} onPick={jump} /> : null;
   const open = (items: Item[]) => setSelected(titleKey(items[0]));
   // From the Queue screen the player gets the queue itself, not the show's episode list.
@@ -242,6 +243,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       onResume={id => { const item = data.items.find(item => item.id === id); if (item) save(item); }}
       onRemoved={() => { if (offline) void load(); }} /></View>
     : tab === 'movie-requests' && !offline && data.movieRequestsEnabled ? top(<MovieRequestsScreen key={alerts.opened} base={base} admin={data.user.role === 'admin'} alerts={alerts} onSearch={request => { push('downloads'); setRequestSearch(request); }} />)
+    : tab === 'history' ? <HistoryScreen {...art} data={data} layout={layout} onOpen={item => open(allGroups.find(items => items.some(i => i.id === item.id)) || [item])} />
     : tab === 'downloads' && admin ? top(<DownloadsScreen {...art} initialRequest={requestSearch} />)
     : tab === 'folders' && !offline ? top(<FoldersScreen base={base} data={data} header={chips} onRefresh={load} onBrowse={path => push('home', path)} />)
     : tab === 'search' ? <SearchView {...common} data={data} groups={allGroups} />

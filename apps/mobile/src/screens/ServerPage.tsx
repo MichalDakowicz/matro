@@ -34,6 +34,7 @@ export default function ServerPage({ base, data, offline, layout, requests, onGo
     <View style={[t.row, { justifyContent: 'space-between', marginTop: 24 }]}><Text accessibilityRole="header" style={t.sectionTitle}>Libraries</Text>{admin && <Chip small label={scanning ? 'Scanning…' : 'Scan now'} onPress={() => { if (!scanning) void scan(); }} />}</View>
     <View style={{ marginTop: 6 }}>{libraries.length ? libraries.map(row => <Row key={row.key} label={row.name} detail={row.path || undefined} onPress={row.open} chevron />) : <Text style={[t.muted, { marginTop: 8 }]}>Nothing in the library yet.</Text>}</View>
     <SectionLabel>On this server</SectionLabel>
+    <Row icon="restart" label="Watch history" detail="What you played, and when" chevron onPress={() => onGo('history')} />
     <Row icon="download" label="Saved for offline" detail="Titles stored on this phone" chevron onPress={() => onGo('offline')} />
     {admin && <Row icon="folder" label="Folders" detail="Add or remove media folders" chevron onPress={() => onGo('folders')} />}
     {admin && <Row icon="arrows" label="Host downloads" detail="Find releases and add them to the server" chevron onPress={() => onGo('downloads')} />}

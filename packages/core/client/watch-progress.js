@@ -62,6 +62,29 @@ export function dismissedProgress(items, previous, current, resolved = {}) {
   return patch;
 }
 
+/**
+ * What was actually watched, newest first. Each entry's last update is its date, and an entry needs a played position:
+ * episodes that were only marked watched have none, so a bulk mark does not flood the history.
+ * @param {Item[]} items @param {ProgressMap} progress @param {{ since?: number, limit?: number }} [options]
+ */
+export function watchHistory(items, progress, { since = 0, limit = Infinity } = {}) {
+  const byId = new Map(items.map(item => [item.id, item]));
+  return Object.entries(progress).flatMap(([id, entry]) => {
+    const item = byId.get(id);
+    return item && Number.isFinite(entry?.updated) && entry.updated > since && entry.position > 0 ? [{ item, entry, at: entry.updated }] : [];
+  }).sort((a, b) => b.at - a.at).slice(0, limit);
+}
+
+/** "Today", "Yesterday" or "Tuesday, Nov 24" for a history heading (local time). @param {number} at @param {number} [now] */
+export function dayLabel(at, now = Date.now()) {
+  const day = new Date(at).toDateString();
+  if (day === new Date(now).toDateString()) return 'Today';
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (day === yesterday.toDateString()) return 'Yesterday';
+  return new Date(at).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 /** @param {Item[]} items @param {ProgressMap} progress */
 function continuationForTitle(items, progress) {
   const anchor = items.filter(item => !progress[item.id]?.hidden && hasActivity(progress[item.id])).sort((a, b) => {
