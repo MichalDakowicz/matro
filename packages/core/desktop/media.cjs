@@ -124,8 +124,9 @@ async function sidecars(file) {
     .sort((a, b) => a.length - b.length || a.localeCompare(b, undefined, { numeric: true }))
     .map((name, n) => {
       const tags = path.basename(name, path.extname(name)).slice(stem.length).split('.').filter(Boolean);
-      const language = tags.find(tag => /^[a-z]{2,3}$/i.test(tag))?.toLowerCase() || 'und';
-      return { index: SIDECAR + n, path: path.join(dir, name), language, title: tags.filter(tag => tag.toLowerCase() !== language).join(' ') || 'Subtitle file', codec: path.extname(name).slice(1).toLowerCase(), text: true, bitmap: false, sidecar: true };
+      const flag = /^(forced|sdh|hi|cc)$/i, language = tags.find(tag => /^[a-z]{2,3}$/i.test(tag) && !flag.test(tag))?.toLowerCase() || 'und';
+      return { index: SIDECAR + n, path: path.join(dir, name), language, title: tags.filter(tag => tag.toLowerCase() !== language).join(' ') || 'Subtitle file', codec: path.extname(name).slice(1).toLowerCase(), text: true, bitmap: false, sidecar: true,
+        forced: tags.some(tag => /^forced$/i.test(tag)), sdh: tags.some(tag => /^(sdh|hi|cc)$/i.test(tag)) };
     });
 }
 // Keep a loaded subtitle file with the video so it is offered next time. Existing files are never overwritten.

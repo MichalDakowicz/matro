@@ -60,6 +60,12 @@ test.before(async () => {
   fs.writeFileSync(srt, '1\n00:00:00,500 --> 00:00:02,000\nHello there\n');
   for (const n of [1, 2]) make(path.join(mediaDir, 'Show', `Show.S01E0${n}.mkv`), ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=4', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=4', '-i', srt,
     '-map', '0:v', '-map', '1:a', '-map', '2:a', '-map', '3:s', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-c:s', 'srt', '-metadata:s:a:0', 'language=eng', '-metadata:s:a:1', 'language=jpn', '-metadata:s:s:0', 'language=eng', '-shortest']);
+  // Subtitle files beside a video, as a download or the owner leaves them: language and flags come from the name.
+  const heat = path.join(mediaDir, 'Heat (1995)');
+  fs.writeFileSync(path.join(heat, 'Heat.1995.en.srt'), '1\n00:00:00,500 --> 00:00:02,000\nSidecar line\n');
+  fs.writeFileSync(path.join(heat, 'Heat.1995.pl.forced.srt'), '1\n00:00:01,000 --> 00:00:02,000\nTylko obce\n');
+  fs.writeFileSync(path.join(heat, 'Heat.1995.broken.srt'), 'not a subtitle');
+  fs.writeFileSync(path.join(heat, 'Other.en.srt'), '1\n00:00:00,500 --> 00:00:02,000\nNot ours\n');
   const created = createApp({ dataDir, tmdb: { fetchImpl: fakeTmdb, env: { TMDB_API_KEY: 'test-key' } } }), { server, library, db } = created;
   app = created.app;
   database = db;
@@ -265,6 +271,20 @@ test('offline media preparation is authenticated and serves versioned, seekable 
   const second = await fetch(base + episode + '/file?audio=' + audio + '&version=' + ready.version, { headers });
   assert.equal(second.status, 206);
   assert.match(Buffer.from(await second.arrayBuffer()).toString('latin1'), /ftyp/);
+});
+
+test('subtitle files next to the video are listed and served as WebVTT', async () => {
+  const movie = (await catalog('sam')).groups[0][0];
+  const { files } = (await call('sam', 'GET', `/api/items/${movie.id}/info`)).data;
+  assert.deepEqual(files.map(f => [f.language, f.forced, f.sdh]).sort(), [['en', false, false], ['pl', true, false], ['und', false, false]].sort());
+  const english = files.find(f => f.language === 'en'), polish = files.find(f => f.language === 'pl'), broken = files.find(f => f.language === 'und');
+  const vtt = await call('sam', 'GET', `/api/items/${movie.id}/subtitles/f${english.id}`);
+  assert.equal(vtt.status, 200);
+  assert.match(vtt.data, /^WEBVTT/); assert.match(vtt.data, /Sidecar line/);
+  assert.match((await call('sam', 'GET', `/api/items/${movie.id}/subtitles/f${polish.id}`)).data, /Tylko obce/);
+  assert.equal((await call('sam', 'GET', `/api/items/${movie.id}/subtitles/f${broken.id}`)).status, 422);
+  assert.equal((await call('sam', 'GET', `/api/items/${movie.id}/subtitles/f9`)).status, 404);
+  assert.equal((await call(null, 'GET', `/api/items/${movie.id}/subtitles/f${english.id}`)).status, 401);
 });
 
 test('any viewer can add labelled subtitles; only owner or head account can edit them', async () => {

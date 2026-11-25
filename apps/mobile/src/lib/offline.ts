@@ -174,7 +174,7 @@ export function saveOffline(base: string, user: MatroUser, item: Item, title: st
     if (previous && previous.uri !== file.uri) { const old = new File(previous.uri); if (old.exists) old.delete(); }
     const previousSize = file.exists ? file.size : 0;
     if (!file.exists || previousSize > size || (previousSize !== size && previousSize % PIECE !== 0)) file.create({ overwrite: true });
-    const record: SavedMedia = { id: item.id, title, uri: file.uri, size, have: file.size, version, info: { ...info, embedded: captions, uploaded: uploads, audio: info.audio.slice(0, 1) }, text, complete: false };
+    const record: SavedMedia = { id: item.id, title, uri: file.uri, size, have: file.size, version, info: { ...info, embedded: captions, uploaded: uploads, files: [], audio: info.audio.slice(0, 1) }, text, complete: false };
     const persist = async () => {
       await AsyncStorage.setItem(key, JSON.stringify(record));
       Object.assign(job, { have: record.have, size }); changed();

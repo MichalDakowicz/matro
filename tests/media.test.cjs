@@ -25,6 +25,10 @@ test('loaded subtitle files are copied next to the video without overwriting and
     const tracks = await sidecars(video);
     assert.deepEqual(tracks.map(t => [t.index, t.language, t.title, t.codec, t.text]), [[SIDECAR, 'en', 'Subtitle file', 'srt', true], [SIDECAR + 1, 'en', '2', 'srt', true]]);
     assert.deepEqual((await sidecars(other)).map(t => path.basename(t.path)), ['Northbound.S01E02.srt']);
+    await fs.writeFile(path.join(temp, 'show', 'Northbound.S01E01.pl.forced.srt'), ''); await fs.writeFile(path.join(temp, 'show', 'Northbound.S01E01.sdh.srt'), '');
+    const flagged = Object.fromEntries((await sidecars(video)).map(t => [path.basename(t.path), [t.language, t.forced, t.sdh]]));
+    assert.deepEqual(flagged['Northbound.S01E01.pl.forced.srt'], ['pl', true, false]);
+    assert.deepEqual(flagged['Northbound.S01E01.sdh.srt'], ['und', false, true]);
   } finally { await fs.rm(temp, { recursive: true, force: true }); }
 });
 

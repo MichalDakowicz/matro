@@ -60,7 +60,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   }, [base, item, offline]);
   const remember = useCallback(() => {
     const details = infoRef.current; if (!details) return;
-    const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true }))];
+    const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true })), ...(details.files || []).map(t => ({ index: 20000 + t.id, title: t.title, language: t.language, text: true }))];
     const choice = (track?: Track) => track ? { language: track.language, title: track.title, codec: track.codec, channels: track.channels } : null;
     prefs.current = { ...prefs.current, tracks: { ...prefs.current.tracks, [trackKey(item)]: { audio: choice(details.audio.find(t => t.index === choices.current.audio)), subtitle: choice(tracks.find(t => t.index === choices.current.subtitle)), off: choices.current.subtitle === null, delay: choices.current.delay, size: choices.current.size } } };
     if (prefTimer.current) clearTimeout(prefTimer.current);
@@ -70,7 +70,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     const run = ++subtitleRun.current; cues.current = []; setCaption('');
     if (index === null || infoRef.current?.embedded.find(t => t.index === index)?.bitmap) return;
     if (saved) { cues.current = parseVtt(saved.text[index] || ''); return; }
-    const headers = await mediaHeaders(base), route = index >= 10000 ? `u${index - 10000}` : `e${index}`;
+    const headers = await mediaHeaders(base), route = index >= 20000 ? `f${index - 20000}` : index >= 10000 ? `u${index - 10000}` : `e${index}`;
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15000);
     try {
       const response = await fetch(`${base}/api/items/${encodeURIComponent(item.id)}/subtitles/${route}`, { headers, signal: controller.signal });
@@ -129,7 +129,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       try {
         const details = saved?.info || await inspect(base, item.id); if (!mounted.current) return;
         infoRef.current = details; setInfo(details);
-        const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true }))];
+        const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true })), ...(details.files || []).map(t => ({ index: 20000 + t.id, title: t.title, language: t.language, text: true }))];
         const choice = prefs.current.tracks?.[trackKey(item)];
         const a = matchTrack(details.audio, choice?.audio)?.index ?? details.audio.find(t => t.default)?.index ?? details.audio[0]?.index ?? null;
         const sub = choice?.off ? null : matchTrack(tracks, choice?.subtitle)?.index ?? null;
