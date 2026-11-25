@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { continueItems, groupLibrary, matchTrack, metadataFor, resumeItem, trackKey } from '../../../../packages/core/client/library.ts';
+import { seasonLabel, seasonNumbers } from '../../../../packages/core/client/watch-progress.js';
 import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
 import type { Item, Library } from '../../../../packages/core/client/server.ts';
 const episode = (id: string, number: number): Item => ({ id, title: id, groupId: 'show', group: 'Show', kind: 'show', season: 1, episode: number, format: 'MKV' });
@@ -63,4 +64,11 @@ test('track preferences follow language/title across episode stream-index change
 test('native subtitle parsing retains timing and line breaks without rendering HTML', () => {
   const cues = parseVtt('WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.500\n<i>Hello</i>\nworld\n\n00:03.000 --> 00:04.000\nNext');
   assert.deepEqual(cues, [{ start: 1, end: 2.5, text: 'Hello\nworld' }, { start: 3, end: 4, text: 'Next' }]);
+});
+
+test('Season 0 stays its own season called Specials, and a missing season counts as season 1', () => {
+  const special = { ...episode('special', 1), season: 0 }, unnumbered = { ...episode('plain', 1), season: undefined as unknown as number };
+  assert.deepEqual(seasonNumbers([episode('two', 2), unnumbered, special]), [0, 1]);
+  assert.equal(seasonLabel(0), 'Specials');
+  assert.equal(seasonLabel(2), 'Season 2');
 });

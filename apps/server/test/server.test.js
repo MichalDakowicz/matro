@@ -39,8 +39,10 @@ async function catalog(who) {
 
 // A stand-in for api.themoviedb.org and image.tmdb.org, so metadata is exercised with no network or key.
 const json = body => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+const movieSearchYears = [];
 async function fakeTmdb(url) {
   const u = new URL(url);
+  if (u.pathname === '/3/search/movie') movieSearchYears.push(u.searchParams.get('year'));
   if (u.hostname === 'image.tmdb.org') return new Response(Buffer.from([0xff, 0xd8, 0xff, 0xd9]), { status: 200 });
   const route = u.pathname.replace('/3', '');
   if (route === '/search/movie') return json({ results: [{ id: 1, title: 'Heat', release_date: '1995-12-15', overview: 'A crew and a cop.', poster_path: '/p.jpg' }, { id: 9, title: 'Heat Wave', release_date: '2001-01-01', poster_path: '/q.jpg' }] });
@@ -166,6 +168,11 @@ test('TMDB metadata is matched on the server and artwork is served to signed-in 
   assert.equal((await call('sam', 'GET', '/api/admin/metadata/search?kind=movie&query=Heat')).status, 403);
   const found = (await call('admin', 'GET', '/api/admin/metadata/search?kind=movie&query=Heat')).data.results;
   assert.deepEqual(found.map(r => r.id), [1, 9]);
+  // Only a four-digit year narrows the search; anything else is dropped.
+  movieSearchYears.length = 0;
+  await call('admin', 'GET', '/api/admin/metadata/search?kind=movie&query=Heat&year=1995');
+  await call('admin', 'GET', '/api/admin/metadata/search?kind=movie&query=Heat&year=abcd');
+  assert.deepEqual(movieSearchYears, ['1995', null]);
   assert.equal((await call('sam', 'POST', '/api/admin/metadata/assign', { key: film.id, tmdbId: 9 })).status, 403);
   assert.equal((await call('admin', 'POST', '/api/admin/metadata/assign', { key: 'nope', tmdbId: 1 })).status, 404);
   const language = { key: film.id, language: 'pl-PL' };
@@ -459,6 +466,9 @@ test('static app is served with a locked-down policy', async () => {
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-security-policy'), /default-src 'self'/);
   assert.equal((await fetch(base + '/..%2f..%2fpackage.json')).status, 404);
+  const manifest = await fetch(base + '/manifest.webmanifest');
+  assert.equal(manifest.headers.get('content-type'), 'application/manifest+json');
+  assert.equal((await manifest.json()).display, 'standalone');
 });
 
 test('guessing invite codes is throttled', async () => {
