@@ -1,5 +1,4 @@
 const http = require('node:http');
-const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { BlockList, isIP } = require('node:net');
@@ -42,7 +41,20 @@ function sendJson(res, status, value, headers = {}) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(body), ...headers }).end(body);
 }
 async function sendFile(req, res, file, type, extra = {}) {
-  const { size } = await fsp.stat(file);
+  const handle = await fsp.open(file, 'r');
+  try {
+    const { size } = await handle.stat();
+    await sendOpenFile(req, res, handle, size, type, extra);
+  } finally { await handle.close(); }
+}
+async function sendOpenFile(req, res, handle, size, type, extra = {}) {
+  await sendRange(req, res, size, type, extra, (start, end) =>
+    new Promise(resolve => pipeline(handle.createReadStream({ start, end, autoClose: false }), res, resolve)));
+}
+function sendBytes(req, res, bytes, type, extra = {}) {
+  return sendRange(req, res, bytes.length, type, extra, (start, end) => res.end(bytes.subarray(start, end + 1)));
+}
+async function sendRange(req, res, size, type, extra, send) {
   if (req.aborted || res.destroyed || res.writableEnded) return;
   let start = 0, end = size - 1, status = 200;
   if (req.headers.range) {
@@ -56,8 +68,8 @@ async function sendFile(req, res, file, type, extra = {}) {
   const headers = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, ...extra };
   if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
   res.writeHead(status, headers);
-  if (req.method === 'HEAD') { res.end(); return; }
-  pipeline(fs.createReadStream(file, { start, end }), res, () => {});
+  if (req.method === 'HEAD' || size === 0) { res.end(); return; }
+  await send(start, end);
 }
 
 function createRouter() {
@@ -171,4 +183,4 @@ function createServer({ router, publicDir, authenticate, config }) {
     }
   });
 }
-module.exports = { HttpError, createRouter, createServer, readJson, readBody, sendJson, sendFile, sessionCookie, MIME };
+module.exports = { HttpError, createRouter, createServer, readJson, readBody, sendJson, sendFile, sendOpenFile, sendBytes, sessionCookie, MIME };

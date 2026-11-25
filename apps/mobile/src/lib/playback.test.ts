@@ -19,7 +19,8 @@ const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(resolv
 function harness(t: any, directPlay = false) {
   const effects: (() => (() => void) | void)[] = [], states: any[] = [], listeners = new Map<string, Function>();
   const pending: { source: any; resolve: () => void; reject: (error: Error) => void }[] = [], downloads: { ready: (uri: string) => void; cancelled: boolean }[] = [];
-  const saved: any[] = [], app = { currentState: 'active', addEventListener: (_: string, callback: Function) => { listeners.set('appState', callback); return { remove() {} }; } };
+  const saved: any[] = [], activity: { session: string; playing: boolean }[] = [];
+  const app = { currentState: 'active', addEventListener: (_: string, callback: Function) => { listeners.set('appState', callback); return { remove() {} }; } };
   const player = {
     currentTime: 0, playbackRate: 1, playing: false, status: 'readyToPlay', bufferedPosition: 20,
     pause() { this.playing = false; }, play() { this.playing = true; },
@@ -29,10 +30,11 @@ function harness(t: any, directPlay = false) {
   const info = { duration: 200, directPlay, audio: [{ index: 1 }], embedded: [], uploaded: [{ id: 1, name: 'English', language: 'en' }] };
   const data = { user: {}, preferences: { tracks: {} }, progress: {}, markers: {} };
   const modules: Record<string, any> = {
-    react: { useCallback: (fn: Function) => fn, useEffect: (fn: any) => effects.push(fn), useRef: (current: any) => ({ current }), useState: (initial: any) => { const i = states.push(initial) - 1; return [initial, (value: any) => { states[i] = value; }]; } },
+    react: { useCallback: (fn: Function) => fn, useEffect: (fn: any) => effects.push(fn), useRef: (current: any) => ({ current }), useState: (initial: any) => { const value = typeof initial === 'function' ? initial() : initial; const i = states.push(value) - 1; return [value, (next: any) => { states[i] = next; }]; } },
     'react-native': { AppState: app, Platform: { OS: 'android' } },
     'expo-video': { useVideoPlayer: () => player },
-    '../lib/server': { inspect: async () => info, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: {} }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry) },
+    '../lib/server': { inspect: async () => info, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: {} }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry),
+      playbackState: async (_: string, session: string, playing: boolean) => activity.push({ session, playing }), stopPlayback: async () => {} },
     '../../../../packages/core/client/library': { trackKey: () => 'movie', matchTrack: () => undefined },
     '../../../../packages/core/client/watch-progress.js': { isContinueDismissed },
     '../../../../packages/core/client/subtitles': { parseVtt },
@@ -48,7 +50,7 @@ function harness(t: any, directPlay = false) {
   const hook = context.exports.usePlayback({ base: 'http://server', data, item: { id: 'movie', kind: 'movie', format: 'MKV' }, onEnd: () => { ended++; } });
   const cleanups = effects.map(fn => fn());
   t.after(() => { for (const cleanup of cleanups.reverse()) cleanup?.(); });
-  return { hook, player, pending, downloads, saved, app, states, emit: (name: string, event: any = {}) => listeners.get(name)?.(event), ended: () => ended };
+  return { hook, player, pending, downloads, saved, activity, app, states, emit: (name: string, event: any = {}) => listeners.get(name)?.(event), ended: () => ended };
 }
 
 test('a completed download leaves the decoder running and is used on the next seek', async t => {
@@ -101,8 +103,13 @@ test('pausing during a replacement and backgrounding never resume playback on co
   h.hook.toggle(); h.pending[0].resolve(); await flush();
   assert.equal(h.player.playing, false);
   h.hook.toggle(); assert.equal(h.player.playing, true);
+  h.emit('playingChange', { isPlaying: true });
+  const session = new URL(h.pending[0].source.uri).searchParams.get('session');
+  assert.ok(session);
+  assert.deepEqual(h.activity.at(-1), { session, playing: true });
   h.hook.seek(30); await flush();
   h.app.currentState = 'background'; h.emit('appState', 'background');
+  assert.deepEqual(h.activity.at(-1), { session, playing: false });
   h.pending[1].resolve(); await flush();
   assert.equal(h.player.playing, false);
   h.app.currentState = 'active'; h.emit('appState', 'active');
