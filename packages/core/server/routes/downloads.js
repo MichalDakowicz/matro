@@ -6,6 +6,8 @@ function register({ router, downloads, tmdb }) {
     try { return { result: await fn() }; }
     catch (error) {
       const status = error?.status;
+      // The download client words its own mistakes for the person, as plain Errors. System and programming errors stay hidden.
+      if (status === undefined && error?.constructor === Error && !error.code && !error.syscall) throw new HttpError(400, error.message);
       if (!Number.isInteger(status) || status < 400 || status >= 600) throw new Error('Download request failed.', { cause: error });
       if (status >= 500) throw new HttpError(status, 'The download service could not complete the request.');
       throw error;

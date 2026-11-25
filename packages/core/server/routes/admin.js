@@ -104,9 +104,13 @@ function register(app) {
       try { await fsp.link(temporary, final); }
       catch (error) {
         if (error.code === 'EEXIST') throw nameConflict();
-        throw error;
+        // shortcut: network shares without hard links fall back to a check-then-rename, which leaves a tiny race window.
+        if (!['EPERM', 'ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV'].includes(error.code)) throw error;
+        try { await fsp.lstat(final); throw nameConflict(); }
+        catch (inner) { if (inner.code !== 'ENOENT') throw inner; }
+        await fsp.rename(temporary, final);
       }
-    } finally { await fsp.unlink(temporary); }
+    } finally { await fsp.rm(temporary, { force: true }); }
     const folder = library.byPath(config.mediaDir);
     if (!folder) await library.addFolder(config.mediaDir);
     else await library.rescan(folder.id);

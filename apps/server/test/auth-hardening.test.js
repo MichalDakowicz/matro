@@ -209,8 +209,12 @@ test('download routes preserve explicit statuses and hide upstream and unexpecte
   assert.equal(upstream.status, 503);
   assert.doesNotMatch(upstream.data.error, /Private/);
   t.mock.method(console, 'error', () => {});
-  app.downloads.config = () => { throw new Error('Private local path'); };
+  app.downloads.config = () => { throw Object.assign(new Error('ENOENT: Private local path'), { code: 'ENOENT' }); };
   const unexpected = await route();
   assert.equal(unexpected.status, 500);
   assert.doesNotMatch(unexpected.data.error, /Private/);
+  app.downloads.config = () => { throw new Error('Enter a valid magnet link.'); };
+  const mistake = await route();
+  assert.equal(mistake.status, 400);
+  assert.equal(mistake.data.error, 'Enter a valid magnet link.');
 });
