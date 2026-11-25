@@ -221,6 +221,11 @@ function remember() {
 let saveTimer = null, settlePending = null;
 // A separate clock persists playback even when media events or control rendering stall.
 setInterval(() => { if (view === 'player' && video && !video.paused) checkpoint(); }, 1000);
+if (api.playbackHeartbeat) setInterval(() => {
+  if (view === 'player' && video && playIntent && !video.ended && !playbackError && (!video.paused || loading)) {
+    void api.playbackHeartbeat({ playing: true, buffering: loading });
+  }
+}, 20000);
 function checkpoint(now = false) {
   if (!remember()) return;
   const wait = 1000 - (Date.now() - lastSave);
@@ -1349,7 +1354,7 @@ document.addEventListener('dragover', event => event.preventDefault());
 document.addEventListener('dragleave', event => { event.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; $('#drop-overlay')?.remove(); } });
 document.addEventListener('drop', event => { event.preventDefault(); dragDepth = 0; $('#drop-overlay')?.remove(); const files = Array.from(event.dataTransfer.files); void attempt(async () => { const before = new Set(library.items.map(i => i.id)); library = await api.importDrop(files); const item = library.items.find(i => !before.has(i.id)); if (item) await play(item.id); else toast('No new supported media files found. Use Add folder for directories.'); }); });
 window.addEventListener('beforeunload', () => { remember(); void save({ keepalive: true }).catch(() => {}); });
-window.addEventListener('pagehide', () => { if (video) releaseBuffer(video); discardPrepared(); });
+window.addEventListener('pagehide', () => { if (video) { void api.playbackHeartbeat?.(false); releaseBuffer(video); } discardPrepared(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { remember(); void attempt(save); } });
 // Closing the window waits for the latest position to be written before the app quits.
 api?.onClosing?.(async () => { try { remember(); await save(); } finally { void api.window('close'); } });

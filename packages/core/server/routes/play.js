@@ -1,9 +1,11 @@
-const { HttpError, readJson, readBody, sendFile, MIME } = require('../http');
+const { HttpError, readJson, readBody, sendFile, sendOpenFile, sendBytes, MIME } = require('../http');
 const { canDirectPlay } = require('../media');
 const { normalize } = require('../lang');
 const { toVtt, createEmbedded, MAX_UPLOAD } = require('../subtitles');
 const { createFrames } = require('../previews');
 const { createStreams } = require('../stream');
+const { createAssetCache } = require('../asset-cache');
+const { playbackSession, createPlaybackActivity } = require('../playback-session');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { createHash } = require('node:crypto');
@@ -12,9 +14,11 @@ const KINDS = ['full', 'forced', 'sdh'];
 const MAX_SUBS_PER_ITEM = 60;
 
 function register(app) {
-  const { router, db, library } = app;
-  const embedded = createEmbedded(), transcode = createStreams({ dataDir: app.dataDir }), frames = createFrames();
-  app.closePlayback = () => transcode.close();
+  const { router, db, library, dataDir } = app;
+  const assets = createAssetCache(dataDir);
+  const embedded = createEmbedded(dataDir, assets), frames = createFrames(dataDir, assets), transcode = createStreams({ dataDir });
+  const activity = createPlaybackActivity(app.scanner.setPlayback);
+  app.closePlayback = () => { activity.close(); transcode.close(); };
   const q = {
     uploaded: db.prepare(`SELECT s.id, s.name, s.language, s.kind, s.created, s.user_id AS userId, u.username AS addedBy FROM subtitles s
       LEFT JOIN users u ON u.id = s.user_id WHERE s.item_id = ? ORDER BY s.language, s.name`),
@@ -53,64 +57,75 @@ function register(app) {
 
   router.add('GET', '/api/items/:id/direct', async ctx => {
     const item = find(ctx.params.id);
-    if (ctx.query.get('preload') !== '1') transcode.releaseMain(ctx.user.id);
+    const session = playbackSession(ctx, ctx.query.get('session'));
+    if (ctx.query.get('preload') !== '1') transcode.releaseMain(session);
     await sendFile(ctx.req, ctx.res, item.path, MIME[path.extname(item.path).toLowerCase()] || 'video/mp4', { 'Cache-Control': 'private, no-store' });
   });
 
-  async function offline(ctx) {
+  async function offline(ctx, download = false) {
     const item = find(ctx.params.id), info = await library.info(item);
     if (info.broken) throw new HttpError(422, 'This file could not be prepared for offline playback.');
     const audio = ctx.query.has('audio') ? Number(ctx.query.get('audio')) : null;
     if (audio !== null && !info.audio.some(track => track.index === audio)) throw new HttpError(400, 'Unknown audio track.');
-    const original = await fs.stat(item.path);
     const direct = canDirectPlay(item.path, info) && (audio === null || audio === info.audio[0]?.index);
-    const result = direct ? { done: true, file: item.path, size: original.size } : await transcode.offline(item.path, info, audio);
-    if (result.error) throw new HttpError(422, 'This file could not be prepared for offline playback.');
-    if (!result.done) return { state: 'preparing', progress: info.duration > 0 ? Math.min(0.99, (result.preparedSeconds || 0) / info.duration) : null };
-    const version = createHash('sha256').update(JSON.stringify([1, item.id, original.size, original.mtimeMs, audio, result.size])).digest('hex');
-    const type = direct ? MIME[path.extname(item.path).toLowerCase()] || 'video/mp4' : 'video/mp4';
-    return { state: 'ready', file: result.file, size: result.size, version, type, entry: direct ? undefined : result };
-  }
-  router.add('GET', '/api/items/:id/offline', async ctx => {
-    const { file: _file, entry: _entry, ...status } = await offline(ctx);
-    return status;
-  });
-  router.add('GET', '/api/items/:id/offline/file', async ctx => {
-    const info = await offline(ctx);
-    if (info.state !== 'ready' || ctx.query.get('version') !== info.version) throw new HttpError(409, 'The offline file changed. Retry the download.');
-    let held = Boolean(info.entry);
-    const release = () => { if (held) { held = false; info.entry.readers--; } };
-    if (held) {
-      info.entry.readers++;
-      ctx.res.once('finish', release);
-      ctx.res.once('close', release);
+    const entry = direct ? null : await transcode.offline(item.path, info, audio);
+    const changed = () => new HttpError(409, 'The offline file changed. Retry the download.');
+    if (entry?.error) throw new HttpError(422, 'This file could not be prepared for offline playback.');
+    if (entry && !entry.done) {
+      if (download) throw changed();
+      return { state: 'preparing', progress: info.duration > 0 ? Math.min(0.99, (entry.preparedSeconds || 0) / info.duration) : null };
     }
-    try { await sendFile(ctx.req, ctx.res, info.file, info.type, { 'Cache-Control': 'private, no-store' }); }
-    catch (error) { release(); throw error; }
+    const type = direct ? MIME[path.extname(item.path).toLowerCase()] || 'video/mp4' : 'video/mp4';
+    if (entry) entry.readers++;
+    try {
+      const handle = await fs.open(entry?.file || item.path, 'r').catch(error => {
+        if (download && error.code === 'ENOENT') throw changed();
+        throw error;
+      });
+      try {
+        const { size, mtimeMs, ctimeMs, ino } = await handle.stat();
+        const version = createHash('sha256').update(JSON.stringify([2, item.id, audio, size, mtimeMs, ctimeMs, ino])).digest('hex');
+        if (!download) return { state: 'ready', size, version, type };
+        if (ctx.query.get('version') !== version) throw changed();
+        await sendOpenFile(ctx.req, ctx.res, handle, size, type, { 'Cache-Control': 'private, no-store' });
+      } finally { await handle.close(); }
+    } finally {
+      if (entry) { entry.used = Date.now(); entry.readers--; }
+    }
+  }
+  router.add('GET', '/api/items/:id/offline', ctx => offline(ctx));
+  router.add('GET', '/api/items/:id/offline/file', ctx => offline(ctx, true));
+
+  router.add('POST', '/api/playback/state', async ctx => {
+    const body = await readJson(ctx.req), session = playbackSession(ctx, body.session);
+    const playing = body.playing === true;
+    if (playing) transcode.renew(session);
+    activity.set(session, playing, body.buffering === true);
   });
 
   router.add('POST', '/api/playback/stop', async ctx => {
-    const body = await readJson(ctx.req);
-    transcode.stop(ctx.user.id, body.keepPreload === true);
-    app.scanner.setPlayback(false);
+    const body = await readJson(ctx.req), session = playbackSession(ctx, body.session);
+    transcode.stop(session, body.keepPreload === true);
+    activity.set(session, false);
   });
 
   router.add('GET', '/api/items/:id/transcode', async ctx => {
+    const session = playbackSession(ctx, ctx.query.get('session'));
     const item = find(ctx.params.id), info = await library.info(item);
     const number = name => ctx.query.get(name) === null ? null : Number(ctx.query.get(name));
     const offset = number('t') ?? 0, audio = number('audio'), burn = number('burn'), delay = Math.max(-60, Math.min(60, number('delay') ?? 0)), preload = ctx.query.get('preload') === '1';
     if (!Number.isFinite(offset) || offset < 0 || (info.duration && offset >= info.duration)) throw new HttpError(400, 'Bad start time.');
     if (audio !== null && !info.audio.some(t => t.index === audio)) throw new HttpError(400, 'Unknown audio track.');
     if (burn !== null && !info.subtitles.some(t => t.index === burn && t.bitmap)) throw new HttpError(400, 'Unknown image subtitle track.');
-    await transcode(ctx.req, ctx.res, { userId: ctx.user.id, file: item.path, info, offset, audio, burn, delay: Number.isFinite(delay) ? delay : 0, preload });
+    await transcode(ctx.req, ctx.res, { session, file: item.path, info, offset, audio, burn, delay: Number.isFinite(delay) ? delay : 0, preload });
   });
 
   // A still frame, used for seek previews and thumbnails.
   router.add('GET', '/api/items/:id/frame', async ctx => {
-    const item = find(ctx.params.id), t = Number(ctx.query.get('t') || 0), width = Math.max(120, Math.min(640, Number(ctx.query.get('w')) || 320));
+    const item = find(ctx.params.id), t = Number(ctx.query.get('t') || 0), width = Number(ctx.query.get('w')) || 320;
     if (!Number.isFinite(t) || t < 0) throw new HttpError(400, 'Bad time.');
-    let file; try { file = await frames(item, t, width); } catch { throw new HttpError(404, 'No preview for that moment.'); }
-    await sendFile(ctx.req, ctx.res, file, 'image/jpeg', { 'Cache-Control': 'private, max-age=86400' });
+    let jpeg; try { jpeg = await frames(item, t, width); } catch { throw new HttpError(404, 'No preview for that moment.'); }
+    await sendBytes(ctx.req, ctx.res, jpeg, 'image/jpeg', { 'Cache-Control': 'private, max-age=86400' });
   });
 
   // Subtitle text for the player: e<stream index> is embedded in the file, u<id> was uploaded by a viewer.

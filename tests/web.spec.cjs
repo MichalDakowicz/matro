@@ -484,15 +484,15 @@ test('direct-play resume survives leaving before metadata arrives and resumes at
     let requested, release;
     const started = new Promise(resolve => { requested = resolve; });
     const blocked = new Promise(resolve => { release = resolve; });
-    await page.route('**/api/items/*/direct', async route => { requested(); await blocked; await route.abort(); });
+    await page.route('**/api/items/*/direct?*', async route => { requested(new URL(route.request().url()).searchParams.get('session')); await blocked; await route.abort(); });
     await page.getByRole('button', { name: 'Resume watching', exact: true }).click();
-    await started;
+    expect(await started).toMatch(/^[a-f0-9]{32}$/);
     await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
     await expect(page.locator('.shell')).toBeVisible();
     release();
     const saved = await page.evaluate(async () => (await (await fetch('/api/library')).json()).progress);
     expect(Object.values(saved)[0].position).toBeGreaterThanOrEqual(5.9);
-    await page.unroute('**/api/items/*/direct');
+    await page.unroute('**/api/items/*/direct?*');
     await page.locator('.continue-card [data-play]').click();
     await expect.poll(() => page.locator('#video').evaluate(v => v.currentTime)).toBeGreaterThanOrEqual(5.9);
   } finally {

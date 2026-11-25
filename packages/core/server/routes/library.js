@@ -94,11 +94,6 @@ function register(app) {
     q.set.run(ctx.user.id, JSON.stringify(state), Date.now());
     return { markers: scanner.markers(state.markers, state.markerDismissals)[id] || [] };
   });
-  router.add('POST', '/api/playback/state', async ctx => {
-    const body = await readJson(ctx.req);
-    scanner.setPlayback(body.playing === true, body.buffering === true);
-  });
-
   router.add('GET', '/api/metadata', () => ({ metadata: tmdb.snapshot() }));
   // Cached posters, backdrops, stills and cast photos. Names are matched against a strict pattern by the matcher.
   router.add('GET', '/api/artwork/:name', async ctx => {
