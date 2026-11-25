@@ -15,6 +15,7 @@ import FoldersScreen from './FoldersScreen';
 import OfflineScreen from './OfflineScreen';
 import MovieRequestsScreen from './MovieRequestsScreen';
 import { useMovieRequestAlerts } from '../lib/movie-request-alerts';
+import { useKeyboardVisible } from '../lib/keyboard';
 import { offlineLibrary, rememberLibrary, removeOffline, resumeInterrupted, savedTitle, savedTitles, saveOffline, saveOfflineBatch, watchOffline, type SavedMedia } from '../lib/offline';
 
 type Props = { base: string; onSignedOut: () => void; onChangeServer: () => void };
@@ -30,6 +31,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const revision = useRef<string | undefined>(undefined);
   const alerts = useMovieRequestAlerts(base, !offline && data?.user.role === 'admin' && data.movieRequestPushEnabled === true);
   const openedAlerts = useRef(0);
+  const keyboard = useKeyboardVisible();
   const { width } = useWindowDimensions(), insets = useSafeAreaInsets(), columns = Math.max(3, Math.floor((width - 24) / 108)), cardWidth = (width - 36 - (columns - 1) * 12) / columns;
   const load = useCallback(async () => {
     setRefreshing(true); setError('');
@@ -217,7 +219,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       ListFooterComponent={search && !sections.length ? <Text style={t.muted}>No matches. Check the spelling, or try part of a title or file name.</Text> : <View style={{ height: 12 }} />} />}
     {data && error ? <Pressable onPress={() => setError('')} style={[s.toast, { bottom: insets.bottom + 86 }]}><Text style={t.text}>{error}</Text></Pressable> : null}
     <Corner username={data?.user.username} onHome={() => changeTab('home')} onProfile={() => setAccount(true)} onHelp={() => Alert.alert('Matro', `${data?.items.length || 0} files in your library.\n\nMetadata and artwork from TMDB.\n\nMovies are prepared on your Matro server and played natively on this device.`, [{ text: 'Refresh', onPress: () => void load() }, { text: 'Close' }])} />
-    <Dock tab={tab} onChange={changeTab} audio={!!data?.items.some(i => i.kind === 'audio')} requests={!offline && data?.movieRequestsEnabled ? (data.user.role === 'admin' ? 'Movie requests' : 'Request a movie') : undefined} />
+    {!keyboard && <Dock tab={tab} onChange={changeTab} audio={!!data?.items.some(i => i.kind === 'audio')} requests={!offline && data?.movieRequestsEnabled ? (data.user.role === 'admin' ? 'Movie requests' : 'Request a movie') : undefined} />}
     <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} onGo={changeTab} onRefresh={() => void load()} onServer={onChangeServer} onSignOut={onSignedOut} />
   </View>;
 }
