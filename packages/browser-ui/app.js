@@ -2,6 +2,7 @@ import icons from './icons.json' with { type: 'json' };
 import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
+import { randomReelStart } from '../core/client/reel-start.js';
 import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, normalizeProgress, resumeTarget } from '../core/client/watch-progress.js';
 const api = window.matro;
 if (api?.chooseSource && !document.querySelector('.desktop-source-button')) {
@@ -366,6 +367,17 @@ function featuredTitles() {
   return [...groups('show'), ...groups('movie')].sort((a, b) => recency(b) - recency(a) || (b[0].added || 0) - (a[0].added || 0));
 }
 function reelMarkup(list) {
+  if (!$('#reel')) {
+    const key = `matro.reelStart:${api.recoveryScope || 'desktop'}`;
+    const titles = list.map(([item]) => item.kind === 'show' ? titleKey(item) : item.id);
+    try { reel.previousStart = localStorage.getItem(key) ?? reel.previousStart; } catch {}
+    stopReel();
+    clearTimeout(reel.wheelTimer);
+    reel.pos = reel.target = randomReelStart(titles, reel.previousStart ?? null);
+    reel.mode = 'idle';
+    reel.previousStart = titles[reel.pos];
+    try { localStorage.setItem(key, reel.previousStart); } catch {}
+  }
   reel.list = list;
   // Enough repeats to fill both sides of a wide window, so the loop's wrap still happens beyond the faded edges.
   const copies = list.length > 1 ? Math.ceil(18 / list.length) : 1;

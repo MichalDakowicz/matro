@@ -126,6 +126,18 @@ test('an open web library picks up a catalog change without a reload', async () 
     await library.rescanAll();
     await expect(newTitle).toBeVisible({ timeout: 12000 });
     expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
+
+    await page.setViewportSize({ width: 375, height: 800 });
+    await page.evaluate(() => window.matroTheme.set('light'));
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const movies = page.locator('.dock [data-tab="movie"]'), featured = page.locator('.show-title');
+    await movies.click();
+    await expect(featured).toHaveText(/^(Northbound|New Arrival)$/);
+    const start = await featured.textContent(), other = start === 'Northbound' ? 'New Arrival' : 'Northbound';
+    await page.locator('#reel').press('ArrowLeft');
+    await expect(featured).toHaveText(other);
+    await page.reload();
+    await expect(featured).toHaveText(other);
   } finally {
     await browser?.close();
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
