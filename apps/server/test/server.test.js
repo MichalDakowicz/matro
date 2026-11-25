@@ -449,6 +449,21 @@ test('invite codes work once, expire, can be revoked, and are never stored in th
   assert.equal((await call('admin', 'POST', '/api/admin/users', { username: 'direct', password: 'direct-pass-1' })).status, 404, 'the head no longer creates accounts directly');
 });
 
+test('changing a password signs other devices out and hands the native app its replacement session', async () => {
+  assert.equal((await join('pat', 'patricia', 'first-pass-1')).status, 200);
+  const native = { 'x-matro-client': 'native' }, login = async password => (await call(null, 'POST', '/api/login', { username: 'patricia', password }, native)).data.token;
+  const old = await login('first-pass-1'), bearer = token => ({ authorization: `Bearer ${token}` });
+  assert.equal((await call(null, 'POST', '/api/me/password', { current: 'wrong-pass-9', password: 'second-pass-2' }, { ...native, ...bearer(old) })).status, 403);
+  const changed = await call(null, 'POST', '/api/me/password', { current: 'first-pass-1', password: 'second-pass-2' }, { ...native, ...bearer(old) });
+  assert.equal(changed.status, 200);
+  assert.ok(changed.data.token && changed.data.token !== old, 'the native app gets a new bearer session');
+  assert.equal((await call(null, 'GET', '/api/me', undefined, bearer(old))).status, 401, 'the old session is gone');
+  assert.equal((await call(null, 'GET', '/api/me', undefined, bearer(changed.data.token))).status, 200);
+  const web = await call('pat', 'POST', '/api/login', { username: 'patricia', password: 'second-pass-2' });
+  assert.equal((await call('pat', 'POST', '/api/me/password', { current: 'second-pass-2', password: 'third-pass-3' })).data?.token, undefined, 'web clients keep the cookie only');
+  assert.equal(web.status, 200);
+});
+
 test('repeated wrong passwords are throttled', async () => {
   for (let i = 0; i < 5; i++) await call(null, 'POST', '/api/login', { username: 'ghost', password: 'nope-nope-nope' });
   assert.equal((await call(null, 'POST', '/api/login', { username: 'ghost', password: 'nope-nope-nope' })).status, 429);

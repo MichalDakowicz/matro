@@ -17,6 +17,7 @@ import OfflineScreen from './OfflineScreen';
 import MovieRequestsScreen from './MovieRequestsScreen';
 import QueueScreen from './QueueScreen';
 import ServerPage from './ServerPage';
+import AccountScreen from './AccountScreen';
 import { BrowseView, HomeView, LibraryChips, SearchView } from './LibraryScreens';
 import { useMovieRequestAlerts } from '../lib/movie-request-alerts';
 import { activeDownloads, offlineLibrary, queuedDownloads, rememberLibrary, removeOffline, resumeInterrupted, savedTitle, savedTitles, saveOffline, saveOfflineBatch, watchOffline, type SavedMedia } from '../lib/offline';
@@ -218,7 +219,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const admin = !offline && data?.user.role === 'admin', layout = { top: insets.top + (offline ? 44 : 0), bottom: insets.bottom };
   const libraryTab = ['home', 'movie', 'show', 'audio', 'folders'].includes(tab);
   const requestsLabel = !offline && data?.movieRequestsEnabled ? (data.user.role === 'admin' ? 'Movie requests' : 'Request a movie') : undefined;
-  const dockTab: DockTab = tab === 'search' ? 'search' : tab === 'queue' ? 'queue' : ['server', 'offline', 'downloads', 'movie-requests'].includes(tab) ? 'server' : 'home';
+  const dockTab: DockTab = tab === 'search' ? 'search' : tab === 'queue' ? 'queue' : ['server', 'offline', 'downloads', 'movie-requests', 'account'].includes(tab) ? 'server' : 'home';
   const chips = data && libraryTab && !folder ? <LibraryChips tab={tab} audio={data.items.some(i => i.kind === 'audio')} admin={admin} onPick={jump} /> : null;
   const open = (items: Item[]) => setSelected(titleKey(items[0]));
   // From the Queue screen the player gets the queue itself, not the show's episode list.
@@ -242,6 +243,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       onResume={id => { const item = data.items.find(item => item.id === id); if (item) save(item); }}
       onRemoved={() => { if (offline) void load(); }} /></View>
     : tab === 'movie-requests' && !offline && data.movieRequestsEnabled ? top(<MovieRequestsScreen key={alerts.opened} base={base} admin={data.user.role === 'admin'} alerts={alerts} onSearch={request => { push('downloads'); setRequestSearch(request); }} />)
+    : tab === 'account' && !offline ? <AccountScreen base={base} data={data} layout={layout} admin={admin} notify={notify} />
     : tab === 'downloads' && admin ? top(<DownloadsScreen {...art} initialRequest={requestSearch} />)
     : tab === 'folders' && !offline ? top(<FoldersScreen base={base} data={data} header={chips} onRefresh={load} onBrowse={path => push('home', path)} />)
     : tab === 'search' ? <SearchView {...common} data={data} groups={allGroups} />
@@ -259,7 +261,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       <Dock active={dockTab} onChange={jump} queued={data?.queue.length || 0} hidden={keyboard} />
     </View>
     {/* The title page is an overlay, so the list underneath stays mounted and keeps its scroll position. */}
-    {detail && data && <View style={s.overlay}><TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onEnqueue={enqueue} onMark={(list, done) => void markMany(list, done)} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} savingIds={savingIds} /></View>}
+    {detail && data && <View style={s.overlay}><TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onEnqueue={enqueue} onMark={(list, done) => void markMany(list, done)} online={offline || savedOnly ? undefined : { admin, tmdb: data.metadataEnabled === true, notify, onMetadata: metadata => setData(latest => latest && { ...latest, metadata }) }} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} savingIds={savingIds} /></View>}
     <Grain />
     <Toast notice={notice} bottom={toastBottom} onDismiss={dismiss} />
     <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} requests={requestsLabel} onGo={go} onRefresh={() => void load()} onAbout={() => setAbout(true)} onServer={onChangeServer} onSignOut={onSignedOut} />

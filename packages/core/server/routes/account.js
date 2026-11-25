@@ -68,8 +68,9 @@ function register(app) {
     if (!(await auth.check(user.username, body.current))) throw new HttpError(403, 'Current password is wrong.');
     const { password } = validateCredentials(user.username, body.password);
     await users.setPassword(user.id, password);
-    // Other devices sign out; this one gets a fresh session.
-    startSession(ctx, user);
+    // Other devices sign out; this one gets a fresh session. The native app keeps its session as a bearer token, so it is returned.
+    const token = startSession(ctx, user);
+    return token ? { token } : undefined;
   });
 }
 module.exports = { register, USERNAME };
