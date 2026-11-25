@@ -187,10 +187,12 @@ test('requesters see the outcome of series, season and movie requests and are to
 
   const add = async body => (await request(viewer, form, 'POST', body)).body.request;
   const dune = await add({ title: 'Dune', year: 2021, kind: 'movie', tmdbId: 438631 });
-  const series = await add({ title: 'Severance', kind: 'series' });
-  const second = await add({ title: 'Severance', kind: 'season', season: 2 });
+  const series = await add({ title: 'Severance', kind: 'series', tmdbId: 900 });
+  const second = await add({ title: 'Severance', kind: 'season', season: 2, tmdbId: 900 });
   const absent = await add({ title: 'Nothing here', kind: 'series' });
-  const wrongYear = await add({ title: 'Heat', year: 1995 });
+  const wrongYear = await add({ title: 'Heat', year: 1995, tmdbId: 949 });
+  const byTitle = await add({ title: 'Contact' });
+  const alreadyOwned = await add({ title: 'Arrival', tmdbId: 329865 });
   assert.deepEqual([dune.kind, dune.tmdbId, series.kind, second.kind, second.season, series.season], ['movie', 438631, 'series', 'season', 2, null]);
   assert.equal((await add({ title: 'severance', kind: 'season', season: 2 })).id, second.id);
   assert.notEqual((await add({ title: 'Severance', kind: 'season', season: 3 })).id, second.id);
@@ -201,13 +203,19 @@ test('requesters see the outcome of series, season and movie requests and are to
   assert.equal((await request(head, form + '/device', 'PUT', { token: 'android:viewer-registration-token' })).status, 403);
   alerts.length = 0;
 
-  // The scanner reports a movie (2021), season 1 of the show, and a Heat from another year.
   db.prepare("INSERT INTO folders (id, path, added) VALUES (1, '/media', 1)").run();
-  const addItem = (id, group, year, kind, season) => db.prepare(`INSERT INTO items (id, folder_id, path, title, group_id, group_title, year, kind, season, episode, size, mtime, added)
-    VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1)`).run(id, `/media/${id}.mkv`, group, group, group, year, kind, season, season ? 1 : null);
-  addItem('a', 'Dune', 2021, 'movie', null);
-  addItem('b', 'Severance', null, 'show', 1);
-  addItem('c', 'Heat', 1986, 'movie', null);
+  const metadata = {};
+  app.tmdb.snapshot = () => metadata;
+  const addItem = (id, group, year, kind, season, tmdbId, added = Date.now() + 1) => {
+    db.prepare(`INSERT INTO items (id, folder_id, path, title, group_id, group_title, year, kind, season, episode, size, mtime, added)
+      VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?)`).run(id, `/media/${id}.mkv`, group, group, group, year, kind, season, season ? 1 : null, added);
+    metadata[kind === 'movie' ? id : group] = { tmdbId };
+  };
+  addItem('a', 'Dune (alternate title)', 2021, 'movie', null, 438631);
+  addItem('b', 'Severance', null, 'show', 1, 900);
+  addItem('c', 'Heat', 1986, 'movie', null, 999);
+  addItem('e', 'Contact', 1997, 'movie', null, 686);
+  addItem('f', 'Arrival', 2016, 'movie', null, 329865, alreadyOwned.created - 1);
   assert.equal(app.movieRequests.fulfil(), 2);
   await until(() => alerts.length === 2);
   assert.deepEqual(alerts.map(alert => [alert.title, alert.outcome]).sort(), [['Dune', 'ready'], ['Severance', 'ready']]);
@@ -215,13 +223,14 @@ test('requesters see the outcome of series, season and movie requests and are to
   const updates = (await request(viewer, '/api/library')).body.requestUpdates;
   assert.deepEqual(updates.map(update => [update.title, update.outcome]), [['Dune', 'ready'], ['Severance', 'ready']]);
   const listed = (await request(viewer, form)).body;
-  assert.deepEqual(listed.handled.map(row => [row.title, row.outcome, row.isNew, row.groupId]).sort(), [['Dune', 'ready', true, 'Dune'], ['Severance', 'ready', true, 'Severance']]);
-  assert.deepEqual(listed.pending.map(row => row.title).sort(), ['Heat', 'Nothing here', 'Severance', 'Severance']);
+  assert.deepEqual(listed.handled.map(row => [row.title, row.outcome, row.isNew, row.groupId]).sort(), [['Dune', 'ready', true, 'Dune (alternate title)'], ['Severance', 'ready', true, 'Severance']]);
+  assert.deepEqual(listed.pending.map(row => row.title).sort(), ['Arrival', 'Contact', 'Heat', 'Nothing here', 'Severance', 'Severance']);
+  assert.ok(listed.pending.some(row => row.id === byTitle.id));
   assert.deepEqual((await request(viewer, '/api/library')).body.requestUpdates, []);
   assert.deepEqual((await request(viewer, form)).body.handled.map(row => row.isNew), [false, false]);
 
   // Season 2 arrives later; requests already answered stay as they were.
-  addItem('d', 'Severance', null, 'show', 2);
+  addItem('d', 'Severance', null, 'show', 2, 900);
   assert.equal(app.movieRequests.fulfil(), 1);
   assert.equal(app.movieRequests.fulfil(), 0);
 
@@ -249,4 +258,6 @@ test('an older movie_requests table gains the new columns without losing rows', 
   db = open(file);
   assert.deepEqual({ ...db.prepare('SELECT kind, season, tmdb_id, declined, group_id, seen FROM movie_requests WHERE id = 7').get() },
     { kind: 'movie', season: 0, tmdb_id: null, declined: 0, group_id: null, seen: 1 });
+  const { createMovieRequests } = require('../../../packages/core/server/movie-requests');
+  assert.equal(createMovieRequests(db).list({ role: 'admin' }).handled[0].outcome, 'handled');
 });

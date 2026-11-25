@@ -89,7 +89,7 @@ export const logout = async (base: string): Promise<unknown> => {
 export type RequestKind = 'movie' | 'series' | 'season';
 export type MovieRequest = {
   id: number; title: string; year: number | null; kind: RequestKind; season: number | null; tmdbId: number | null;
-  status: 'pending' | 'handled'; outcome: 'pending' | 'ready' | 'declined'; groupId: string | null; isNew: boolean;
+  status: 'pending' | 'handled'; outcome?: 'pending' | 'ready' | 'declined' | 'handled'; groupId: string | null; isNew: boolean;
   created: number; requester: string | null;
 };
 export type MovieRequests = { pending: MovieRequest[]; handled: MovieRequest[]; alertsConfigured?: boolean; canRemove?: boolean; tmdb?: boolean };

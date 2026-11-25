@@ -21,7 +21,7 @@ function loadEnv(files) {
 const asItem = row => ({ id: row.id, kind: row.kind, group: row.year ? `${row.group_title} (${row.year})` : row.group_title, groupId: row.group_id, path: row.path, season: row.season });
 const keyOf = item => item.kind === 'show' ? item.groupId || item.group : item.id;
 
-function createTmdb(db, { fetchImpl = fetch, env = loadEnv([path.join(config.dataDir, '.env'), path.join(__dirname, '../../../apps/server/.env'), path.join(__dirname, '../../../.env')]) } = {}) {
+function createTmdb(db, { fetchImpl = fetch, onUpdate, env = loadEnv([path.join(config.dataDir, '.env'), path.join(__dirname, '../../../apps/server/.env'), path.join(__dirname, '../../../.env')]) } = {}) {
   const auth = vendor && vendor.credentials(env);
   const rows = db.prepare('SELECT id, kind, group_id, group_title, year, path, season FROM items');
   const items = () => rows.all().map(asItem);
@@ -32,7 +32,8 @@ function createTmdb(db, { fetchImpl = fetch, env = loadEnv([path.join(config.dat
   }
   const dir = path.join(config.dataDir, 'tmdb');
   fs.mkdirSync(dir, { recursive: true });
-  const meta = auth ? vendor.createMetadata({ dir, auth, fetch: (url, options) => fetchImpl(url, { signal: AbortSignal.timeout(20000), ...options }) }) : null;
+  const meta = auth ? vendor.createMetadata({ dir, auth, onUpdate, fetch: (url, options) => fetchImpl(url, { signal: AbortSignal.timeout(20000), ...options }) }) : null;
+  if (onUpdate) void meta?.loaded.then(() => onUpdate(), () => {});
   const preview = meta?.preview || createDownloadPreview({ enabled: false });
   // Download matches share the image cache, but are not part of viewers' library metadata.
   const snapshot = () => Object.fromEntries(Object.entries(meta?.snapshot() || {}).filter(([key]) => !key.startsWith('download:')));

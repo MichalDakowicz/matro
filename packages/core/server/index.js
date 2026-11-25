@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const { randomUUID } = require('node:crypto');
 const config = require('./config');
 const { open } = require('./db');
 const { createAuth } = require('./auth');
@@ -11,15 +12,20 @@ const { createMovieRequests } = require('./movie-requests');
 
 function createApp({ dataDir = config.dataDir, tmdb: tmdbOptions, downloads: downloadOptions, movieRequests: requestOptions } = {}) {
   const db = open(require('node:path').join(dataDir, 'matro.db'));
-  const auth = createAuth(db), library = createLibrary(db, { excludedFiles: root => app.downloads.pendingLibraryFiles(root), onChange: () => { app.scanner?.invalidate(); app.movieRequests?.fulfil(); } }), router = createRouter();
-  const app = { dataDir, db, auth, library, router, tmdb: createTmdb(db, tmdbOptions), invites: createInvites(db) };
+  const auth = createAuth(db), library = createLibrary(db, { excludedFiles: root => app.downloads.pendingLibraryFiles(root), onChange: () => { app.scanner?.invalidate(); fulfilRequests(); } }), router = createRouter();
+  let closed = false;
+  const fulfilRequests = () => {
+    if (!closed && db.isOpen !== false && app.movieRequests?.fulfil()) library.state.revision = randomUUID();
+  };
+  const tmdb = createTmdb(db, { ...tmdbOptions, onUpdate: fulfilRequests });
+  const app = { dataDir, db, auth, library, router, tmdb, invites: createInvites(db) };
   app.scanner = require('./segments').createScanner({ dataDir, db });
-  app.downloads = createDownloads({ dataDir, library, tmdb: app.tmdb, afterImport: () => app.movieRequests?.fulfil(), ...downloadOptions });
-  app.movieRequests = createMovieRequests(db, requestOptions);
+  app.downloads = createDownloads({ dataDir, library, tmdb: app.tmdb, afterImport: fulfilRequests, ...downloadOptions });
+  app.movieRequests = createMovieRequests(db, requestOptions, () => tmdb.snapshot());
   for (const name of ['account', 'library', 'play', 'admin', 'downloads', 'movie-requests']) require(`./routes/${name}`).register(app);
   const server = createServer({ router, publicDir: config.publicDir, authenticate: token => auth.session(token), config });
   server.on('listening', () => app.movieRequests.start());
-  server.on('close', () => { app.scanner.close(); app.downloads.close(); app.movieRequests.close(); app.closePlayback?.(); });
+  server.on('close', () => { closed = true; app.scanner.close(); app.downloads.close(); app.movieRequests.close(); app.closePlayback?.(); });
   return { app, server, db, library };
 }
 

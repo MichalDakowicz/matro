@@ -90,12 +90,12 @@ export function mountMovieRequests(root, { admin, search }) {
         const name = row.year ? `${row.title} (${row.year})` : row.title;
         const date = new Date(row.created).toLocaleDateString();
         const what = row.kind === 'series' ? 'Series' : row.kind === 'season' ? `Season ${row.season}` : '';
-        const outcome = { pending: 'Waiting', ready: 'Ready to watch', declined: 'Declined' }[row.outcome];
+        const outcome = { pending: 'Waiting', ready: 'Ready to watch', declined: 'Declined', handled: 'Handled' }[row.outcome] ?? (row.status === 'pending' ? 'Waiting' : 'Handled');
         const pendingForOwner = admin && row.status === 'pending';
         return h('li', { class: 'movie-request-row' },
           h('div', { class: 'min' }, h('h3', {}, name),
             h('p', { class: 'muted' }, [admin ? `${row.requester || 'Removed account'} · ${date}` : date, what].filter(Boolean).join(' · ')),
-            !admin && h('p', {}, h('span', { class: `request-status ${row.outcome}` }, outcome), row.isNew && h('span', { class: 'request-new' }, ' New'))),
+            !admin && h('p', {}, h('span', { class: `request-status ${row.outcome || row.status || 'handled'}` }, outcome), row.isNew && h('span', { class: 'request-new' }, ' New'))),
           (pendingForOwner || data.canRemove) && h('div', { class: 'movie-request-actions' },
             pendingForOwner && h('button', { class: 'pill small primary', type: 'button', 'aria-label': `Search releases for ${name}`,
               onclick: () => search(row) }, 'Search releases'),

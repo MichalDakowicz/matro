@@ -2,10 +2,10 @@ const { HttpError } = require('./http');
 const { tx } = require('./db');
 const { createMovieRequestPush } = require('./movie-request-push');
 
-function createMovieRequests(db, options) {
+function createMovieRequests(db, options, metadata = () => ({})) {
   const push = createMovieRequestPush(db, options);
   const select = `SELECT r.id, r.title, NULLIF(r.year, 0) AS year, r.kind, NULLIF(r.season, 0) AS season, r.tmdb_id AS tmdbId, r.status,
-      CASE WHEN r.status = 'pending' THEN 'pending' WHEN r.declined THEN 'declined' ELSE 'ready' END AS outcome,
+      CASE WHEN r.status = 'pending' THEN 'pending' WHEN r.declined THEN 'declined' WHEN r.fulfilled IS NOT NULL OR r.seen = 0 THEN 'ready' ELSE 'handled' END AS outcome,
       r.group_id AS groupId, r.created, r.seen = 0 AS isNew, u.username AS requester
     FROM movie_requests r LEFT JOIN users u ON u.id = r.user_id`;
   const forViewer = db.prepare(`${select} WHERE r.user_id = ? AND r.status = ? ORDER BY r.id DESC LIMIT ?`);
@@ -14,37 +14,38 @@ function createMovieRequests(db, options) {
   const duplicate = db.prepare(`SELECT id FROM movie_requests WHERE user_id = ? AND title_key = ? AND year = ? AND status = 'pending'`);
   const nextId = db.prepare('UPDATE movie_request_sequence SET last_id = last_id + 1 WHERE singleton = 1 RETURNING last_id');
   const insert = db.prepare('INSERT INTO movie_requests (id, user_id, title, title_key, year, kind, season, tmdb_id, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
-  const resolve = db.prepare("UPDATE movie_requests SET status = 'handled', declined = ?, seen = 0 WHERE id = ? AND status = 'pending'");
+  const resolve = db.prepare("UPDATE movie_requests SET status = 'handled', declined = ?, fulfilled = ?, seen = 0 WHERE id = ? AND status = 'pending'");
   const link = db.prepare("UPDATE movie_requests SET status = 'handled', group_id = ?, fulfilled = ?, seen = 0 WHERE id = ? AND status = 'pending'");
-  const waiting = db.prepare("SELECT id, user_id, title, year, kind, season FROM movie_requests WHERE status = 'pending'");
-  const catalog = db.prepare('SELECT group_id, group_title, year, kind, season FROM items');
+  const waiting = db.prepare("SELECT id, user_id, tmdb_id, kind, season, created FROM movie_requests WHERE status = 'pending' AND tmdb_id IS NOT NULL");
+  const catalog = db.prepare('SELECT id, group_id, kind, season, added FROM items ORDER BY added, id');
   const unseen = db.prepare("SELECT id, title, CASE WHEN declined THEN 'declined' ELSE 'ready' END AS outcome FROM movie_requests WHERE user_id = ? AND status = 'handled' AND seen = 0 ORDER BY id");
   const owner = db.prepare('SELECT user_id FROM movie_requests WHERE id = ?');
   const markSeen = db.prepare("UPDATE movie_requests SET seen = 1 WHERE user_id = ? AND status = 'handled' AND seen = 0");
   const remove = db.prepare("DELETE FROM movie_requests WHERE id = ? AND (? = 'admin' OR user_id = ?)");
 
-  // Letters and digits only, so "Spider-Man: Homecoming" and "Spider Man Homecoming" are the same title.
-  const squash = text => String(text).normalize('NFKD').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
   const asRow = row => ({ ...row, isNew: !!row.isNew });
 
   // Link pending requests to titles that have appeared in the library, then tell the requesters.
   function fulfil() {
     const open = waiting.all();
     if (!open.length) return 0;
-    const groups = new Map();
+    const matches = metadata();
+    const items = new Map();
     for (const row of catalog.all()) {
-      const group = groups.get(row.group_id) || groups.set(row.group_id, { id: row.group_id, key: squash(row.group_title), year: row.year, kind: row.kind, seasons: new Set() }).get(row.group_id);
-      group.seasons.add(row.season ?? 1);
+      const tmdbId = matches[row.kind === 'movie' ? row.id : row.group_id]?.tmdbId;
+      if (!tmdbId) continue;
+      const key = `${row.kind}:${tmdbId}`;
+      if (!items.has(key)) items.set(key, []);
+      items.get(key).push(row);
     }
     const now = Date.now();
     const done = tx(db, () => {
       let count = 0;
       for (const request of open) {
-        const key = squash(request.title);
-        const hit = [...groups.values()].find(group => group.key === key &&
-          (request.kind === 'movie' ? group.kind === 'movie' && (!request.year || !group.year || request.year === group.year)
-            : group.kind === 'show' && (request.kind === 'series' || group.seasons.has(request.season))));
-        if (!hit || !link.run(hit.id, now, request.id).changes) continue;
+        const kind = request.kind === 'movie' ? 'movie' : 'show';
+        const hit = items.get(`${kind}:${request.tmdb_id}`)?.find(item => item.added > request.created &&
+          (request.kind !== 'season' || item.season === request.season));
+        if (!hit || !link.run(hit.group_id, now, request.id).changes) continue;
         push.clear(request.id);
         push.enqueueFor(request.id, request.user_id, now);
         count++;
@@ -99,9 +100,10 @@ function createMovieRequests(db, options) {
       if (!request) throw new HttpError(404, 'Request not found.');
       if (request.status === 'pending') {
         tx(db, () => {
-          resolve.run(declined ? 1 : 0, id);
+          const now = Date.now();
+          resolve.run(declined ? 1 : 0, declined ? null : now, id);
           push.clear(id);
-          push.enqueueFor(id, owner.get(id)?.user_id, Date.now());
+          push.enqueueFor(id, owner.get(id)?.user_id, now);
         });
         void push.notify();
       }

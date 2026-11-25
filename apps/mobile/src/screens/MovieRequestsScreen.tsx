@@ -149,7 +149,7 @@ export default function MovieRequestsScreen({ base, admin, alerts, onSearch }: P
       <Text style={t.sectionTitle}>{item.title}{item.year ? ` (${item.year})` : ''}</Text>
       <Text style={t.muted}>{[admin ? item.requester || 'Removed account' : null, new Date(item.created).toLocaleDateString(), item.kind === 'series' ? 'Series' : item.kind === 'season' ? `Season ${item.season}` : null].filter(Boolean).join(' · ')}</Text>
       {!admin && <Text style={[t.text, { color: item.outcome === 'ready' ? colors.good : item.outcome === 'declined' ? colors.warn : colors.muted }]}>
-        {{ pending: 'Waiting', ready: 'Ready to watch', declined: 'Declined' }[item.outcome]}{item.isNew ? ' · New' : ''}
+        {{ pending: 'Waiting', ready: 'Ready to watch', declined: 'Declined', handled: 'Handled' }[item.outcome ?? item.status] ?? 'Handled'}{item.isNew ? ' · New' : ''}
       </Text>}
       {((admin && item.status === 'pending') || data?.canRemove) && <View style={[t.row, s.actions]}>
         {admin && item.status === 'pending' && <>
