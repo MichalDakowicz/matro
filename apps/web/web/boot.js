@@ -1,10 +1,8 @@
 // Sign in first, then hand the page to the desktop renderer (app.js) with window.matro backed by this server.
-import { post } from './http.js';
-import { signIn } from './auth.js';
+import { signIn, signOut } from './auth.js';
 import { createAdapter } from './adapter.js';
 import { profileButton, openProfile } from './profile.js';
 import { installDesktopChrome } from './desktop.js';
-import { forgetOfflineSession } from './offline.js';
 import { savedDownloads } from './saved-downloads.js';
 import './touch.js';
 
@@ -21,12 +19,12 @@ document.body.classList.add(user.role === 'admin' ? 'role-admin' : 'role-viewer'
 const adapter = createAdapter(session);
 window.matro = adapter.matro;
 if (import.meta.env.PROD && navigator.serviceWorker) void navigator.serviceWorker.register('/sw.js').catch(() => {});
-const signOut = async () => {
+const leave = async () => {
   for (const id of adapter.offline.jobs.keys()) adapter.offline.cancel(id);
-  await forgetOfflineSession().catch(() => {}); await post('/api/logout').catch(() => {}); location.reload();
+  await signOut();
 };
 const openSaved = () => savedDownloads({ ...adapter, onOpenTitle: id => document.dispatchEvent(new CustomEvent('matro:saved-title', { detail: id })) });
-profileButton(session, () => openProfile({ session, getState: adapter.state, save: () => adapter.matro.save(adapter.state()), signOut, openSaved }));
+profileButton(session, () => openProfile({ session, getState: adapter.state, save: () => adapter.matro.save(adapter.state()), signOut: leave, openSaved }));
 if (offline) {
   const note = document.createElement('button');
   note.className = 'pill small offline-indicator'; note.textContent = 'Offline · Reconnect';

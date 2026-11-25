@@ -4,7 +4,12 @@ function register({ router, downloads, tmdb }) {
   const prefix = '/api/admin/downloads';
   const run = async fn => {
     try { return { result: await fn() }; }
-    catch (error) { throw new HttpError(400, error.message); }
+    catch (error) {
+      const status = error?.status;
+      if (!Number.isInteger(status) || status < 400 || status >= 600) throw new Error('Download request failed.', { cause: error });
+      if (status >= 500) throw new HttpError(status, 'The download service could not complete the request.');
+      throw error;
+    }
   };
   router.add('GET', `${prefix}/config`, { auth: 'admin' }, () => run(() => downloads.config()));
   router.add('GET', `${prefix}/list`, { auth: 'admin' }, () => run(async () => {

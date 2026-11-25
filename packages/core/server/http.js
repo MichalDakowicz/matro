@@ -2,6 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const { isIP } = require('node:net');
 const { pipeline } = require('node:stream');
 
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
@@ -12,6 +13,10 @@ const SECURITY = {
   'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
   'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY'
 };
+
+function sessionCookie(ctx, token, maxAge) {
+  ctx.res.setHeader('Set-Cookie', `matro_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${ctx.secure ? '; Secure' : ''}`);
+}
 
 function cookies(header = '') {
   const out = {};
@@ -118,18 +123,24 @@ function createServer({ router, publicDir, authenticate, config }) {
       if (method !== 'GET') {
         // Cookies alone must never authorise a write from another site: require our header and a matching Origin.
         if (req.headers['x-matro'] !== '1') throw new HttpError(403, 'Missing request header.');
-        if (req.headers.origin && new URL(req.headers.origin).host !== req.headers.host) throw new HttpError(403, 'Cross-site request refused.');
+        if (req.headers.origin !== undefined) {
+          const origin = URL.parse(req.headers.origin);
+          if (!origin || origin.host !== req.headers.host) throw new HttpError(403, 'Cross-site request refused.');
+        }
       }
-      const token = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization || '')?.[1] || cookies(req.headers.cookie).matro_session;
-      const user = authenticate(token);
+      const bearer = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization || '')?.[1];
+      const token = bearer || cookies(req.headers.cookie).matro_session;
+      const { user, renewed } = authenticate(token) || {};
       const { route, params } = found;
+      const forwarded = config.trustProxy && (config.cloudflareProxy
+        ? req.headers['cf-connecting-ip'] : req.headers['x-forwarded-for']?.split(',').at(-1))?.trim();
+      const ctx = { req, res, params, query: url.searchParams, user, token, ip: forwarded && isIP(forwarded) ? forwarded : req.socket.remoteAddress,
+        // Secure only when this request really arrived over HTTPS; a Secure cookie set over plain HTTP (the LAN address) is dropped by the browser.
+        secure: Boolean(req.socket.encrypted) || (config.trustProxy && req.headers['x-forwarded-proto'] === 'https') };
+      if (renewed && !bearer) sessionCookie(ctx, token, config.sessionDays * 86400);
       if (route.auth !== 'none' && !user) throw new HttpError(401, 'Sign in first.');
       if (route.auth === 'admin' && user.role !== 'admin') throw new HttpError(403, 'Only the head account can do that.');
       if (route.auth === 'viewer' && user.role !== 'viewer') throw new HttpError(403, 'Only viewer accounts can request movies.');
-      const forwarded = config.trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-      const ctx = { req, res, params, query: url.searchParams, user, token, ip: forwarded || req.socket.remoteAddress,
-        // Secure only when this request really arrived over HTTPS; a Secure cookie set over plain HTTP (the LAN address) is dropped by the browser.
-        secure: Boolean(req.socket.encrypted) || (config.trustProxy && req.headers['x-forwarded-proto'] === 'https') };
       const result = await route.handler(ctx);
       if (!res.headersSent && !res.writableEnded && !res.destroyed) sendJson(res, 200, result === undefined ? { ok: true } : result);
     } catch (error) {
@@ -142,4 +153,4 @@ function createServer({ router, publicDir, authenticate, config }) {
     }
   });
 }
-module.exports = { HttpError, createRouter, createServer, readJson, readBody, sendJson, sendFile, MIME };
+module.exports = { HttpError, createRouter, createServer, readJson, readBody, sendJson, sendFile, sessionCookie, MIME };

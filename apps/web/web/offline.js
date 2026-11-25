@@ -25,14 +25,15 @@ const db = {
   delete: key => change('readwrite', store => store.delete(key)),
   keys: prefix => change('readonly', store => store.getAllKeys(IDBKeyRange.bound(prefix, prefix + '\uffff'))),
 };
-const scopeFor = user => `account:${user.id}:${encodeURIComponent(user.username)}:`;
+export const accountScope = user => `account-v2:${user.accountKey || `legacy:${user.id}:${user.username}`}`;
 const activeKey = 'active-account-scope';
 export const networkLost = error => error instanceof TypeError || error instanceof ApiError && error.status >= 500;
 export async function lastOfflineUser() {
   const scope = await db.get(activeKey);
-  if (!scope) return null;
+  if (!scope?.startsWith('account-v2:')) return null;
   const library = await db.get(scope + 'library'), records = await db.keys(scope + 'meta:');
-  return records.length ? library?.user || null : null;
+  const user = library?.user;
+  return records.length && user?.accountKey && `${accountScope(user)}:` === scope ? user : null;
 }
 export const forgetOfflineSession = () => db.delete(activeKey);
 
@@ -55,7 +56,7 @@ export async function retrying(signal, run) {
 }
 
 export function createOffline(user) {
-  const scope = scopeFor(user);
+  const scope = `${accountScope(user)}:`;
   const backend = {
     get: key => db.get(scope + key), set: (key, value) => db.set(scope + key, value), delete: key => db.delete(scope + key),
     keys: async prefix => (await db.keys(scope + prefix)).map(key => key.slice(scope.length)),

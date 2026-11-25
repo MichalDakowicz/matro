@@ -5,8 +5,15 @@ const path = require('node:path');
 const schema = `
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE, hash TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('admin', 'viewer')), created INTEGER NOT NULL
+  role TEXT NOT NULL CHECK (role IN ('admin', 'viewer')), created INTEGER NOT NULL, account_key TEXT
 );
+-- Preserve existing numeric IDs and advance the high-water mark even when the highest account is deleted.
+CREATE TABLE IF NOT EXISTS user_sequence (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), last_id INTEGER NOT NULL);
+INSERT INTO user_sequence (singleton, last_id) VALUES (1, COALESCE((SELECT MAX(id) FROM users), 0))
+ON CONFLICT(singleton) DO UPDATE SET last_id = MAX(last_id, excluded.last_id);
+CREATE TRIGGER IF NOT EXISTS users_advance_sequence AFTER INSERT ON users BEGIN
+  UPDATE user_sequence SET last_id = MAX(last_id, NEW.id) WHERE singleton = 1;
+END;
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created INTEGER NOT NULL, expires INTEGER NOT NULL
@@ -63,13 +70,18 @@ function open(file) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-  db.exec(schema);
+  tx(db, () => {
+    db.exec(schema);
+    if (!db.prepare('PRAGMA table_info(users)').all().some(column => column.name === 'account_key')) db.exec('ALTER TABLE users ADD COLUMN account_key TEXT');
+    db.exec(`UPDATE users SET account_key = lower(hex(randomblob(16))) WHERE account_key IS NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS users_account_key ON users(account_key);`);
+  }, 'BEGIN IMMEDIATE');
   return db;
 }
 // node:sqlite rejects undefined and booleans as bind values.
 const bind = value => value === undefined ? null : typeof value === 'boolean' ? Number(value) : value;
-function tx(db, fn) {
-  db.exec('BEGIN');
+function tx(db, fn, begin = 'BEGIN') {
+  db.exec(begin);
   try { const result = fn(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 module.exports = { open, bind, tx };

@@ -63,7 +63,7 @@ export async function savedTitle(base: string, user: MatroUser, id: string) {
 export async function offlineLibrary(base: string): Promise<Library | null> {
   const scope = await AsyncStorage.getItem(active(base));
   const data = scope ? await read<Library>(libraryKey(scope)) : null;
-  if (!data) return null;
+  if (!data || scope !== account(base, data.user)) return null;
   const ids = new Set((await savedTitles(base, data.user)).filter(entry => entry.complete && new File(entry.uri).exists).map(entry => entry.id));
   const items = data.items.filter(item => ids.has(item.id));
   const progress = await progressRecovery.restore(recoveryScope(base, data.user), data.progress, items.map(item => item.id));
