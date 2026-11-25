@@ -110,7 +110,7 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
       async function attempt(selected) {
         await fsp.rm(entry.file, { force: true }); entry.size = 0; entry.preparedSeconds = 0;
         if (closed || entry.error) throw entry.error || Error('Playback service is closed.');
-        entry.encoder = canCopyVideo(options.info, options.burn, options.offset) || !options.info.video ? 'AAC' : `${selected[1]} + AAC`;
+        entry.encoder = canCopyVideo(options.info, options.burn, options.offset, options.quality) || !options.info.video ? 'AAC' : `${selected[1]} + AAC`;
         return new Promise((resolve, reject) => {
           const child = spawnProcess(ffmpeg, argumentsFor({ ...options, toneMap }, selected), { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
           entry.child = child;
