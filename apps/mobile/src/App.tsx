@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { View } from 'react-native';
+import { Appearance, View, useColorScheme } from 'react-native';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -8,7 +8,10 @@ import { logout, status, type Status } from './lib/server';
 import LoginScreen from './screens/LoginScreen';
 import ServerScreen from './screens/ServerScreen';
 import ViewerScreen from './screens/ViewerScreen';
-import { colors, fontAssets } from './theme';
+import * as SystemUI from 'expo-system-ui';
+import { colors, fontAssets, setPreferredScheme } from './theme';
+import { resolveScheme } from './palette';
+import { loadThemeChoice, useThemeChoice } from './lib/theme-choice';
 import * as SecureStore from 'expo-secure-store';
 import { configureTokenStorage } from './lib/server';
 import { forgetOfflineAccount, offlineLibrary } from './lib/offline';
@@ -29,6 +32,13 @@ type Route =
 export default function App() {
   const [fontsReady] = useFonts(fontAssets);
   const [route, setRoute] = useState<Route>({ name: 'boot' });
+  const choice = useThemeChoice(), [themeReady, setThemeReady] = useState(false);
+  const scheme = resolveScheme(choice, useColorScheme());
+  setPreferredScheme(scheme); // before any child renders, so every colors.* read below follows it
+  useEffect(() => { void loadThemeChoice().finally(() => setThemeReady(true)); }, []);
+  // Native dialogs, the keyboard and the window background follow the choice too.
+  useEffect(() => { Appearance.setColorScheme(choice === 'system' ? 'unspecified' : choice); }, [choice]);
+  useEffect(() => { void SystemUI.setBackgroundColorAsync(colors.ground).catch(() => {}); }, [scheme]);
 
   // Reopen straight into the library when the saved server still has a live session.
   useEffect(() => {
@@ -53,7 +63,7 @@ export default function App() {
   const changeServer = () => { forgetServer(); setRoute({ name: 'server' }); };
 
   let screen = null;
-  if (fontsReady) {
+  if (fontsReady && themeReady) {
     switch (route.name) {
       case 'server':
         screen = <ServerScreen initial={route.initial} notice={route.notice} onConnected={connected} />;
@@ -75,8 +85,8 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <View style={{ flex: 1, backgroundColor: colors.ground }}>{screen}</View>
-      <StatusBar style="light" />
+      <View key={scheme} style={{ flex: 1, backgroundColor: colors.ground }}>{screen}</View>
+      <StatusBar style={scheme === 'light' ? 'dark' : 'light'} />
     </SafeAreaProvider>
   );
 }

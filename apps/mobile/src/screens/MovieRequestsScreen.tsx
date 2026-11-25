@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, SectionList, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { markMovieRequestHandled, movieRequests, removeMovieRequest, sendMovieRequest, type MovieRequest, type MovieRequests } from '../lib/server';
-import { colors } from '../theme';
+import { colors, themed } from '../theme';
 import { Field, ErrorLine } from '../ui';
 import { Pill, styles as t } from '../components/Matro';
 import type { MovieRequestAlerts } from '../lib/movie-request-alerts';
@@ -118,7 +118,7 @@ export default function MovieRequestsScreen({ base, admin, alerts, onSearch }: P
   />;
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   header: { gap: 10 },
   form: { gap: 8, marginTop: 12, maxWidth: 460 },
   alerts: { gap: 4, paddingVertical: 6 },
@@ -126,4 +126,4 @@ const s = StyleSheet.create({
   section: { marginTop: 22, marginBottom: 10, gap: 8 },
   card: { padding: 14, gap: 6, marginBottom: 8, borderWidth: 1, borderColor: colors.hairline, borderRadius: 12, backgroundColor: colors.panel },
   actions: { flexWrap: 'wrap', marginTop: 4 },
-});
+}));

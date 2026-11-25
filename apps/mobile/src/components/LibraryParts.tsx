@@ -4,7 +4,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { Item, Library } from '../lib/server';
 import { episodeName, formatTime, metadataFor, nameFor, resumeItem, statusOf } from '../../../../packages/core/client/library';
-import { colors, fonts } from '../theme';
+import { colors, fonts, overArt, themed } from '../theme';
+import { ThemeRow } from './ThemeRow';
 import { Brand, Icon, IconButton, MediaArt, Pill, ProgressBar, styles as t, type Glyph } from './Matro';
 export type ArtProps = { base: string; headers: Record<string, string> };
 
@@ -12,8 +13,8 @@ export const PosterCard = memo(function PosterCard({ data, items, width, onPress
   const item = items[0], m = metadataFor(data, item), status = statusOf(data, items), target = resumeItem(data, items), progress = data.progress[target.id];
   return <Pressable accessibilityRole="button" accessibilityLabel={`Open ${nameFor(data, item)}`} onPress={onPress} style={({ pressed }) => [{ width, marginBottom: 22 }, pressed && { opacity: .7 }]}>
     <MediaArt {...art} path={m.poster} title={nameFor(data, item)} style={{ width, height: width * 1.5, borderRadius: 8 }}>
-      {status === 'done' && <View style={s.watched}><Icon name="check" size={13} /></View>}
-      {status === 'progress' && progress?.duration > 0 && <View style={s.posterProgress}><ProgressBar value={progress.position / progress.duration} /></View>}
+      {status === 'done' && <View style={s.watched}><Icon name="check" size={13} color={overArt.text} /></View>}
+      {status === 'progress' && progress?.duration > 0 && <View style={s.posterProgress}><ProgressBar value={progress.position / progress.duration} onArt /></View>}
     </MediaArt>
     <Text numberOfLines={1} style={s.cardName}>{nameFor(data, item)}</Text>
     <Text numberOfLines={1} style={s.cardMeta}>{item.kind === 'show' ? `${new Set(items.map(i => i.season)).size} seasons · ${items.length} episodes` : `${m.year ? m.year + ' · ' : ''}${item.format} · ${item.kind === 'audio' ? 'Audio' : 'Movie'}`}</Text>
@@ -59,9 +60,9 @@ export function ContinueRow({ data, items, onPlay, onRemove, ...art }: ArtProps 
   return <View style={t.section}><View style={t.sectionHeading}><View style={t.row}><Text style={t.sectionTitle}>Continue watching</Text><Icon name="chevron" size={16} /></View><Text style={t.dim}>{items.length} in progress</Text></View>
     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -18 }} contentContainerStyle={{ paddingHorizontal: 18, gap: 12 }}>
       {items.map(item => { const m = metadataFor(data, item), progress = data.progress[item.id]; return <View key={item.id} style={{ width: 240 }}><Pressable accessibilityLabel={`Resume ${nameFor(data, item)}`} onPress={() => onPlay(item)}><MediaArt {...art} path={m.backdrop || m.poster} title={nameFor(data, item)} style={{ width: 240, height: 138, borderRadius: 12 }}>
-        <LinearGradient colors={['transparent', '#000000e8']} style={StyleSheet.absoluteFill} />
-        <View style={s.cwPlay}><Icon name="play" size={19} /></View><View style={s.cwText}><Text numberOfLines={1} style={[t.text, { fontSize: 13, fontFamily: fonts.medium }]}>{nameFor(data, item)}{item.kind === 'show' ? ` · S${item.season} E${item.episode}` : ''}</Text><Text style={[t.dim, { fontSize: 11 }]}>{progress?.duration ? `${formatTime(progress.duration - progress.position)} left` : 'Up next'}</Text><ProgressBar value={progress?.duration ? progress.position / progress.duration : 0} /></View>
-      </MediaArt></Pressable><Pressable accessibilityLabel={`Remove ${nameFor(data, item)} from Continue watching`} onPress={() => onRemove(item)} style={s.remove}><Icon name="close" size={14} /></Pressable></View>; })}
+        <LinearGradient colors={['transparent', overArt.shadeDeep]} style={StyleSheet.absoluteFill} />
+        <View style={s.cwPlay}><Icon name="play" size={19} color={overArt.text} /></View><View style={s.cwText}><Text numberOfLines={1} style={[t.text, t.onArt, { fontSize: 13, fontFamily: fonts.medium }]}>{nameFor(data, item)}{item.kind === 'show' ? ` · S${item.season} E${item.episode}` : ''}</Text><Text style={[t.dim, t.onArtDim, { fontSize: 11 }]}>{progress?.duration ? `${formatTime(progress.duration - progress.position)} left` : 'Up next'}</Text><ProgressBar onArt value={progress?.duration ? progress.position / progress.duration : 0} /></View>
+      </MediaArt></Pressable><Pressable accessibilityLabel={`Remove ${nameFor(data, item)} from Continue watching`} onPress={() => onRemove(item)} style={s.remove}><Icon name="close" size={14} color={overArt.text} /></Pressable></View>; })}
     </ScrollView>
   </View>;
 }
@@ -74,7 +75,7 @@ export function Dock({ tab, onChange, audio, requests }: { tab: string; onChange
   const insets = useSafeAreaInsets();
   const items: { id: string; label: string; icon: Glyph }[] = [{ id: 'movie', label: 'Movies', icon: 'movies' }, { id: 'show', label: 'Shows', icon: 'shows' }, ...(audio ? [{ id: 'audio', label: 'Music', icon: 'music' as Glyph }] : []), { id: 'offline', label: 'Saved for offline', icon: 'download' }, { id: 'search', label: 'Search', icon: 'search' }];
   if (requests) items.push({ id: 'movie-requests', label: requests, icon: 'requests' });
-  return <View style={[s.dockWrap, { bottom: insets.bottom + 14 }]}><View style={s.dock}>{items.map(item => <Pressable key={item.id} onPress={() => onChange(tab === item.id ? 'home' : item.id)} accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.id }} style={({ pressed }) => [s.dockItem, tab === item.id && { backgroundColor: '#ffffff1f' }, pressed && { opacity: .65 }]}><Icon name={item.icon} color={tab === item.id ? colors.text : '#bebab3'} /></Pressable>)}</View></View>;
+  return <View style={[s.dockWrap, { bottom: insets.bottom + 14 }]}><View style={s.dock}>{items.map(item => <Pressable key={item.id} onPress={() => onChange(tab === item.id ? 'home' : item.id)} accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.id }} style={({ pressed }) => [s.dockItem, tab === item.id && { backgroundColor: colors.active }, pressed && { opacity: .65 }]}><Icon name={item.icon} color={tab === item.id ? colors.text : colors.soft} /></Pressable>)}</View></View>;
 }
 export function AccountSheet({ visible, onClose, data, base, offline, onGo, onRefresh, onServer, onSignOut }: { visible: boolean; onClose: () => void; data: Library | null; base: string; offline: boolean; onGo: (tab: string) => void; onRefresh: () => void; onServer: () => void; onSignOut: () => void }) {
   const insets = useSafeAreaInsets();
@@ -89,6 +90,7 @@ export function AccountSheet({ visible, onClose, data, base, offline, onGo, onRe
         <View><Text style={s.stat}>{data?.items.length || 0}</Text><Text style={t.dim}>Files</Text></View>
         <View><Text style={s.stat}>{Object.values(data?.progress || {}).filter(p => p.completed).length}</Text><Text style={t.dim}>Watched</Text></View>
       </View>
+      <View style={{ marginBottom: 20 }}><ThemeRow /></View>
       <View style={{ gap: 10 }}>
         {data && <Pill label="Saved for offline" icon="download" onPress={() => go('offline')} />}
         {!offline && data?.user.role === 'admin' && <View style={[t.row, { gap: 10 }]}>
@@ -102,14 +104,14 @@ export function AccountSheet({ visible, onClose, data, base, offline, onGo, onRe
   </Modal>;
 }
 
-const s = StyleSheet.create({
-  watched: { position: 'absolute', top: 7, right: 7, width: 22, height: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0a0a0ba0', borderRadius: 99 }, posterProgress: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+const s = themed(() => StyleSheet.create({
+  watched: { position: 'absolute', top: 7, right: 7, width: 22, height: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: overArt.badge, borderRadius: 99 }, posterProgress: { position: 'absolute', left: 0, right: 0, bottom: 0 },
   cardName: { color: colors.text, fontFamily: fonts.medium, fontSize: 12.5, marginTop: 8, lineHeight: 17 }, cardMeta: { color: colors.dim, fontFamily: fonts.regular, fontSize: 11, marginTop: 3, lineHeight: 16 },
-  dots: { position: 'absolute', top: 408, alignSelf: 'center', flexDirection: 'row', gap: 7, alignItems: 'center' }, dot: { width: 5, height: 5, borderRadius: 9, backgroundColor: '#ffffff33' }, kicker: { color: colors.dim, fontSize: 13, fontFamily: fonts.medium, marginBottom: 12 },
-  metaList: { borderTopColor: '#ffffff33', borderTopWidth: 1, paddingTop: 5 }, metaRow: { paddingVertical: 7, flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 16 },
-  cwPlay: { position: 'absolute', top: 48, left: 108 }, cwText: { position: 'absolute', left: 12, right: 12, bottom: 12, gap: 5 }, remove: { position: 'absolute', top: 7, right: 7, backgroundColor: '#0a0a0b99', borderRadius: 99, width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
-  corner: { position: 'absolute', left: 14, right: 14, height: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', zIndex: 20 }, help: { width: 40, height: 40, borderRadius: 99, borderWidth: 1, borderColor: colors.hairline, backgroundColor: '#1a1a1c99', alignItems: 'center', justifyContent: 'center' },
-  avatar: { width: 36, height: 36, borderRadius: 99, borderWidth: 1, borderColor: '#ffffff26', backgroundColor: '#1a1a1c99', justifyContent: 'center', alignItems: 'center' },
-  dockWrap: { position: 'absolute', left: 14, right: 14, alignItems: 'center', zIndex: 30 }, dock: { width: '100%', maxWidth: 420, height: 56, padding: 4, borderRadius: 99, borderWidth: 1, borderColor: colors.hairline, backgroundColor: '#171719f5', flexDirection: 'row', gap: 2, elevation: 12, boxShadow: '0 10px 30px #0006' }, dockItem: { flex: 1, height: 46, borderRadius: 99, justifyContent: 'center', alignItems: 'center' },
-  scrim: { ...StyleSheet.absoluteFill, backgroundColor: '#0009' }, sheet: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 24, backgroundColor: colors.ground, borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderColor: colors.hairline }, stat: { color: colors.text, fontFamily: fonts.medium, fontSize: 28, letterSpacing: -1 }
-});
+  dots: { position: 'absolute', top: 408, alignSelf: 'center', flexDirection: 'row', gap: 7, alignItems: 'center' }, dot: { width: 5, height: 5, borderRadius: 9, backgroundColor: colors.outlineStrong }, kicker: { color: colors.dim, fontSize: 13, fontFamily: fonts.medium, marginBottom: 12 },
+  metaList: { borderTopColor: colors.outlineStrong, borderTopWidth: 1, paddingTop: 5 }, metaRow: { paddingVertical: 7, flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 16 },
+  cwPlay: { position: 'absolute', top: 48, left: 108 }, cwText: { position: 'absolute', left: 12, right: 12, bottom: 12, gap: 5 }, remove: { position: 'absolute', top: 7, right: 7, backgroundColor: overArt.chip, borderRadius: 99, width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
+  corner: { position: 'absolute', left: 14, right: 14, height: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', zIndex: 20 }, help: { width: 40, height: 40, borderRadius: 99, borderWidth: 1, borderColor: colors.hairline, backgroundColor: colors.glass, alignItems: 'center', justifyContent: 'center' },
+  avatar: { width: 36, height: 36, borderRadius: 99, borderWidth: 1, borderColor: colors.outline, backgroundColor: colors.glass, justifyContent: 'center', alignItems: 'center' },
+  dockWrap: { position: 'absolute', left: 14, right: 14, alignItems: 'center', zIndex: 30 }, dock: { width: '100%', maxWidth: 420, height: 56, padding: 4, borderRadius: 99, borderWidth: 1, borderColor: colors.hairline, backgroundColor: colors.glassSolid, flexDirection: 'row', gap: 2, elevation: 12, boxShadow: `0 10px 30px ${colors.shadow}` }, dockItem: { flex: 1, height: 46, borderRadius: 99, justifyContent: 'center', alignItems: 'center' },
+  scrim: { ...StyleSheet.absoluteFill, backgroundColor: colors.scrim }, sheet: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 24, backgroundColor: colors.ground, borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderColor: colors.hairline }, stat: { color: colors.text, fontFamily: fonts.medium, fontSize: 28, letterSpacing: -1 }
+}));

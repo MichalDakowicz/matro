@@ -1,7 +1,7 @@
 import { forwardRef, type ReactNode } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, fonts } from './theme';
+import { colors, fonts, themed } from './theme';
 
 /** Native account/server page frame: kicker, title, description and form. */
 export function Page({ kicker, title, lede, children }: { kicker: string; title: string; lede: string; children: ReactNode }) {
@@ -43,7 +43,7 @@ export function TextButton({ label, onPress }: { label: string; onPress: () => v
 
 export const ErrorLine = ({ text }: { text: string }) => (text ? <Text style={s.error} accessibilityRole="alert">{text}</Text> : null);
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   fill: { flex: 1, backgroundColor: colors.ground },
   page: { paddingHorizontal: 28, flexGrow: 1 },
   kicker: { fontFamily: fonts.mono, fontSize: 12, color: colors.dim, letterSpacing: 0.4, marginBottom: 14 },
@@ -61,4 +61,4 @@ const s = StyleSheet.create({
   textButton: { alignSelf: 'flex-start', paddingVertical: 8, paddingHorizontal: 4 },
   textButtonText: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted },
   error: { fontFamily: fonts.regular, fontSize: 13.5, color: colors.warn, paddingHorizontal: 6 },
-});
+}));

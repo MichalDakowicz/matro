@@ -1,24 +1,35 @@
-// Matro's tokens (packages/browser-ui/styles.css :root). Monochrome warm, no accent. No raw hex in screens: use these.
+// Matro's tokens (packages/browser-ui/styles.css :root and [data-theme=light]). Monochrome warm, no accent.
+// No raw hex in screens: use these. A new token goes into BOTH palettes below.
+//
+// `colors` and `themed()` follow the active scheme, so existing `colors.x` reads and style sheets keep working:
+// build style sheets with `themed(() => StyleSheet.create({ ... }))` and read `colors.*` while rendering.
+// A StyleSheet.create at module level (or colors read at module level) is frozen to one scheme.
 import { Geist_400Regular } from '@expo-google-fonts/geist/400Regular';
 import { Geist_500Medium } from '@expo-google-fonts/geist/500Medium';
 import { Geist_600SemiBold } from '@expo-google-fonts/geist/600SemiBold';
 import { GeistMono_400Regular } from '@expo-google-fonts/geist-mono/400Regular';
+import { overArt as overArtColors, palettes, type Palette, type Scheme } from './palette';
 
-export const colors = {
-  ground: '#0a0a0b',
-  panel: '#161618',
-  text: '#ece9e4',
-  muted: '#a9a59d',
-  dim: '#8f8c87',
-  hairline: '#ffffff14',
-  fieldBorder: '#ece9e438',
-  inputFill: '#1a1a1cb3',
-  placeholder: '#6f6c68',
-  primary: '#f3f1ec',
-  onPrimary: '#0a0a0b',
-  warn: '#e3a58b',
-  good: '#9fd6b0',
-} as const;
+export type { Palette, Scheme, ThemeChoice } from './palette';
+/** Always-dark colours for text and shades drawn over artwork (it stays dark in both schemes). */
+export const overArt = overArtColors;
+
+let preferred: Scheme = 'dark', override: Scheme | null = null;
+/** Scheme every `colors` / `themed` read follows right now. */
+export const activeScheme = (): Scheme => override ?? preferred;
+export const setPreferredScheme = (scheme: Scheme) => { preferred = scheme; };
+/** The player draws over video and is dark in both schemes; set from the screen that renders it. */
+export const setSceneOverride = (scheme: Scheme | null) => { override = scheme; };
+
+export const colors: Palette = new Proxy(palettes.dark, { get: (_, key: string) => palettes[activeScheme()][key as keyof Palette] });
+
+/** Style sheets per scheme, built on first use. `factory` runs with the scheme active, so it can read `colors`. */
+export function themed<T extends object>(factory: () => T): T {
+  const cache: Partial<Record<Scheme, T>> = {};
+  return new Proxy({} as T, {
+    get: (_, key) => ((cache[activeScheme()] ??= factory()) as Record<string | symbol, unknown>)[key],
+  });
+}
 
 export const fontAssets = { Geist_400Regular, Geist_500Medium, Geist_600SemiBold, GeistMono_400Regular };
 export const fonts = {
