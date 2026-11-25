@@ -2,6 +2,7 @@ import icons from './icons.json' with { type: 'json' };
 import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
+import { createAutoSkip } from '../core/client/auto-skip.js';
 import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, normalizeProgress, reachedCompletion, reachedOutro, reachedPlaybackEnd, resumeTarget } from '../core/client/watch-progress.js';
 const api = window.matro;
 if (api?.chooseSource && !document.querySelector('.desktop-source-button')) {
@@ -850,7 +851,9 @@ async function adoptStream(ready, token) {
   offset = ready.offset; streamId = current.id; pendingStream = null; applySubtitle(); updateTime(); showMessage(); updateToggle();
   if (playIntent) try { await video.play(); } catch (error) { if (token === generation && error.name !== 'AbortError') { loading = false; playbackError = error.message; showMessage(); } }
 }
+let autoSkip;
 function renderPlayer(adopt = null) {
+  autoSkip = createAutoSkip();
   document.body.classList.add('in-player');
   const heading = current.kind === 'show' ? `${displayName(current)} · ${code(current)}` : itemMeta(current);
   root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
@@ -878,10 +881,10 @@ function renderPlayer(adopt = null) {
     const position = offset + player.currentTime;
     void prepareNext(position);
     if (skipping || !playIntent || player.paused || player.seeking || loading || pendingStream || library.preferences.autoSkip !== true) return;
-    const marker = activeMarker(position, ['intro', 'recap']);
-    if (!marker || Math.min(marker.end, info.duration - .1) <= position) return;
+    const target = autoSkip.target(library.markers?.[current.id] || [], position, info.duration);
+    if (target === null) return;
     skipping = true;
-    void attempt(() => seek(marker.end)).finally(() => { skipping = false; });
+    void attempt(() => seek(target, true)).finally(() => { skipping = false; });
   });
   listen('progress', updateTime);
   listen('ratechange', updateTime);
@@ -959,9 +962,10 @@ async function loadStream(position, shouldPlay = true, token = generation) {
   // A paused stream only gets its first frame now; re-apply cue timings so the subtitle for this moment appears without pressing play.
   else { video.addEventListener('loadeddata', () => { loading = false; showMessage(); adjustCues(); }, { once: true }); }
 }
-async function seek(position) {
+async function seek(position, automatic = false) {
   if (!info.duration || !current) return;
   const target = Math.max(0, Math.min(info.duration - .1, position));
+  if (!automatic) autoSkip.seek(target);
   const shouldPlay = playIntent;
   const relative = target - offset;
   // Fragmented streams can buffer frames before Chromium exposes a seekable range.
@@ -1130,8 +1134,8 @@ function updateSkip(position) {
   button.hidden = !marker;
   if (!button.hidden) button.innerHTML = `Skip ${esc(marker.type)}<kbd class="key-hint" aria-hidden="true">Enter</kbd>`;
 }
-function activeMarker(position, types) {
-  return (library.markers?.[current?.id] || []).find(s => (!types || types.includes(s.type)) && position >= s.start && position < s.end);
+function activeMarker(position) {
+  return (library.markers?.[current?.id] || []).find(s => position >= s.start && position < s.end);
 }
 function openPanel(name) {
   sidePanel = sidePanel === name ? null : name;

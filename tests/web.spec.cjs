@@ -541,12 +541,25 @@ test('receiver saves manual episode sections, maps the season and removes marker
     await expect(autoSkip).not.toBeChecked();
     await autoSkip.check();
     await expect.poll(() => JSON.parse(db.prepare('SELECT data FROM user_state WHERE user_id = ?').get(userId).data).preferences.autoSkip).toBe(true);
-    await seek(1);
-    // The helper above paused the element directly, so the play intent is still on: start it the same way.
-    await page.locator('video').evaluate(v => v.play());
-    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThanOrEqual(3);
+    // Keep play intent on and sample the real media clock as soon as it reaches the marker.
+    const playUntil = time => page.locator('video').evaluate((v, time) => new Promise((resolve, reject) => {
+      const sample = () => {
+        if (v.currentTime < time) return;
+        v.removeEventListener('timeupdate', sample);
+        v.pause();
+        resolve(v.currentTime);
+      };
+      v.addEventListener('timeupdate', sample);
+      v.play().catch(reject);
+    }), time);
+    await seek(2);
+    expect(await playUntil(2.2)).toBeLessThan(3);
+    await expect(page.locator('#skip-segment')).toBeVisible();
+    await seek(0);
+    expect(await playUntil(1.2)).toBeGreaterThanOrEqual(3);
     await expect(page.locator('#skip-segment')).toBeHidden();
-    await page.locator('video').evaluate(v => v.pause());
+    await seek(0);
+    expect(await playUntil(1.2)).toBeLessThan(3);
     const removal = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/segments/remove'));
     await page.getByRole('button', { name: 'Remove intro marker', exact: true }).click();
     const removed = await removal;

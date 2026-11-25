@@ -23,12 +23,13 @@ export function groupTitles(items) {
 
 /** @param {number} position @param {number} duration */
 export function reachedPlaybackEnd(position, duration) {
-  return duration > 0 && position >= duration - Math.min(10, duration * .05);
+  return Number.isFinite(duration) && duration > 0 && Number.isFinite(position)
+    && position >= duration - Math.min(10, duration * .05);
 }
 
 /** @param {number} position @param {number} duration @param {{type: string, start: number}[]} markers */
 export function reachedOutro(position, duration, markers) {
-  return duration > 0 && markers.some(marker => marker.type === 'outro'
+  return Number.isFinite(duration) && duration > 0 && Number.isFinite(position) && markers.some(marker => marker.type === 'outro'
     && marker.start > duration / 2 && marker.start < duration && position >= marker.start);
 }
 
