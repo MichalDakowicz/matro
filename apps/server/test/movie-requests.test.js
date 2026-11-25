@@ -7,6 +7,7 @@ const { generateKeyPairSync } = require('node:crypto');
 const { setTimeout: delay } = require('node:timers/promises');
 const { createApp } = require('../../../packages/core/server');
 const { createFcm } = require('../../../packages/core/server/fcm');
+const { sessionHash } = require('../../../packages/core/server/auth');
 
 async function until(check) {
   for (let i = 0; i < 100; i++) {
@@ -114,7 +115,13 @@ test('movie requests stay within their account roles and send one private alert 
   await until(() => instance.db.prepare('SELECT notify_after FROM movie_request_push WHERE request_id = ?').get(cancelled.id)?.notify_after > Date.now());
   assert.equal((await request(viewer, `${form}/${cancelled.id}`, 'DELETE')).status, 200);
   assert.equal(instance.db.prepare('SELECT COUNT(*) AS count FROM movie_request_push').get().count, 0);
-  assert.equal((await request(head, '/api/logout', 'POST')).status, 200);
+  // Changing the password rotates the session; the phone's alert registration must follow it.
+  const changed = (await request(head, '/api/me/password', 'POST', { current: 'test password', password: 'another test password' })).body.token;
+  assert.ok(changed && changed !== head);
+  assert.equal((await request(head, inbox)).status, 401);
+  assert.deepEqual(instance.db.prepare('SELECT id, session_hash AS hash FROM movie_request_devices').all().map(row => ({ ...row })), [{ id: registration, hash: sessionHash(changed) }]);
+  assert.equal((await request(changed, inbox)).status, 200);
+  assert.equal((await request(changed, '/api/logout', 'POST')).status, 200);
   assert.equal(instance.db.prepare('SELECT COUNT(*) AS count FROM movie_request_devices').get().count, 0);
 
   // A request written by an older server can be removed before this server receives its first new request.

@@ -28,6 +28,7 @@ function createAuth(db) {
     slide: db.prepare('UPDATE sessions SET expires = ? WHERE token_hash = ?'),
     drop: db.prepare('DELETE FROM sessions WHERE token_hash = ?'),
     dropUser: db.prepare('DELETE FROM sessions WHERE user_id = ?'),
+    dropOthers: db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?'),
     expired: db.prepare('DELETE FROM sessions WHERE expires < ?')
   };
   return {
@@ -64,7 +65,8 @@ function createAuth(db) {
       return { id: row.id, username: row.username, role: row.role };
     },
     destroy(token) { if (token) q.drop.run(sha(token)); },
-    destroyAll(userId) { q.dropUser.run(userId); }
+    destroyAll(userId) { q.dropUser.run(userId); },
+    destroyOthers(userId, token) { q.dropOthers.run(userId, sha(token)); }
   };
 }
 module.exports = { createAuth, hashPassword, verifyPassword, sessionHash: sha };

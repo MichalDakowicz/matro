@@ -9,8 +9,8 @@ function register(app) {
   const count = db.prepare('SELECT COUNT(*) AS n FROM users');
   const byId = db.prepare('SELECT * FROM users WHERE id = ?');
   const users = createUsers(db, auth);
-  const startSession = (ctx, user) => {
-    const token = auth.create(user.id), maxAge = 30 * 86400;
+  const startSession = (ctx, user, existing) => {
+    const token = existing ?? auth.create(user.id), maxAge = 30 * 86400;
     ctx.res.setHeader('Set-Cookie', `matro_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${ctx.secure ? '; Secure' : ''}`);
     return ctx.req.headers['x-matro-client'] === 'native' ? token : undefined;
   };
@@ -67,9 +67,8 @@ function register(app) {
     const user = byId.get(ctx.user.id);
     if (!(await auth.check(user.username, body.current))) throw new HttpError(403, 'Current password is wrong.');
     const { password } = validateCredentials(user.username, body.password);
-    await users.setPassword(user.id, password);
     // Other devices sign out; this one gets a fresh session. The native app keeps its session as a bearer token, so it is returned.
-    const token = startSession(ctx, user);
+    const token = startSession(ctx, user, await users.setPassword(user.id, password, ctx.token));
     return token ? { token } : undefined;
   });
 }
