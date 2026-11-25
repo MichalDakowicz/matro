@@ -15,14 +15,35 @@ const { createPreviews } = require('./previews.cjs');
 const { createSegments } = require('./segments.cjs');
 const { createSegmentScheduler, mergeMarkers } = require('./segment-scheduler.cjs');
 const { readEnv, credentials, createMetadata, cleanQuery, yearOf } = require('./metadata.cjs');
+const { findUpdate } = require('./update-check.cjs');
 const previews = createPreviews();
 protocol.registerSchemesAsPrivileged([{ scheme: 'matro', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 let win, streams, storage, segments, scanner, metadata, torrents, upgrades, embeddedSubtitles;
 if (!app.isPackaged && process.env.MATRO_USER_DATA) app.setPath('userData', path.resolve(process.env.MATRO_USER_DATA));
-let state = { folders: [], items: [], progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 } };
+let state = { folders: [], items: [], progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 }, checkForUpdates: false };
 let writeQueue = Promise.resolve();
 let scanQueue = Promise.resolve();
+let updateRequest;
 function persist() { const contents = JSON.stringify(state); writeQueue = writeQueue.catch(() => {}).then(async () => { await fs.writeFile(storage + '.tmp', contents); await fs.rename(storage + '.tmp', storage); }); return writeQueue; }
+async function offerUpdate() {
+  if (state.checkForUpdates !== true || updateRequest) return;
+  const request = updateRequest = new AbortController();
+  try {
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(10000)]);
+    const release = await findUpdate(app.getVersion(), (url, options) => net.fetch(url, options), signal);
+    if (!release || signal.aborted || win.isDestroyed()) return;
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'info', title: 'Matro update', message: `Matro ${release.version} is available.`,
+      detail: 'Open the GitHub release page to download the installer.',
+      buttons: ['Open release page', 'Later'], defaultId: 1, cancelId: 1, signal: request.signal
+    });
+    if (response === 0 && !request.signal.aborted) await shell.openExternal(release.url);
+  } catch {
+    // A later launch can retry when GitHub or the browser is unavailable.
+  } finally {
+    if (updateRequest === request) updateRequest = null;
+  }
+}
 const find = id => { const item = state.items.find(i => i.id === id); if (!item) throw new Error('Media is no longer in the library.'); return item; };
 function handle(channel, fn) { ipcMain.handle(channel, (event, ...args) => { if (event.sender !== win.webContents || !event.senderFrame?.url.startsWith('matro://app/')) throw new Error('Untrusted caller'); return fn(...args); }); }
 async function downloadArtwork(items) {
@@ -144,7 +165,7 @@ app.whenReady().then(async () => {
   });
   win = new BrowserWindow({ width: 1440, height: 940, minWidth: 900, minHeight: 640, backgroundColor: '#0a0a0b', title: 'Matro', icon: path.join(__dirname, '../../../assets/icon.png'), frame: false, show: false, webPreferences: { preload: path.join(__dirname, '../../../apps/desktop/preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false } });
   // Open maximized, shown only once the first frame is ready so the window never flashes at its default size.
-  win.once('ready-to-show', () => { win.maximize(); win.show(); });
+  win.once('ready-to-show', () => { win.maximize(); win.show(); void offerUpdate(); });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
   // Page zoom: Ctrl + / Ctrl = zoom in (the default menu only binds Ctrl+Shift+=), Ctrl - out, Ctrl 0 reset.
@@ -165,6 +186,19 @@ app.whenReady().then(async () => {
   win.on('leave-full-screen', () => win.webContents.send('window:fullscreen', false));
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   scanner = createSegmentScheduler({ getState: () => state, engine: segments, persist, onUpdate: update => { if (!win.isDestroyed()) win.webContents.send('media:segments-progress', update); } });
+  handle('desktop:updates-set', async enabled => {
+    if (typeof enabled !== 'boolean') throw new Error('Invalid update setting.');
+    const previous = state.checkForUpdates === true;
+    if (enabled === previous) return enabled;
+    state.checkForUpdates = enabled;
+    if (!enabled) {
+      updateRequest?.abort();
+      updateRequest = null;
+    }
+    try { await persist(); } catch (error) { state.checkForUpdates = previous; throw error; }
+    if (enabled) void offerUpdate();
+    return enabled;
+  });
   handle('downloads:series-search', options => torrents.seriesSearch(options));
   handle('downloads:series-releases', options => torrents.seriesReleases(options));
   handle('downloads:series-source', id => shell.openExternal(torrents.seriesSource(id)));
@@ -314,4 +348,4 @@ app.whenReady().then(async () => {
   void metadata.sync(state.items);
 });
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => { torrents?.close(); streams?.close(); previews.close(); scanner?.close(); remote.close(); });
+app.on('before-quit', () => { updateRequest?.abort(); torrents?.close(); streams?.close(); previews.close(); scanner?.close(); remote.close(); });
