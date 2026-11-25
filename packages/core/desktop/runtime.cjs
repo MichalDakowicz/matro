@@ -93,7 +93,8 @@ async function scanFolders(roots, fromWatcher) {
   }));
   const previous = new Map(state.items.map(item => [item.id, item]));
   for (const { root, items, unavailable } of results) if (items && state.folders.includes(root)) {
-    if (fromWatcher && !items.length) continue;
+    // A change event that leaves nothing behind is trusted only when the whole folder was read.
+    if (fromWatcher && !items.length && unavailable.length) continue;
     for (const item of items) item.added = previous.get(item.id)?.added ?? item.added;
     state.items = state.items.filter(i => i.root !== root || unavailable.some(dir => contains(dir, i.path))).concat(items);
   }

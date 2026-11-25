@@ -785,6 +785,22 @@ test('the next episode is preloaded near the end and starts without waiting', as
   } finally { await app.close(); }
 });
 
+test('removing the last file from a watched folder removes its title', async () => {
+  const f = await fixtures();
+  const root = await fs.mkdtemp(path.join(f.dir, 'watch-last-')), media = path.join(root, 'Movies'), profile = path.join(root, 'profile');
+  await fs.mkdir(media, { recursive: true });
+  await fs.mkdir(profile);
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, folders: [media] }));
+  await fs.copyFile(f.mkv, path.join(media, 'Only Movie.mkv'));
+  const app = await electron.launch(launchOptions(profile));
+  try {
+    const page = await app.firstWindow();
+    await expect(page.getByRole('button', { name: 'Open Only Movie', exact: true })).toBeVisible();
+    await fs.rm(path.join(media, 'Only Movie.mkv'));
+    await expect(page.getByRole('button', { name: 'Open Only Movie', exact: true })).toHaveCount(0);
+  } finally { await app.close(); }
+});
+
 test('finished files enter watched folders without Rescan and pending files stay hidden', async () => {
   const f = await fixtures();
   const root = await fs.mkdtemp(path.join(f.dir, 'watch-root-'));
