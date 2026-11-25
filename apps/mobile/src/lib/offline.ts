@@ -1,218 +1,325 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Directory, File, Paths } from 'expo-file-system';
 import { fetch } from 'expo/fetch';
-import { inspect, mediaHeaders, request, ServerError, type Info, type Item, type Library, type MatroUser } from './server';
+import { fetchWithDeadline, inspect, mediaHeaders, request, ServerError, type Info, type Item, type Library, type MatroUser } from './server';
 import { progressRecovery, recoveryScope } from './storage';
 import { activeOfflineAccountKey as active, offlineAccount as account, offlineLibraryKey as libraryKey, offlineMediaPrefix as prefix } from './offline-storage';
 import { holdService, offlineNotice } from './offline-notifications';
 
 const PIECE = 8 * 1024 * 1024;
-// Pieces fetched ahead of the one being written, so the network never idles while the disk is busy.
 const AHEAD = 3;
+const SLOTS = 2;
+const PREPARATION_IDLE_MS = 30 * 60 * 1000;
+const RETRY_DELAY_MS = 30_000;
 const recordKey = (scope: string, id: string) => prefix(scope) + id;
-const read = async <T>(key: string): Promise<T | null> => {
-  const raw = await AsyncStorage.getItem(key);
+const decode = <T>(raw: string | null): T | null => {
   try { return raw ? JSON.parse(raw) as T : null; } catch { return null; }
 };
+const read = async <T>(key: string) => decode<T>(await AsyncStorage.getItem(key));
 
-// `paused` is set only when the user pauses; any other incomplete record was interrupted and resumes by itself.
-export type SavedMedia = { id: string; title: string; uri: string; size: number; have: number; complete: boolean; paused?: boolean; version: string; info: Info; text: Record<string, string> };
-// `prepared` is the server's transcode progress (0-1) while it converts the file, null once unknown or finished.
-export type OfflineJob = { id: string; title: string; have: number; size: number; prepared: number | null; controller: AbortController; task: Promise<void> };
-type Preparation = { state: 'preparing'; progress?: number } | { state: 'ready'; size: number; type: string; version: string };
-const fatal = (message: string) => Object.assign(new Error(message), { fatal: true });
-const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-// Network drops and 5xx answers are retried with backoff; anything the server decided on (4xx, changed file) is not.
+type Media = { uri: string; version: string; info: Info; text: Record<string, string> };
+type RecordState = {
+  id: string; title: string; size: number; have: number; complete: boolean; paused?: boolean;
+  state?: 'queued' | 'preparing' | 'downloading'; prepared?: number; progressAt?: number; error?: string; retryAt?: number;
+};
+export type OfflineRecord = RecordState & Partial<Media>;
+export type SavedMedia = RecordState & Media;
+type OfflineJob = { id: string; title: string; have: number; size: number; prepared: number | null; controller: AbortController; task: Promise<void> };
+type Preparation = { state: 'preparing'; progress?: number | null } | { state: 'ready'; size: number; type: string; version: string };
+
+class RetryableDownloadError extends Error {}
+class DiskFullError extends Error {
+  constructor() { super('Not enough storage to save this title. Free up space, then resume.'); }
+}
+const diskFull = (error: unknown) => /ENOSPC|no space left on device|not enough (?:disk )?(?:space|storage)|out of (?:disk )?space/i.test(String(error));
+const wait = (ms: number, signal: AbortSignal) => new Promise<void>(resolve => {
+  if (signal.aborted) { resolve(); return; }
+  const finish = () => { clearTimeout(timer); signal.removeEventListener('abort', finish); resolve(); };
+  const timer = setTimeout(finish, ms);
+  signal.addEventListener('abort', finish);
+});
+
 async function retrying<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
   for (let tries = 0;; tries++) {
+    if (signal.aborted) throw new Error('Download cancelled.');
     try { return await run(); }
     catch (error) {
-      const permanent = (error as { fatal?: boolean }).fatal || error instanceof ServerError && !!error.status && error.status < 500;
-      if (signal.aborted || permanent || tries >= 6) throw error;
-      await wait(Math.min(30000, 1500 * 2 ** tries));
+      if (signal.aborted || error instanceof ServerError && error.status && error.status < 500) throw error;
+      if (tries >= 6) throw new RetryableDownloadError(error instanceof Error ? error.message : 'Could not reach the server.');
+      await wait(Math.min(RETRY_DELAY_MS, 1500 * 2 ** tries), signal);
     }
   }
 }
+
 const jobs = new Map<string, OfflineJob>();
+const holds = new Map<string, () => void>();
+const retryDue = new Map<string, number>();
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const observers = new Set<() => void>();
 const changed = () => { observers.forEach(listener => listener()); };
 export function watchOffline(listener: () => void) { observers.add(listener); return () => { observers.delete(listener); }; }
-export function activeDownloads(base: string, user: MatroUser) {
-  const scope = prefix(account(base, user));
-  return [...jobs.entries()].filter(([key]) => key.startsWith(scope)).map(([, job]) => job);
+
+function scopedJobs(scope: string) {
+  return [...jobs.entries()].filter(([key]) => key.startsWith(prefix(scope))).map(([, job]) => job);
 }
+export const activeDownloads = (base: string, user: MatroUser) => scopedJobs(account(base, user));
+
 export async function rememberLibrary(base: string, data: Library) {
   const scope = account(base, data.user);
   await AsyncStorage.setItem(libraryKey(scope), JSON.stringify(data));
   await AsyncStorage.setItem(active(base), scope);
 }
 export const forgetOfflineAccount = (base: string) => AsyncStorage.removeItem(active(base));
-export async function savedTitles(base: string, user: MatroUser): Promise<SavedMedia[]> {
-  const scope = prefix(account(base, user));
-  const keys = (await AsyncStorage.getAllKeys()).filter(key => key.startsWith(scope));
-  const entries = await Promise.all(keys.map(key => read<SavedMedia>(key)));
-  return entries.filter((entry): entry is SavedMedia => !!entry);
+
+async function recordsFor(scope: string): Promise<OfflineRecord[]> {
+  const keys = (await AsyncStorage.getAllKeys()).filter(key => key.startsWith(prefix(scope)));
+  if (!keys.length) return [];
+  return (await AsyncStorage.multiGet(keys)).flatMap(([, raw]) => decode<OfflineRecord>(raw) ?? []);
 }
+
+export function savedBytes(record: OfflineRecord) {
+  if (!record.uri) return 0;
+  const file = new File(record.uri);
+  return file.exists ? file.size : 0;
+}
+export const isSaved = (record: OfflineRecord): record is SavedMedia =>
+  !!(record.complete && record.size > 0 && record.info && record.text && record.uri && record.version && savedBytes(record) === record.size);
+export const savedTitles = (base: string, user: MatroUser) => recordsFor(account(base, user));
 export async function savedTitle(base: string, user: MatroUser, id: string) {
-  const record = await read<SavedMedia>(recordKey(account(base, user), id));
-  return record?.complete && new File(record.uri).exists ? record : undefined;
+  const record = await read<OfflineRecord>(recordKey(account(base, user), id));
+  return record && isSaved(record) ? record : undefined;
 }
-export async function offlineLibrary(base: string): Promise<Library | null> {
+export async function offlineLibrary(base: string): Promise<(Library & { catalogIds: string[] }) | null> {
   const scope = await AsyncStorage.getItem(active(base));
   const data = scope ? await read<Library>(libraryKey(scope)) : null;
   if (!data || scope !== account(base, data.user)) return null;
-  const ids = new Set((await savedTitles(base, data.user)).filter(entry => entry.complete && new File(entry.uri).exists).map(entry => entry.id));
+  const ids = new Set((await savedTitles(base, data.user)).filter(isSaved).map(entry => entry.id));
   const items = data.items.filter(item => ids.has(item.id));
   const progress = await progressRecovery.restore(recoveryScope(base, data.user), data.progress, items.map(item => item.id));
-  return { ...data, items, progress, folders: [], queue: data.queue.filter(id => ids.has(id)) };
+  return { ...data, items, progress, folders: [], queue: data.queue.filter(id => ids.has(id)), catalogIds: data.items.map(item => item.id) };
 }
 
-export function pauseOffline(base: string, user: MatroUser, id: string) {
-  const key = recordKey(account(base, user), id), job = jobs.get(key);
-  if (!job) return;
-  job.controller.abort();
-  void job.task.catch(() => {}).then(async () => {
-    const record = await read<SavedMedia>(key);
-    if (record && !record.complete) await AsyncStorage.setItem(key, JSON.stringify({ ...record, paused: true }));
-    changed();
-  });
+// Serialize queue edits and slot assignment. Transfer jobs write only their own records.
+let queueEdit = Promise.resolve();
+function editQueue(run: () => Promise<void>) {
+  const next = queueEdit.then(run);
+  queueEdit = next.catch(() => {});
+  return next;
 }
-// Titles waiting for a free slot in a batch (a whole season at once), so the Saved screen can list them.
-const queued = new Map<string, { id: string; title: string }>();
-export function queuedDownloads(base: string, user: MatroUser) {
-  const scope = prefix(account(base, user));
-  return [...queued.entries()].filter(([key]) => key.startsWith(scope)).map(([, entry]) => entry);
-}
-export function cancelQueued(base: string, user: MatroUser, id: string) {
-  if (queued.delete(recordKey(account(base, user), id))) changed();
-}
-// Downloads several titles, a few at a time: the server converts files before sending, so more than two at once only queues there.
-export async function saveOfflineBatch(base: string, user: MatroUser, items: Item[], nameOf: (item: Item) => string, slots = 2) {
-  const scope = account(base, user), waiting = items.filter(item => !jobs.has(recordKey(scope, item.id)));
-  for (const item of waiting) queued.set(recordKey(scope, item.id), { id: item.id, title: nameOf(item) });
-  changed();
-  const release = holdService(); // the foreground service can't be restarted from the background, so keep it between titles
-  let failure: unknown;
+
+async function drain(base: string, scope: string, retry = false) {
   try {
-    await Promise.all(Array.from({ length: Math.min(slots, waiting.length) }, async () => {
-      for (let item; (item = waiting.shift());) {
-        if (!queued.delete(recordKey(scope, item.id))) continue; // cancelled while waiting
-        changed();
-        try { await saveOffline(base, user, item, nameOf(item)); } catch (error) { failure ??= error; }
-      }
-    }));
-  } finally { for (const item of waiting) queued.delete(recordKey(scope, item.id)); release(); changed(); }
-  if (failure) throw failure;
-}
-// Downloads the app was interrupted in (killed, no network) continue on their own; only an explicit pause stays paused.
-export async function resumeInterrupted(base: string, user: MatroUser, items: Item[], nameOf: (item: Item) => string) {
-  const scope = account(base, user), byId = new Map(items.map(item => [item.id, item]));
-  const resumable = (await savedTitles(base, user)).filter(record => !record.complete && !record.paused && !jobs.has(recordKey(scope, record.id)) && !queued.has(recordKey(scope, record.id)));
-  const list = resumable.flatMap(record => byId.get(record.id) ?? []);
-  if (list.length) void saveOfflineBatch(base, user, list, nameOf).catch(() => {});
-}
-export async function removeOffline(base: string, user: MatroUser, id: string) {
-  const key = recordKey(account(base, user), id);
-  queued.delete(key);
-  jobs.get(key)?.controller.abort();
-  await jobs.get(key)?.task.catch(() => {});
-  const record = await read<SavedMedia>(key);
-  if (record) {
-    const file = new File(record.uri);
-    if (file.exists) file.delete();
-    await AsyncStorage.removeItem(key);
+    const pending = (await recordsFor(scope)).filter(record => !record.complete && !record.paused && !jobs.has(recordKey(scope, record.id)));
+    const ready = pending.filter(record => !record.retryAt || retry && record.retryAt <= Date.now());
+    const available = SLOTS - scopedJobs(scope).length;
+    for (const record of ready.slice(0, available)) {
+      if (!holds.has(scope)) holds.set(scope, holdService()); // Android must keep the service alive between titles.
+      startDownload(base, scope, record);
+    }
+    const nextRetry = pending.reduce((next, record) => record.retryAt && !jobs.has(recordKey(scope, record.id)) ? Math.min(next, record.retryAt) : next, Infinity);
+    clearTimeout(retryTimers.get(scope)); retryTimers.delete(scope);
+    if (nextRetry < Infinity) {
+      retryDue.set(scope, nextRetry);
+      // Keep the service alive and retry on time even when the app stays in the background.
+      if (!holds.has(scope)) holds.set(scope, holdService());
+      retryTimers.set(scope, setTimeout(() => { retryTimers.delete(scope); void editQueue(() => drain(base, scope, true)).catch(() => {}); }, Math.max(0, nextRetry - Date.now())));
+    } else retryDue.delete(scope);
+  } finally {
+    if (!scopedJobs(scope).length && !retryTimers.has(scope)) { holds.get(scope)?.(); holds.delete(scope); }
     changed();
   }
 }
 
-export function saveOffline(base: string, user: MatroUser, item: Item, title: string) {
-  const scope = account(base, user), key = recordKey(scope, item.id);
-  const existing = jobs.get(key); if (existing) return existing.task;
-  const controller = new AbortController(), { signal } = controller;
-  const job: OfflineJob = { id: item.id, title, have: 0, size: 0, prepared: null, controller, task: Promise.resolve() };
-  const notice = offlineNotice(key, title);
-  const route = `/api/items/${encodeURIComponent(item.id)}`;
+export function resumeInterrupted(base: string, user: MatroUser) {
+  return editQueue(() => drain(base, account(base, user), true));
+}
+export function retryInterrupted(base: string, user: MatroUser) {
+  const scope = account(base, user);
+  if ((retryDue.get(scope) ?? Infinity) <= Date.now() && scopedJobs(scope).length < SLOTS) {
+    return resumeInterrupted(base, user);
+  }
+}
+
+export function saveOfflineBatch(base: string, user: MatroUser, items: Item[], nameOf: (item: Item) => string) {
+  const scope = account(base, user), release = holdService();
+  return editQueue(async () => {
+    const records = new Map((await recordsFor(scope)).map(record => [record.id, record]));
+    const entries = new Map<string, string>();
+    for (const item of items) {
+      const key = recordKey(scope, item.id), previous = records.get(item.id);
+      if (jobs.has(key) || previous && isSaved(previous)) continue;
+      const record: OfflineRecord = {
+        have: 0, size: 0, ...previous, id: item.id, title: nameOf(item), complete: false,
+        state: 'queued', paused: false, error: undefined, retryAt: undefined, prepared: undefined, progressAt: undefined,
+      };
+      entries.set(key, JSON.stringify(record));
+    }
+    if (entries.size) await AsyncStorage.multiSet([...entries]);
+    await drain(base, scope);
+  }).finally(release);
+}
+export const saveOffline = (base: string, user: MatroUser, item: Item, title: string) =>
+  saveOfflineBatch(base, user, [item], () => title);
+
+export function pauseOffline(base: string, user: MatroUser, id: string) {
+  return editQueue(async () => {
+    const scope = account(base, user), key = recordKey(scope, id), job = jobs.get(key);
+    job?.controller.abort();
+    await job?.task;
+    const record = await read<OfflineRecord>(key);
+    if (record && !record.complete) await AsyncStorage.setItem(key, JSON.stringify({ ...record, paused: true, error: undefined, retryAt: undefined }));
+    if (holds.has(scope)) await drain(base, scope); else changed();
+  });
+}
+export function removeOffline(base: string, user: MatroUser, id: string) {
+  return editQueue(async () => {
+    const scope = account(base, user), key = recordKey(scope, id), job = jobs.get(key);
+    job?.controller.abort();
+    await job?.task;
+    const record = await read<OfflineRecord>(key);
+    if (record?.uri) { const file = new File(record.uri); if (file.exists) file.delete(); }
+    await AsyncStorage.removeItem(key);
+    if (holds.has(scope)) await drain(base, scope); else changed();
+  });
+}
+
+function startDownload(base: string, scope: string, record: OfflineRecord) {
+  const key = recordKey(scope, record.id), controller = new AbortController(), { signal } = controller;
+  const job: OfflineJob = { id: record.id, title: record.title, have: 0, size: 0, prepared: record.prepared ?? null, controller, task: Promise.resolve() };
+  const notice = offlineNotice(key, record.title);
+  const route = `/api/items/${encodeURIComponent(record.id)}`;
+  const persist = () => AsyncStorage.setItem(key, JSON.stringify(record));
   async function download() {
-    const headers = await mediaHeaders(base);
-    const previous = await read<SavedMedia>(key);
-    if (previous?.complete && new File(previous.uri).exists) return;
-    notice.preparing(null);
-    const started = Date.now();
+    record.state = 'preparing';
+    record.progressAt ??= Date.now();
+    await persist();
+    notice.preparing(job.prepared);
     let preparation: Preparation;
     for (;;) {
-      if (signal.aborted) return;
-      preparation = await retrying(signal, () => request(base, route + '/offline'));
-      if (preparation.state === 'ready') break;
-      if (preparation.state !== 'preparing' || Date.now() - started > 30 * 60 * 1000) throw new Error('The server did not finish preparing this title.');
-      job.prepared = typeof preparation.progress === 'number' ? preparation.progress : null;
+      preparation = await retrying(signal, () => request(base, route + '/offline', { signal }));
+      if (preparation?.state === 'ready') break;
+      if (preparation?.state !== 'preparing') throw new Error('Invalid preparation status.');
+      const progress = preparation.progress;
+      if (typeof progress === 'number' && Number.isFinite(progress) && progress !== record.prepared) {
+        if (progress > (record.prepared ?? 0)) record.progressAt = Date.now();
+        record.prepared = progress;
+        await persist();
+      }
+      if (Date.now() - record.progressAt >= PREPARATION_IDLE_MS) {
+        throw new RetryableDownloadError('Server preparation has not advanced for 30 minutes.');
+      }
+      job.prepared = record.prepared ?? null;
       notice.preparing(job.prepared); changed();
-      await wait(2000);
+      await wait(2000, signal);
     }
-    job.prepared = null;
+
     const { size, version, type } = preparation;
     if (!Number.isSafeInteger(size) || size < 1 || !/^[a-f0-9]{64}$/.test(version)) throw new Error('Invalid prepared file.');
-    const info = await inspect(base, item.id), text: Record<string, string> = {};
-    const captions: Info['embedded'] = [], uploads: Info['uploaded'] = [];
-    for (const track of info.embedded) {
-      if (signal.aborted) return;
-      if (!track.text || track.bitmap) continue;
-      const response = await fetch(base + route + '/subtitles/e' + track.index, { headers, signal });
-      if (response.ok) { text[track.index] = await response.text(); captions.push(track); }
-    }
-    for (const track of info.uploaded) {
-      if (signal.aborted) return;
-      const response = await fetch(base + route + '/subtitles/u' + track.id, { headers, signal });
-      if (response.ok) { text[10000 + track.id] = await response.text(); uploads.push(track); }
-    }
+    Object.assign(record, { state: 'downloading', prepared: undefined, progressAt: undefined });
     const directory = Array.from(scope, character => character.charCodeAt(0).toString(16).padStart(2, '0')).join('');
     const dir = new Directory(Paths.document, 'matro-saved', ...(directory.match(/.{1,100}/g) || []));
-    dir.create({ idempotent: true, intermediates: true });
-    const file = new File(dir, `${encodeURIComponent(item.id)}-${version}.${type === 'video/webm' ? 'webm' : 'mp4'}`);
-    if (previous && previous.uri !== file.uri) { const old = new File(previous.uri); if (old.exists) old.delete(); }
-    const previousSize = file.exists ? file.size : 0;
-    if (!file.exists || previousSize > size || (previousSize !== size && previousSize % PIECE !== 0)) file.create({ overwrite: true });
-    const record: SavedMedia = { id: item.id, title, uri: file.uri, size, have: file.size, version, info: { ...info, embedded: captions, uploaded: uploads, audio: info.audio.slice(0, 1) }, text, complete: false };
-    const persist = async () => {
-      await AsyncStorage.setItem(key, JSON.stringify(record));
-      Object.assign(job, { have: record.have, size }); changed();
-      if (!record.complete) notice.progress(record.have, size);
-    };
+    const file = new File(dir, `${encodeURIComponent(record.id)}-${version}.${type === 'video/webm' ? 'webm' : 'mp4'}`);
+    if (record.uri && record.uri !== file.uri) { const old = new File(record.uri); if (old.exists) old.delete(); }
+    const existing = file.exists ? file.size : 0;
+    const have = existing <= size && (existing === size || existing % PIECE === 0) ? existing : 0;
+    const reserved = [...jobs.values()].reduce((bytes, other) => other === job ? bytes : bytes + other.size - other.have, 0);
+    const reclaimable = have === 0 ? existing : 0;
+    if (have < size && size - have > Paths.availableDiskSpace + reclaimable - reserved) throw new DiskFullError();
+    Object.assign(job, { have, size, prepared: null });
+
+    const headers = await mediaHeaders(base);
+    const info = await retrying(signal, () => inspect(base, record.id, signal)), text: Record<string, string> = {};
+    const captions: Info['embedded'] = [], uploads: Info['uploaded'] = [];
+    const fetchBody = <T>(path: string, readBody: (response: Awaited<ReturnType<typeof fetch>>, touch: () => void) => Promise<T>, extraHeaders = {}) =>
+      retrying(signal, () => fetchWithDeadline(
+        requestSignal => fetch(base + route + path, { headers: { ...headers, ...extraHeaders }, signal: requestSignal }),
+        readBody, { signal },
+      ));
+    const caption = (track: string) => fetchBody('/subtitles/' + track, async response => {
+      if (!response.ok) throw new ServerError(`Could not download subtitles (HTTP ${response.status}).`, response.status);
+      return response.text();
+    }).catch(error => {
+      if (error instanceof ServerError && error.status === 404) return undefined; // The track was removed after inspection.
+      throw error;
+    });
+    for (const track of info.embedded) {
+      if (!track.text || track.bitmap) continue;
+      const vtt = await caption('e' + track.index);
+      if (vtt !== undefined) { text[track.index] = vtt; captions.push(track); }
+    }
+    for (const track of info.uploaded) {
+      const vtt = await caption('u' + track.id);
+      if (vtt !== undefined) { text[10000 + track.id] = vtt; uploads.push(track); }
+    }
+    if (signal.aborted) return;
+    Object.assign(record, {
+      uri: file.uri, size, have, version, info: { ...info, embedded: captions, uploaded: uploads, audio: info.audio.slice(0, 1) }, text,
+      error: undefined, retryAt: undefined,
+    });
+    // Save the path before writing so a kill or disk error leaves a removable partial file.
     await persist();
+    dir.create({ idempotent: true, intermediates: true });
+    if (!file.exists || have !== existing) file.create({ overwrite: true });
+    notice.progress(have, size); changed();
+
     const fetchPiece = (start: number) => {
       const end = Math.min(start + PIECE, size) - 1;
-      const piece = retrying(signal, async () => {
-        const response = await fetch(base + route + '/offline/file?version=' + version, { headers: { ...headers, range: `bytes=${start}-${end}` }, signal });
+      const piece = fetchBody('/offline/file?version=' + version, async (response, touch) => {
+        if (response.status === 401) throw new ServerError('Sign in again to finish the download.', 401);
+        if (response.status === 409) throw new ServerError('The prepared file changed. Retry the download.', 409);
+        if (!response.ok) throw new ServerError(`Could not download media (HTTP ${response.status}).`, response.status);
         if (response.status !== 206 || response.headers.get('content-range') !== `bytes ${start}-${end}/${size}`) {
-          if (response.status === 401) throw new ServerError('Sign in again to finish the download.', 401);
-          throw fatal('The prepared file changed. Retry the download.');
+          throw new ServerError('The server returned an invalid byte range.', 422);
         }
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        if (bytes.length !== end - start + 1) throw new Error('The server stopped sending the file.');
+        // Read chunk by chunk so the body deadline is an idle limit: a slow link may take minutes per piece.
+        const bytes = new Uint8Array(end - start + 1), reader = response.body?.getReader();
+        let got = 0;
+        if (!reader) { const whole = new Uint8Array(await response.arrayBuffer()); if (whole.length === bytes.length) bytes.set(whole); got = whole.length; }
+        for (;;) {
+          const chunk = await reader?.read();
+          if (!chunk || chunk.done) break;
+          if (got + chunk.value.length > bytes.length) throw new Error('The server sent too much data.');
+          bytes.set(chunk.value, got); got += chunk.value.length; touch();
+        }
+        if (got !== bytes.length) throw new Error('The server stopped sending the file.');
         return bytes;
-      });
-      piece.catch(() => {}); // a piece that fails while a later one is being written is reported when its turn comes
+      }, { range: `bytes=${start}-${end}` });
+      void piece.catch(() => {}); // A prefetched piece may fail before its turn to be written.
       return piece;
     };
     const ahead = new Map<number, Promise<Uint8Array>>();
-    for (let start = record.have; start < size; start = record.have) {
+    for (let start = have; start < size; start = record.have) {
       if (signal.aborted) return;
-      for (let next = start; next < Math.min(size, start + AHEAD * PIECE); next += PIECE) if (!ahead.has(next)) ahead.set(next, fetchPiece(next));
-      const bytes = await ahead.get(start)!.catch(error => { if (signal.aborted) return null; throw error; });
+      for (let next = start; next < Math.min(size, start + AHEAD * PIECE); next += PIECE) {
+        if (!ahead.has(next)) ahead.set(next, fetchPiece(next));
+      }
+      const bytes = await ahead.get(start)!;
       ahead.delete(start);
-      if (!bytes || signal.aborted) return;
+      if (signal.aborted) return;
       const writer = file.open();
       try { writer.offset = start; writer.writeBytes(bytes); } finally { writer.close(); }
-      record.have = Math.min(start + PIECE, size);
+      record.have = job.have = start + bytes.length;
       await persist();
+      notice.progress(record.have, size); changed();
     }
-    record.complete = true;
-    await persist();
+    if (signal.aborted) return;
+    await AsyncStorage.setItem(key, JSON.stringify({ ...record, complete: true, state: undefined }));
     notice.done();
   }
-  job.task = download().catch(error => { if (signal.aborted) notice.dismiss(); else { notice.failed(); throw error; } }).finally(() => {
-    if (signal.aborted) notice.dismiss();
-    jobs.delete(key); changed();
+
+  jobs.set(key, job);
+  job.task = download().catch(async error => {
+    if (signal.aborted) return;
+    const retry = error instanceof RetryableDownloadError;
+    record.error = diskFull(error) ? new DiskFullError().message : error instanceof Error ? error.message : 'Could not finish saving this title.';
+    record.paused = !retry;
+    record.retryAt = retry ? Date.now() + RETRY_DELAY_MS : undefined;
+    if (record.paused) notice.failed(record.error);
+    await persist();
+  }).catch(() => {}).finally(() => {
+    controller.abort(); // Cancel prefetched work if any piece failed.
+    notice.dismiss();
+    jobs.delete(key);
+    void editQueue(() => drain(base, scope)).catch(() => {});
   });
-  jobs.set(key, job); changed();
-  return job.task;
 }

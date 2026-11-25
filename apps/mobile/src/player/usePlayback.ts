@@ -7,20 +7,22 @@ import { isContinueDismissed } from '../../../../packages/core/client/watch-prog
 import { parseVtt, type Cue } from '../../../../packages/core/client/subtitles';
 import { downloadPlayback } from './diskBuffer';
 import { progressRecovery, recoveryScope } from '../lib/storage';
-import type { SavedMedia } from '../lib/offline';
+import { savedTitle, type SavedMedia } from '../lib/offline';
 
 export function usePlayback({ base, data, item, initialPosition, saved, offline = false, onEnd }: { base: string; data: Library; item: Item; initialPosition?: number; saved?: SavedMedia; offline?: boolean; onEnd: () => void }) {
   const initial = initialPosition ?? (data.progress[item.id]?.completed ? 0 : data.progress[item.id]?.position || 0);
   const pref = data.preferences.tracks?.[trackKey(item)];
   const [info, setInfo] = useState<Info | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState(''), [position, setPosition] = useState(initial), [buffered, setBuffered] = useState(initial), [playing, setPlaying] = useState(false), [caption, setCaption] = useState('');
+  const [savedCopy, setSavedCopy] = useState(saved);
   const [audio, setAudio] = useState<number | null>(null), [subtitle, setSubtitle] = useState<number | null>(null), [delay, setDelayValue] = useState(pref?.delay || 0), [subtitleSize, setSubtitleSizeValue] = useState(pref?.size || 1), [rate, setRate] = useState(1);
   const [session] = useState(() => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
   const choices = useRef({ audio, subtitle, delay, size: subtitleSize }), prefs = useRef<Preferences>(data.preferences), dataRef = useRef(data), infoRef = useRef<Info | null>(null), endRef = useRef(onEnd);
   const sourceReady = useRef(false), advanced = useRef(false), sampledPlayback = useRef(false), playbackStart = useRef<number | null>(null);
   const pendingStart = useRef<{ time: number; since: number } | null>(null);
   const replacement = useRef<Promise<void>>(Promise.resolve()), localSource = useRef(false);
+  const offlineRef = useRef(offline), recovering = useRef(false);
   const disk = useRef<{ uri: string; offset: number; audio: number | null; burn: number | null; delay: number } | null>(null), cancelDownload = useRef<(() => void) | null>(null);
-  dataRef.current = data; endRef.current = onEnd;
+  dataRef.current = data; endRef.current = onEnd; offlineRef.current = offline;
   const at = useRef(initial), offset = useRef(0), direct = useRef(false), replacing = useRef(true), mounted = useRef(true), intent = useRef(true), generation = useRef(0), subtitleRun = useRef(0), retries = useRef(0), moved = useRef(Date.now()), lastSaved = useRef(0), forceTranscode = useRef(false), cues = useRef<Cue[]>([]), prefTimer = useRef<ReturnType<typeof setTimeout> | null>(null), bitmapTimer = useRef<ReturnType<typeof setTimeout> | null>(null), rateRef = useRef(1);
   const player = useVideoPlayer(null, p => {
     p.timeUpdateEventInterval = .25;
@@ -57,8 +59,17 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     savedEntry.current = entry;
     try { await progressRecovery.write(recoveryScope(base, dataRef.current.user), item.id, entry); }
     catch { if (mounted.current) setError('Could not save playback recovery on this device. Check available storage.'); }
-    if (sync && !offline) await saveProgress(base, item.id, entry);
-  }, [base, item, offline]);
+    if (sync && !offlineRef.current) await saveProgress(base, item.id, entry);
+  }, [base, item]);
+  // A download may have finished after playback was opened.
+  const trySavedCopy = useCallback(async (run: number) => {
+    if (savedCopy) return false;
+    const copy = await savedTitle(base, dataRef.current.user, item.id).catch(() => undefined);
+    if (!mounted.current || run !== generation.current) return true;
+    if (!copy) return false;
+    setSavedCopy(copy);
+    return true;
+  }, [base, item.id, savedCopy]);
   const remember = useCallback(() => {
     const details = infoRef.current; if (!details) return;
     const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true }))];
@@ -70,7 +81,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   const loadText = useCallback(async (index: number | null) => {
     const run = ++subtitleRun.current; cues.current = []; setCaption('');
     if (index === null || infoRef.current?.embedded.find(t => t.index === index)?.bitmap) return;
-    if (saved) { cues.current = parseVtt(saved.text[index] || ''); return; }
+    if (savedCopy) { cues.current = parseVtt(savedCopy.text[index] || ''); return; }
     const headers = await mediaHeaders(base), route = index >= 10000 ? `u${index - 10000}` : `e${index}`;
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15000);
     try {
@@ -79,7 +90,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       const parsed = parseVtt(await response.text());
       if (mounted.current && run === subtitleRun.current) cues.current = parsed;
     } finally { clearTimeout(timer); }
-  }, [base, item.id, saved]);
+  }, [base, item.id, savedCopy]);
   const load = useCallback(async (position: number, shouldPlay = intent.current) => {
     const details = infoRef.current; if (!details) return;
     playbackStart.current = null;
@@ -87,12 +98,12 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     player.pause();
     if (!disk.current) { cancelDownload.current?.(); cancelDownload.current = null; }
     try {
-      const headers = saved ? undefined : await mediaHeaders(base), burn = details.embedded.find(t => t.index === choices.current.subtitle && t.bitmap)?.index ?? null;
+      const headers = savedCopy ? undefined : await mediaHeaders(base), burn = details.embedded.find(t => t.index === choices.current.subtitle && t.bitmap)?.index ?? null;
       const compatible = forceTranscode.current || (Platform.OS === 'ios' && item.format === 'WEBM') ? { ...details, directPlay: false } : details;
-      const source = saved ? { path: '', start: position, offset: 0 } : playbackPath(item.id, compatible, position, choices.current.audio, burn, choices.current.delay, session);
+      const source = savedCopy ? { path: '', start: position, offset: 0 } : playbackPath(item.id, compatible, position, choices.current.audio, burn, choices.current.delay, session);
       if (!mounted.current || run !== generation.current) return;
       const diskCopy = disk.current;
-      const local = saved ? { uri: saved.uri, offset: 0 } : diskCopy && position >= diskCopy.offset && diskCopy.audio === choices.current.audio && diskCopy.burn === burn && diskCopy.delay === choices.current.delay ? diskCopy : null;
+      const local = savedCopy ? { uri: savedCopy.uri, offset: 0 } : diskCopy && position >= diskCopy.offset && diskCopy.audio === choices.current.audio && diskCopy.burn === burn && diskCopy.delay === choices.current.delay ? diskCopy : null;
       const start = local ? position - local.offset : source.start;
       if (!local) { cancelDownload.current?.(); cancelDownload.current = null; disk.current = null; }
       // Native source replacements cannot be cancelled. Let an in-flight one
@@ -109,26 +120,35 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       replacement.current = apply;
       await apply;
       if (!mounted.current || run !== generation.current) return;
-      if (!local && headers) cancelDownload.current = downloadPlayback(base + source.path, headers, file => {
+      if (!local && headers && source.path.includes('/transcode?')) cancelDownload.current = downloadPlayback(base + source.path, headers, file => {
         if (!mounted.current || run !== generation.current) return;
         const saved = { uri: file, offset: source.offset, audio: choices.current.audio, burn, delay: choices.current.delay };
         disk.current = saved; setBuffered(details.duration);
         // Keep the current decoder running. Use the completed copy on the next
         // seek/retry instead of interrupting playback when a download finishes.
       });
-    } catch (e) { if (mounted.current && run === generation.current) { replacing.current = false; setBusy(false); setError(e instanceof Error ? e.message : 'Could not play this file.'); } }
-  }, [base, item.id, player, saved, session]);
-  const recover = useCallback(() => {
-    if (!mounted.current || !intent.current) return;
-    if (retries.current++ >= 2) { setBusy(false); setError('The media service stopped responding. Check the connection, then try again.'); return; }
-    if (player.status === 'error') { forceTranscode.current = true; disk.current = null; cancelDownload.current?.(); cancelDownload.current = null; }
-    void load(at.current, true);
-  }, [load, player]);
+    } catch (e) {
+      if (mounted.current && run === generation.current && !await trySavedCopy(run)) {
+        replacing.current = false; setBusy(false); setError(e instanceof Error ? e.message : 'Could not play this file.');
+      }
+    }
+  }, [base, item.id, player, savedCopy, session, trySavedCopy]);
+  const recover = useCallback(async () => {
+    if (!mounted.current || !intent.current || recovering.current) return;
+    recovering.current = true;
+    try {
+      if (await trySavedCopy(generation.current) || !intent.current) return;
+      if (retries.current++ >= 2) { setBusy(false); setError(savedCopy ? 'Could not play the saved file.' : 'The media service stopped responding. Check the connection, then try again.'); return; }
+      if (player.status === 'error') { forceTranscode.current = true; disk.current = null; cancelDownload.current?.(); cancelDownload.current = null; }
+      await load(at.current, true);
+    } finally { recovering.current = false; }
+  }, [load, player, savedCopy, trySavedCopy]);
   useEffect(() => {
     mounted.current = true;
+    const run = generation.current;
     void (async () => {
       try {
-        const details = saved?.info || await inspect(base, item.id); if (!mounted.current) return;
+        const details = savedCopy?.info || await inspect(base, item.id); if (!mounted.current || run !== generation.current) return;
         infoRef.current = details; setInfo(details);
         const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true }))];
         const choice = prefs.current.tracks?.[trackKey(item)];
@@ -136,8 +156,12 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
         const sub = choice?.off ? null : matchTrack(tracks, choice?.subtitle)?.index ?? null;
         choices.current = { ...choices.current, audio: a, subtitle: sub }; setAudio(a); setSubtitle(sub);
         await loadText(sub).catch(e => { if (mounted.current) setError(e.message); });
-        if (mounted.current) await load(at.current, true);
-      } catch (e) { if (mounted.current) { setBusy(false); setError(e instanceof Error ? e.message : 'Could not read this file.'); } }
+        if (mounted.current && run === generation.current) await load(at.current, intent.current);
+      } catch (e) {
+        if (mounted.current && run === generation.current && !await trySavedCopy(run)) {
+          setBusy(false); setError(e instanceof Error ? e.message : 'Could not read this file.');
+        }
+      }
     })();
     return () => {
       mounted.current = false; generation.current++; subtitleRun.current++;
@@ -146,8 +170,8 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       if (prefTimer.current) { clearTimeout(prefTimer.current); void request(base, '/api/state', { method: 'PUT', body: { preferences: prefs.current } }).catch(() => {}); }
       void persist().catch(() => {});
     };
-  }, [base, item.id, load, loadText, persist]);
-  const reportsActivity = !offline && !saved;
+  }, [base, item.id, load, loadText, persist, savedCopy, trySavedCopy]);
+  const reportsActivity = !offline && !savedCopy;
   useEffect(() => {
     if (reportsActivity) return () => { void stopPlayback(base, session).catch(() => {}); };
   }, [base, reportsActivity, session]);

@@ -26,29 +26,67 @@ export async function mediaHeaders(base: string): Promise<Record<string, string>
   const token = await tokenStorage?.get(base);
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
-export async function request(base: string, path: string, init: { method?: string; body?: unknown } = {}, ms = 15000) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), ms);
-  try {
-    const res = await fetch(base + path, {
-      method: init.method ?? 'GET',
-      credentials: 'include',
-      signal: ctrl.signal,
-      headers: {
-        'x-matro': '1',
-        'x-matro-client': 'native',
-        ...await mediaHeaders(base),
-        ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
-      },
-      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+
+// Keep the signal attached through the body read, with a fresh deadline after headers arrive.
+// `read` may call `touch` as data arrives to restart the body deadline, making `bodyMs` an idle limit for large bodies.
+export async function fetchWithDeadline<R, T>(
+  send: (signal: AbortSignal) => Promise<R>,
+  read: (response: R, touch: () => void) => Promise<T>,
+  { signal, requestMs = 15000, bodyMs = 30000 }: { signal?: AbortSignal; requestMs?: number; bodyMs?: number } = {},
+): Promise<T> {
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  signal?.addEventListener('abort', cancel);
+  if (signal?.aborted) cancel();
+  async function phase<V>(run: (touch: () => void) => Promise<V>, ms: number, message: string) {
+    if (controller.signal.aborted) throw new Error('Request cancelled.');
+    let timedOut = false;
+    let rejectAbort: () => void;
+    const aborted = new Promise<never>((_, reject) => {
+      rejectAbort = () => reject(new Error(timedOut ? message : 'Request cancelled.'));
+      controller.signal.addEventListener('abort', rejectAbort);
     });
-    const json = await res.json().catch(() => null);
-    if (!res.ok) throw new ServerError(json?.error ?? `Server answered ${res.status}.`, res.status);
-    if (json?.token) await tokenStorage?.set(base, json.token);
-    return json;
-  } finally {
-    clearTimeout(timer);
+    const arm = () => setTimeout(() => { timedOut = true; cancel(); }, ms);
+    let timer = arm();
+    const touch = () => { clearTimeout(timer); timer = arm(); };
+    try { return await Promise.race([aborted, run(touch)]); }
+    finally { clearTimeout(timer); controller.signal.removeEventListener('abort', rejectAbort!); }
   }
+  try {
+    const response = await phase(() => send(controller.signal), requestMs, 'The server took too long to respond.');
+    return await phase(touch => read(response, touch), bodyMs, 'The server took too long to send the response.');
+  } catch (error) {
+    cancel();
+    throw error;
+  } finally {
+    signal?.removeEventListener('abort', cancel);
+  }
+}
+
+export async function request(base: string, path: string, init: { method?: string; body?: unknown; signal?: AbortSignal } = {}, ms = 15000) {
+  const headers = {
+    'x-matro': '1',
+    'x-matro-client': 'native',
+    ...await mediaHeaders(base),
+    ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+  };
+  const json = await fetchWithDeadline(signal => fetch(base + path, {
+    method: init.method ?? 'GET',
+    credentials: 'include',
+    signal,
+    headers,
+    body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+  }), async res => {
+    const json = await res.json().catch(error => {
+      if (error instanceof SyntaxError) return null;
+      if (!res.ok) throw new ServerError(`Server answered ${res.status}.`, res.status);
+      throw error;
+    });
+    if (!res.ok) throw new ServerError(json?.error ?? `Server answered ${res.status}.`, res.status);
+    return json;
+  }, { signal: init.signal, requestMs: ms, bodyMs: ms });
+  if (json?.token) await tokenStorage?.set(base, json.token);
+  return json;
 }
 
 /** Finds a working address for what the person typed and proves it is a Matro server. */
@@ -118,7 +156,7 @@ export type Library = { markers?: Record<string, Segment[]>; scanner?: ScannerSt
 export type Track = { index: number; language: string; title: string; bitmap?: boolean; text?: boolean; codec?: string; channels?: number; default?: boolean };
 export type Info = { duration: number; directPlay: boolean; video?: { codec: string; height: number; width: number } | null; chapters?: { start: number; title: string }[]; audio: Track[]; embedded: Track[]; uploaded: { id: number; language: string; name: string }[] };
 export const library = async (base: string): Promise<Library> => { await ensureNativeSession(base); return request(base, '/api/library'); };
-export const inspect = (base: string, id: string): Promise<Info> => request(base, `/api/items/${encodeURIComponent(id)}/info`);
+export const inspect = (base: string, id: string, signal?: AbortSignal): Promise<Info> => request(base, `/api/items/${encodeURIComponent(id)}/info`, { signal });
 export const saveProgress = (base: string, id: string, entry: Progress) => request(base, '/api/state', { method: 'PUT', body: { progress: { [id]: entry } } });
 export const changeProgress = (base: string, id: string, body: { dismiss: true } | { completed: boolean; checkpoint?: Progress }): Promise<{ progress: Record<string, Progress> }> =>
   request(base, `/api/items/${encodeURIComponent(id)}/progress`, { method: 'PATCH', body });
