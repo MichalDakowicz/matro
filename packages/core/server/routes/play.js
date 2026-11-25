@@ -11,9 +11,14 @@ const { createHash } = require('node:crypto');
 
 const KINDS = ['full', 'forced', 'sdh'];
 const MAX_SUBS_PER_ITEM = 60;
-// Subtitle files next to the video (including ones a download left there), listed by position and converted once per file version.
+// Subtitle files next to the video (including ones a download left there), converted once per file version. Their ids come from a
+// hash of the file name, so a link survives files being added or removed (24 bits; on a collision the later file is left out).
 const fileCache = new Map();
-async function sidecarFiles(item) { return (await sidecars(item.path)).slice(0, MAX_SUBS_PER_ITEM); }
+async function sidecarFiles(item) {
+  const seen = new Set();
+  return (await sidecars(item.path)).map(file => ({ ...file, id: parseInt(createHash('sha1').update(path.basename(file.path).toLowerCase()).digest('hex').slice(0, 6), 16) }))
+    .filter(file => !seen.has(file.id) && seen.add(file.id)).slice(0, MAX_SUBS_PER_ITEM);
+}
 async function sidecarVtt(file, language) {
   const stat = await fs.stat(file.path), key = `${file.path}:${stat.mtimeMs}:${stat.size}`;
   if (!fileCache.has(key)) {
@@ -63,7 +68,7 @@ function register(app) {
       audio: info.audio.map(t => ({ ...t, language: normalize(t.language) })),
       embedded: info.subtitles.map(t => ({ ...t, language: normalize(t.language) })),
       uploaded: q.uploaded.all(item.id).map(row => subtitleOut(row, ctx.user)),
-      files: files.map((f, id) => ({ id, language: normalize(f.language), title: f.title, codec: f.codec, forced: f.forced, sdh: f.sdh }))
+      files: files.map(f => ({ id: f.id, language: normalize(f.language), title: f.title, codec: f.codec, forced: f.forced, sdh: f.sdh }))
     };
   });
 
@@ -129,7 +134,7 @@ function register(app) {
     await sendFile(ctx.req, ctx.res, file, 'image/jpeg', { 'Cache-Control': 'private, max-age=86400' });
   });
 
-  // Subtitle text for the player: e<stream index> is embedded in the file, u<id> was uploaded by a viewer, f<n> is a file next to the video.
+  // Subtitle text for the player: e<stream index> is embedded in the file, u<id> was uploaded by a viewer, f<id> is a file next to the video, named by a hash of its file name.
   router.add('GET', '/api/items/:id/subtitles/:key', async ctx => {
     const item = find(ctx.params.id), key = ctx.params.key;
     let vtt;
@@ -138,7 +143,7 @@ function register(app) {
       if (!row || row.item_id !== item.id) throw new HttpError(404, 'Subtitles not found.');
       vtt = row.vtt;
     } else if (/^f\d+$/.test(key)) {
-      const file = (await sidecarFiles(item).catch(() => []))[Number(key.slice(1))];
+      const file = (await sidecarFiles(item).catch(() => [])).find(f => f.id === Number(key.slice(1)));
       if (!file) throw new HttpError(404, 'Subtitles not found.');
       try { vtt = await sidecarVtt(file, normalize(file.language)); }
       catch (error) { throw error instanceof HttpError ? error : new HttpError(422, 'That subtitle file could not be read.'); }

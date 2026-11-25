@@ -278,6 +278,11 @@ test('subtitle files next to the video are listed and served as WebVTT', async (
   const { files } = (await call('sam', 'GET', `/api/items/${movie.id}/info`)).data;
   assert.deepEqual(files.map(f => [f.language, f.forced, f.sdh]).sort(), [['en', false, false], ['pl', true, false], ['und', false, false]].sort());
   const english = files.find(f => f.language === 'en'), polish = files.find(f => f.language === 'pl'), broken = files.find(f => f.language === 'und');
+  // Ids come from the file name, so they do not move when another subtitle file appears next to the video.
+  fs.writeFileSync(path.join(mediaDir, 'Heat (1995)', 'Heat.1995.aa.srt'), 'x');
+  const again = (await call('sam', 'GET', `/api/items/${movie.id}/info`)).data.files;
+  assert.equal(again.length, files.length + 1); assert.equal(again.find(f => f.language === 'en').id, english.id);
+  fs.rmSync(path.join(mediaDir, 'Heat (1995)', 'Heat.1995.aa.srt'));
   const vtt = await call('sam', 'GET', `/api/items/${movie.id}/subtitles/f${english.id}`);
   assert.equal(vtt.status, 200);
   assert.match(vtt.data, /^WEBVTT/); assert.match(vtt.data, /Sidecar line/);
