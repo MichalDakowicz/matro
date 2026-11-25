@@ -45,6 +45,15 @@ test('an explicit choice for the title always wins over the defaults', async () 
   assert.deepEqual(initialTracks({ audio, subtitles: subs }, picked, prefs({ audio: 'en', subtitles: 'off' })), { audio: 2, subtitle: 5 });
 });
 
+test('partial remembered choices keep the defaults for untouched tracks', async () => {
+  const { initialTracks } = await load();
+  const details = { audio, subtitles: subs };
+  const preferences = prefs({ audio: 'pl', subtitles: 'always', subtitleLanguage: 'en' });
+  assert.deepEqual(initialTracks(details, { delay: 2 }, preferences), { audio: 3, subtitle: 6 });
+  assert.deepEqual(initialTracks(details, { audio: { language: 'eng', title: '' } }, preferences), { audio: 1, subtitle: 6 });
+  assert.deepEqual(initialTracks(details, { subtitle: null, off: true }, preferences), { audio: 3, subtitle: null });
+});
+
 test('bad stored defaults fall back to off', async () => {
   const { trackDefaults } = await load();
   assert.deepEqual(trackDefaults({ trackDefaults: { audio: 5, subtitles: 'x', subtitleLanguage: '!!' } }), { audio: '', subtitles: 'off', subtitleLanguage: '' });

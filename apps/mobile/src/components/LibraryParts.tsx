@@ -81,12 +81,12 @@ const modes = [['off', 'Off'], ['forced', 'Forced only'], ['always', 'Always']] 
 // Where a title nothing was chosen for starts. Choices made for a show in the player still win.
 function TrackDefaultsRows({ value, onChange }: { value: ReturnType<typeof trackDefaults>; onChange: (value: TrackDefaults) => void }) {
   const languages = (selected: string, pick: (code: string) => void, blank: string) => <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-    {[['', blank], ...LANGUAGES.map(code => [code, languageName(code)])].map(([code, label]) => <Pill key={code} compact primary={selected === code} label={label} onPress={() => pick(code)} />)}
+    {[['', blank], ...LANGUAGES.map(code => [code, languageName(code)])].map(([code, label]) => <Pill key={code} compact primary={selected === code} selected={selected === code} label={label} onPress={() => pick(code)} />)}
   </ScrollView>;
   return <View style={{ gap: 8, marginBottom: 18 }}>
     <Text style={t.dim}>Dub and subtitles for new titles</Text>
     {languages(value.audio, audio => onChange({ ...value, audio }), 'Original audio')}
-    <View style={[t.row, { gap: 8 }]}>{modes.map(([mode, label]) => <Pill key={mode} compact primary={value.subtitles === mode} label={label} onPress={() => onChange({ ...value, subtitles: mode })} />)}</View>
+    <View style={[t.row, { gap: 8 }]}>{modes.map(([mode, label]) => <Pill key={mode} compact primary={value.subtitles === mode} selected={value.subtitles === mode} label={label} onPress={() => onChange({ ...value, subtitles: mode })} />)}</View>
     {value.subtitles === 'always' && languages(value.subtitleLanguage, subtitleLanguage => onChange({ ...value, subtitleLanguage }), 'Choose…')}
   </View>;
 }

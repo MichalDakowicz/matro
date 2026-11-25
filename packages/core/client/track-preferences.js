@@ -40,10 +40,12 @@ export function pickSubtitle(tracks, audioTrack, defaults) {
 }
 // details: { audio, subtitles }. choice: this title's saved choice (undefined if none).
 export function initialTracks({ audio, subtitles }, choice, preferences) {
-  if (choice) return {
-    audio: matchTrack(audio, choice.audio)?.index ?? audio.find(t => t.default)?.index ?? audio[0]?.index ?? null,
-    subtitle: choice.off ? null : matchTrack(subtitles.filter(t => t.text || t.bitmap), choice.subtitle)?.index ?? null
-  };
-  const defaults = trackDefaults(preferences), chosen = pickAudio(audio, defaults);
-  return { audio: chosen, subtitle: pickSubtitle(subtitles, audio.find(t => t.index === chosen), defaults) };
+  const defaults = trackDefaults(preferences);
+  const chosen = choice?.audio !== undefined
+    ? matchTrack(audio, choice.audio)?.index ?? pickAudio(audio, { audio: '' })
+    : pickAudio(audio, defaults);
+  const subtitle = choice?.off ? null
+    : choice?.subtitle !== undefined ? matchTrack(subtitles.filter(t => t.text || t.bitmap), choice.subtitle)?.index ?? null
+      : pickSubtitle(subtitles, audio.find(t => t.index === chosen), defaults);
+  return { audio: chosen, subtitle };
 }
