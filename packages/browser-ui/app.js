@@ -852,10 +852,25 @@ async function adoptStream(ready, token) {
   playIntent = true; offset = ready.offset; streamId = current.id; pendingStream = null; applySubtitle(); updateTime(); showMessage(); updateToggle();
   try { await video.play(); } catch (error) { if (token === generation && error.name !== 'AbortError') { loading = false; playbackError = error.message; showMessage(); } }
 }
+const inPictureInPicture = player => !!player && document.pictureInPictureElement === player;
+const canPictureInPicture = player => !!(document.pictureInPictureEnabled && player?.videoWidth && !player.disablePictureInPicture && typeof player.requestPictureInPicture === 'function');
+function updatePictureInPicture() {
+  const button = $('[data-action="picture-in-picture"]');
+  if (!button) return;
+  const entered = inPictureInPicture(video);
+  button.hidden = !entered && !canPictureInPicture(video);
+  button.classList.toggle('active', entered);
+  button.setAttribute('aria-pressed', String(entered));
+  button.title = entered ? 'Exit picture-in-picture' : 'Picture-in-picture';
+}
+async function togglePictureInPicture() {
+  if (inPictureInPicture(video)) await document.exitPictureInPicture();
+  else if (canPictureInPicture(video)) await video.requestPictureInPicture();
+}
 function renderPlayer(adopt = null) {
   document.body.classList.add('in-player');
   const heading = current.kind === 'show' ? `${displayName(current)} · ${code(current)}` : itemMeta(current);
-  root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
+  root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}<button class="icon-button" data-action="picture-in-picture" aria-label="Picture-in-picture" aria-pressed="false" title="Picture-in-picture" hidden>${icon('pictureInPicture')}</button>${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
   if (adopt) { $('#video').replaceWith(adopt); adopt.id = 'video'; adopt.dataset.preloaded = String(adopt.readyState); }
   video = $('#video'); applyVolume(library.preferences.volume); updateVolume(); applySubStyle();
   const player = video, events = playerEvents = new AbortController();
@@ -872,10 +887,18 @@ function renderPlayer(adopt = null) {
   };
   const watchBuffering = () => { clearTimeout(recoveryTimer); const token = generation; recoveryTimer = setTimeout(() => { if (token === generation) recover(); }, 25000); };
   const listen = (name, callback) => player.addEventListener(name, event => { if (video === player && view === 'player') callback(event); }, { signal: events.signal });
+  for (const event of ['loadedmetadata', 'resize', 'emptied', 'enterpictureinpicture']) listen(event, updatePictureInPicture);
+  listen('leavepictureinpicture', () => {
+    updatePictureInPicture();
+    if (!loading && !pendingStream) { playIntent = !player.paused; updateToggle(); }
+    checkpoint(true);
+  });
+  updatePictureInPicture();
   listen('timeupdate', () => { checkpoint(); updateTime(); void prepareNext(offset + video.currentTime); });
   listen('progress', updateTime);
   listen('playing', () => { clearTimeout(recoveryTimer); if (playIntent && !video.paused) void api.playbackState(true); loading = false; playbackError = ''; showMessage(); updateToggle(); scheduleIdle(); });
-  listen('pause', () => { if (!playIntent) void api.playbackState(false); loading = false; showMessage(); updateToggle(); $('.stage')?.classList.remove('idle'); if (remember()) void attempt(save); });
+  listen('play', () => { if (inPictureInPicture(player)) { playIntent = true; updateToggle(); } });
+  listen('pause', () => { if (inPictureInPicture(player) && !loading && !pendingStream) playIntent = false; if (!playIntent) void api.playbackState(false); loading = false; showMessage(); updateToggle(); $('.stage')?.classList.remove('idle'); if (remember()) void attempt(save); });
   listen('waiting', () => { loading = playIntent && !video.paused; if (loading) { void api.playbackState({ playing: true, buffering: true }); watchBuffering(); } showMessage(); });
   listen('stalled', watchBuffering);
   listen('ended', () => {
@@ -1173,6 +1196,7 @@ function resetPlayer() {
   streamId = null; pendingStream = null; settlePending = null;
   showPlaybackAdvanced = false; rewatchingShow = false; dismissedShow = false;
   playerEvents?.abort();
+  if (video && inPictureInPicture(video)) void document.exitPictureInPicture().catch(() => {});
   clearTimeout(saveTimer); saveTimer = null;
   if (video) { video.pause(); releaseBuffer(video); video.removeAttribute('src'); video.load(); }
 }
@@ -1234,6 +1258,7 @@ const actions = {
   shortcuts: () => $('#shortcuts').showModal(), library: backToLibrary,
   toggle, backward: () => seek(offset + video.currentTime - SKIP), forward: () => seek(offset + video.currentTime + SKIP),
   previous: () => step(-1), next: () => step(1), fullscreen: () => api.window('fullscreen'),
+  'picture-in-picture': togglePictureInPicture,
   queue: () => { if (fullscreenActive) fullscreenQueueOpen = !fullscreenQueueOpen; else queueOpen = !queueOpen; renderQueue(); },
   tracks: () => openPanel('tracks'), segments: () => openPanel('segments'), mute: () => { video.muted = !video.muted; const btn = document.querySelector('[data-action="mute"]'); btn.innerHTML = icon(video.muted ? 'mute' : 'volume'); btn.setAttribute('aria-label', video.muted ? 'Unmute (M)' : 'Mute (M)'); updateVolume(); },
   speed: () => { const rates = [.5, .75, 1, 1.25, 1.5, 2]; video.playbackRate = rates[(rates.indexOf(video.playbackRate) + 1) % rates.length]; document.querySelector('[data-action="speed"]').textContent = `${video.playbackRate}×`; },
