@@ -38,7 +38,7 @@ export function createAdapter(session) {
     return (value === undefined ? await get(url) : await post(url, value)).result;
   };
   const details = new Map();
-  let latest = null;
+  let latest = null, offlineSync;
 
   async function load() {
     if (session.offline) return latest = await offline.library();
