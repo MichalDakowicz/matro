@@ -104,11 +104,19 @@ function register(app) {
       try { await fsp.link(temporary, final); }
       catch (error) {
         if (error.code === 'EEXIST') throw nameConflict();
-        // shortcut: network shares without hard links fall back to a check-then-rename, which leaves a tiny race window.
+        // On shares without hard links, reserve the name before renaming into place.
         if (!['EPERM', 'ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV'].includes(error.code)) throw error;
-        try { await fsp.lstat(final); throw nameConflict(); }
-        catch (inner) { if (inner.code !== 'ENOENT') throw inner; }
-        await fsp.rename(temporary, final);
+        const reservation = await fsp.open(final, 'wx').catch(inner => {
+          if (inner.code === 'EEXIST') throw nameConflict();
+          throw inner;
+        });
+        try {
+          await reservation.close();
+          await fsp.rename(temporary, final);
+        } catch (inner) {
+          await fsp.rm(final, { force: true });
+          throw inner;
+        }
       }
     } finally { await fsp.rm(temporary, { force: true }); }
     const folder = library.byPath(config.mediaDir);

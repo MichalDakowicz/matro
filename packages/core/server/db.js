@@ -5,7 +5,8 @@ const path = require('node:path');
 const schema = `
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE, hash TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('admin', 'viewer')), created INTEGER NOT NULL, account_key TEXT
+  role TEXT NOT NULL CHECK (role IN ('admin', 'viewer')), created INTEGER NOT NULL, account_key TEXT,
+  legacy_scope INTEGER NOT NULL DEFAULT 0
 );
 -- Preserve existing numeric IDs and advance the high-water mark even when the highest account is deleted.
 CREATE TABLE IF NOT EXISTS user_sequence (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), last_id INTEGER NOT NULL);
@@ -72,8 +73,10 @@ function open(file) {
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   tx(db, () => {
     db.exec(schema);
-    if (!db.prepare('PRAGMA table_info(users)').all().some(column => column.name === 'account_key')) db.exec('ALTER TABLE users ADD COLUMN account_key TEXT');
-    db.exec(`UPDATE users SET account_key = lower(hex(randomblob(16))) WHERE account_key IS NULL;
+    const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map(column => column.name));
+    if (!userColumns.has('account_key')) db.exec('ALTER TABLE users ADD COLUMN account_key TEXT');
+    if (!userColumns.has('legacy_scope')) db.exec('ALTER TABLE users ADD COLUMN legacy_scope INTEGER NOT NULL DEFAULT 0');
+    db.exec(`UPDATE users SET account_key = lower(hex(randomblob(16))), legacy_scope = 1 WHERE account_key IS NULL;
       CREATE UNIQUE INDEX IF NOT EXISTS users_account_key ON users(account_key);`);
   }, 'BEGIN IMMEDIATE');
   return db;

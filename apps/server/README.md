@@ -94,6 +94,7 @@ CPU; pre-converting a library to MP4 with AAC audio avoids it.
 | `MATRO_MEDIA` | `<data>/media` | Upload target, registered as a library folder |
 | `MATRO_LIBRARY` | none | Comma-separated folders added to the library at start |
 | `MATRO_TRUST_PROXY` | off | Leave off for direct access. Use `1` behind one trusted reverse proxy, or `cloudflare` for a protected Cloudflare Tunnel. |
+| `MATRO_TRUST_PROXY_FROM` | unset | Comma-separated proxy addresses or CIDR networks allowed to supply forwarded headers. |
 | `MATRO_MAX_TRANSCODES` | `4` | Concurrent transcodes |
 | `MATRO_MAX_UPLOAD_GB` | `64` | Per-file upload limit |
 | `MATRO_FFMPEG`, `MATRO_FFPROBE` | bundled | Use your own binaries |
@@ -101,14 +102,17 @@ CPU; pre-converting a library to MP4 with AAC audio avoids it.
 ### Putting it on the internet
 
 The supplied Compose file publishes port `8484` with proxy trust off. Before enabling trust,
-restrict the Matro listener to the proxy. For a host proxy, publish `127.0.0.1:8484:8484`.
-For a tunnel container, put it on the Matro Docker network and remove the published port.
+restrict the Matro listener or set `MATRO_TRUST_PROXY_FROM` to the proxy addresses. For a
+host proxy, publish `127.0.0.1:8484:8484`. For a tunnel container, put it on the Matro
+Docker network and remove the published port.
 
 With `MATRO_TRUST_PROXY=1`, Matro uses the last address in `X-Forwarded-For`. Configure
 the proxy to append the actual client address as the last hop and overwrite `X-Forwarded-Proto`.
 If using Cloudflare Tunnel, set `MATRO_TRUST_PROXY=cloudflare` in your Compose environment so
-Matro uses `CF-Connecting-IP` for throttling. Keep the origin reachable only by the trusted tunnel.
-Both settings use `X-Forwarded-Proto: https` to mark the session cookie `Secure`.
+Matro uses `CF-Connecting-IP` for throttling. If the LAN port stays published, also set
+`MATRO_TRUST_PROXY_FROM=<cloudflared container address or network>`. With either proxy
+mode, Matro trusts `X-Forwarded-Proto: https` from an allowed source to mark the session
+cookie `Secure`.
 
 The server itself speaks plain HTTP. Disable proxy buffering for `/api/items/*/transcode` and
 raise the body limit for `/api/admin/upload`.
@@ -126,8 +130,8 @@ A Docker image is provided: `docker compose -f apps/server/docker-compose.yml up
   addresses, attempts for the affected username or invite endpoint incur a one-second delay.
   A valid password or code can still succeed from an address with attempts available.
 - The account identity migration preserves server-side watch state and active sessions.
-  Web and mobile clients start fresh local caches, so previously saved offline titles need
-  to be saved again.
+  Open the app once while online after upgrading to move existing offline saves and local
+  progress to the new account scope.
 - Viewers never see file paths; media is addressed by opaque ids and only through signed-in
   routes. The page is served with a strict Content-Security-Policy (no inline script, no
   third-party hosts, fonts bundled).

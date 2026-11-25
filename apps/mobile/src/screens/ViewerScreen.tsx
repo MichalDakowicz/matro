@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, BackHandler, FlatList, Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { changeProgress, library, mediaHeaders, request, ServerError, type Item, type Library, type MovieRequest, type ScannerStatus } from '../lib/server';
-import { progressRecovery, recoveryScope } from '../lib/storage';
+import { changeProgress, library, mediaHeaders, request, restoreLibraryProgress, ServerError, type Item, type Library, type MovieRequest, type ScannerStatus } from '../lib/server';
+import { migrateLegacyScope, progressRecovery, recoveryScope } from '../lib/storage';
 import { continueItems, groupLibrary, metadataFor, nameFor, statusOf, titleKey } from '../../../../packages/core/client/library';
 import { dismissedProgress, normalizeProgress } from '../../../../packages/core/client/watch-progress.js';
 import { colors, fonts } from '../theme';
@@ -34,7 +34,10 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const load = useCallback(async () => {
     setRefreshing(true); setError('');
     try {
-      const next = await library(base), auth = await mediaHeaders(base);
+      const next = await library(base);
+      await migrateLegacyScope(base, next.user).catch(error => console.warn('Offline account migration failed:', error));
+      await restoreLibraryProgress(base, next);
+      const auth = await mediaHeaders(base);
       revision.current = next.catalogRevision;
       setData({ ...next, progress: normalizeProgress(next.progress) }); setHeaders(auth); setOffline(false);
       void rememberLibrary(base, next).catch(() => {});
@@ -57,7 +60,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       try {
         const { catalogRevision } = await request(base, '/api/library/revision');
         if (closed || revision.current !== before || catalogRevision === before) return;
-        const next = await library(base);
+        const next = await restoreLibraryProgress(base, await library(base));
         if (closed || revision.current !== before) return;
         revision.current = next.catalogRevision;
         void rememberLibrary(base, next).catch(() => {});

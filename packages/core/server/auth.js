@@ -33,7 +33,7 @@ function createAuth(db) {
   const q = {
     byName: db.prepare('SELECT * FROM users WHERE username = ?'),
     insertSession: db.prepare('INSERT INTO sessions (token_hash, user_id, created, expires) VALUES (?, ?, ?, ?)'),
-    session: db.prepare('SELECT s.token_hash, s.expires, u.id, u.account_key, u.username, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?'),
+    session: db.prepare('SELECT s.token_hash, s.expires, u.id, u.account_key, u.legacy_scope, u.username, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?'),
     slide: db.prepare('UPDATE sessions SET expires = ? WHERE token_hash = ?'),
     drop: db.prepare('DELETE FROM sessions WHERE token_hash = ?'),
     dropUser: db.prepare('DELETE FROM sessions WHERE user_id = ?'),

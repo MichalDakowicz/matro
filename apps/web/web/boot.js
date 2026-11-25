@@ -4,6 +4,7 @@ import { createAdapter } from './adapter.js';
 import { profileButton, openProfile } from './profile.js';
 import { installDesktopChrome } from './desktop.js';
 import { savedDownloads } from './saved-downloads.js';
+import { migrateLegacyScope } from './offline.js';
 import './touch.js';
 
 installDesktopChrome();
@@ -12,6 +13,7 @@ const root = document.getElementById('app');
 let offline = false;
 const openMovieRequests = new URLSearchParams(location.search).get('view') === 'movie-requests';
 const user = await signIn(root, () => { offline = true; });
+if (!offline && user.legacyScope) await migrateLegacyScope(user).catch(error => console.warn('Offline account migration failed:', error));
 const session = { user, offline, openMovieRequests };
 root.replaceChildren();
 document.body.classList.add(user.role === 'admin' ? 'role-admin' : 'role-viewer');

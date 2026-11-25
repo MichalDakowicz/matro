@@ -2,7 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const { isIP } = require('node:net');
+const { BlockList, isIP } = require('node:net');
 const { pipeline } = require('node:stream');
 
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
@@ -90,7 +90,23 @@ function versioned(ext, text) {
   if (ext === '.html') return text.replace(/((?:src|href)="[/][^"?#]+[.](?:js|css))"/g, (m, head) => `${head}?v=${BUILD}"`);
   return text.replace(/((?:^|[^a-zA-Z0-9_])(?:from|import) *[(]? *)(['"])((?:[.]{1,2}[/]|[/])[^'"?]+[.]js)(['"])/g, (m, head, open, spec, close) => `${head}${open}${spec}?v=${BUILD}${close}`);
 }
+function proxySources(entries) {
+  if (entries === undefined) return null;
+  const sources = new BlockList();
+  for (const entry of entries.split(',').map(value => value.trim()).filter(Boolean)) {
+    const [address, prefix, ...extra] = entry.split('/');
+    const version = isIP(address), family = version === 4 ? 'ipv4' : 'ipv6';
+    if (!version || extra.length || prefix !== undefined && (!/^\d+$/.test(prefix) || Number(prefix) > (version === 4 ? 32 : 128))) {
+      throw new Error('Invalid address or CIDR in MATRO_TRUST_PROXY_FROM: ' + entry);
+    }
+    if (prefix === undefined) sources.addAddress(address, family);
+    else sources.addSubnet(address, Number(prefix), family);
+  }
+  return sources;
+}
+
 function createServer({ router, publicDir, authenticate, config }) {
+  const sources = config.trustProxy ? proxySources(config.trustProxyFrom) : null;
   async function serveStatic(req, res, pathname, query) {
     let rel; try { rel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname.slice(1)); } catch { throw new HttpError(404, 'Not found'); }
     const file = path.resolve(publicDir, rel);
@@ -132,11 +148,13 @@ function createServer({ router, publicDir, authenticate, config }) {
       const token = bearer || cookies(req.headers.cookie).matro_session;
       const { user, renewed } = authenticate(token) || {};
       const { route, params } = found;
-      const forwarded = config.trustProxy && (config.cloudflareProxy
+      const remote = req.socket.remoteAddress;
+      const trustProxy = config.trustProxy && (!sources || Boolean(remote && sources.check(remote, isIP(remote) === 4 ? 'ipv4' : 'ipv6')));
+      const forwarded = trustProxy && (config.cloudflareProxy
         ? req.headers['cf-connecting-ip'] : req.headers['x-forwarded-for']?.split(',').at(-1))?.trim();
-      const ctx = { req, res, params, query: url.searchParams, user, token, ip: forwarded && isIP(forwarded) ? forwarded : req.socket.remoteAddress,
+      const ctx = { req, res, params, query: url.searchParams, user, token, ip: forwarded && isIP(forwarded) ? forwarded : remote,
         // Secure only when this request really arrived over HTTPS; a Secure cookie set over plain HTTP (the LAN address) is dropped by the browser.
-        secure: Boolean(req.socket.encrypted) || (config.trustProxy && req.headers['x-forwarded-proto'] === 'https') };
+        secure: Boolean(req.socket.encrypted) || (trustProxy && req.headers['x-forwarded-proto'] === 'https') };
       if (renewed && !bearer) sessionCookie(ctx, token, config.sessionDays * 86400);
       if (route.auth !== 'none' && !user) throw new HttpError(401, 'Sign in first.');
       if (route.auth === 'admin' && user.role !== 'admin') throw new HttpError(403, 'Only the head account can do that.');

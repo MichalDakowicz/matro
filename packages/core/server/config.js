@@ -16,6 +16,7 @@ module.exports = {
   libraryFolders: (process.env.MATRO_LIBRARY || '').split(',').map(p => p.trim()).filter(Boolean).map(p => path.resolve(p)),
   trustProxy: ['1', 'cloudflare'].includes(process.env.MATRO_TRUST_PROXY),
   cloudflareProxy: process.env.MATRO_TRUST_PROXY === 'cloudflare',
+  trustProxyFrom: process.env.MATRO_TRUST_PROXY_FROM,
   maxTranscodes: Number(process.env.MATRO_MAX_TRANSCODES || 4),
   maxUploadBytes: Number(process.env.MATRO_MAX_UPLOAD_GB || 64) * 1024 ** 3,
   ffmpeg: binary('MATRO_FFMPEG', 'ffmpeg-static', 'ffmpeg'),

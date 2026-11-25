@@ -1,5 +1,6 @@
 import { createStore } from './offline-store.js';
 import { ApiError, api } from './http.js';
+import { copyRecoveryScope, copyStoredScope, scopeRange } from '../../../packages/browser-ui/recovery.js';
 
 const database = () => new Promise((resolve, reject) => {
   const request = indexedDB.open('matro-saved-media', 1);
@@ -23,10 +24,24 @@ const db = {
   get: key => change('readonly', store => store.get(key)),
   set: (key, value) => change('readwrite', store => store.put(value, key)),
   delete: key => change('readwrite', store => store.delete(key)),
-  keys: prefix => change('readonly', store => store.getAllKeys(IDBKeyRange.bound(prefix, prefix + '\uffff'))),
+  keys: prefix => change('readonly', store => store.getAllKeys(scopeRange(prefix))),
 };
 export const accountScope = user => `account-v2:${user.accountKey || `legacy:${user.id}:${user.username}`}`;
 const activeKey = 'active-account-scope';
+export async function migrateLegacyScope(user) {
+  if (!user.legacyScope || !user.accountKey) return;
+  const oldScope = `account:${user.id}:${user.username}`, newScope = accountScope(user);
+  const from = `account:${user.id}:${encodeURIComponent(user.username)}:`, to = newScope + ':';
+  const finishRecovery = await copyRecoveryScope(localStorage, oldScope, newScope);
+  await change('readwrite', store => copyStoredScope(store, from, to,
+    (value, key) => key === 'library' ? { ...value, user } : value,
+    () => {
+      const active = store.get(activeKey);
+      active.onsuccess = () => { if (active.result === from) store.put(to, activeKey); };
+      store.delete(scopeRange(from));
+    }));
+  await finishRecovery();
+}
 export const networkLost = error => error instanceof TypeError || error instanceof ApiError && error.status >= 500;
 export async function lastOfflineUser() {
   const scope = await db.get(activeKey);

@@ -12,11 +12,11 @@ const config = require('../../../packages/core/server/config');
 
 const credentials = { username: 'head', password: 'test-password' };
 
-async function fixture(t, { proxy, beforeOpen } = {}) {
+async function fixture(t, { proxy, proxyFrom, beforeOpen } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-auth-'));
-  const previous = { mediaDir: config.mediaDir, trustProxy: config.trustProxy, cloudflareProxy: config.cloudflareProxy };
+  const previous = { mediaDir: config.mediaDir, trustProxy: config.trustProxy, cloudflareProxy: config.cloudflareProxy, trustProxyFrom: config.trustProxyFrom };
   const media = path.join(root, 'media'), dataDir = path.join(root, 'data');
-  Object.assign(config, { mediaDir: media, trustProxy: Boolean(proxy), cloudflareProxy: proxy === 'cloudflare' });
+  Object.assign(config, { mediaDir: media, trustProxy: Boolean(proxy), cloudflareProxy: proxy === 'cloudflare', trustProxyFrom: proxyFrom });
   await fs.mkdir(dataDir);
   await beforeOpen?.(path.join(dataDir, 'matro.db'));
   const { app, server, db, library } = createApp({ dataDir, tmdb: { env: {} }, movieRequests: { env: {} } });
@@ -68,6 +68,23 @@ test('one trusted proxy uses the rightmost forwarded address for login and invit
   const { code } = app.invites.create(admin.data.user.id);
   assert.equal((await call('signup', { body: { code, username: 'viewer', password: credentials.password }, headers })).status, 200);
 });
+
+for (const [proxyFrom, trusted] of [['2001:db8::1, 127.0.0.0/8', true], ['192.0.2.1, 2001:db8::/32', false]]) {
+  test(`Cloudflare forwarding is ${trusted ? 'trusted' : 'ignored'} for peer allowlist ${proxyFrom}`, async t => {
+    const { login } = await fixture(t, { proxy: 'cloudflare', proxyFrom });
+    const signedIn = await login(credentials, { 'cf-connecting-ip': '192.0.2.20', 'x-forwarded-proto': 'https' });
+    assert.equal(signedIn.status, 200);
+    assert.equal(signedIn.set.endsWith('; Secure'), trusted);
+    const loginBody = { ...credentials, password: 'invalid-password' };
+    for (let i = 1; i <= 6; i++) {
+      const headers = { 'cf-connecting-ip': `192.0.2.${i}`, 'x-forwarded-proto': 'https' };
+      assert.equal((await login(loginBody, headers)).status, trusted || i <= 5 ? 401 : 429);
+    }
+    const accepted = await login(credentials, { 'cf-connecting-ip': '192.0.2.10', 'x-forwarded-proto': 'https' });
+    if (trusted) assert.match(accepted.set, /; Secure$/);
+    else assert.equal(accepted.status, 429);
+  });
+}
 
 test('Cloudflare client addresses share a soft limit without locking out a new address', async t => {
   const { app, call, login } = await fixture(t, { proxy: 'cloudflare' });
@@ -137,8 +154,10 @@ test('migration keeps existing sessions and state while recreated viewers have n
   const original = await call('library', { headers: { cookie: `matro_session=${token}` } });
   assert.equal(original.data.user.id, 17);
   assert.match(original.data.user.accountKey, /^[a-f0-9]{32}$/);
+  assert.equal(original.data.user.legacyScope, true);
   assert.equal(original.data.preferences.autoplay, false);
   const admin = await login();
+  assert.equal(admin.data.user.legacyScope, true);
   const headers = { cookie: admin.cookie };
   assert.equal((await call('admin/users/17', { method: 'DELETE', headers })).status, 200);
   const { data: { code } } = await call('admin/invites', { body: {}, headers });
@@ -149,6 +168,8 @@ test('migration keeps existing sessions and state while recreated viewers have n
   assert.equal((await call('library', { headers: { cookie: `matro_session=${token}` } })).status, 401);
   const current = await call('library', { headers: { cookie: recreated.cookie } });
   assert.equal(current.data.user.accountKey, recreated.data.user.accountKey);
+  assert.equal(current.data.user.legacyScope, undefined);
+  assert.equal(recreated.data.user.legacyScope, undefined);
   assert.equal(current.data.preferences.autoplay, true);
 });
 
@@ -163,38 +184,41 @@ test('upload destinations are confined before creating any nested folders', asyn
   assert.deepEqual(await fs.readdir(outside), []);
 });
 
-test('concurrent uploads publish exactly one file and clean up both temporary files', async t => {
-  const { base, login, media } = await fixture(t);
-  const cookie = (await login()).cookie, folder = path.join(media, 'nested');
-  const requests = ['first-upload', 'second-upload'].map(text => {
-    let request;
-    const result = new Promise((resolve, reject) => {
-      request = http.request(base + '/api/admin/upload?path=nested%2Fclip.mp4', {
-        method: 'POST', headers: { cookie, 'x-matro': '1', 'content-length': Buffer.byteLength(text) },
-      }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
-      request.on('error', reject);
-      request.write(text.slice(0, 1));
+for (const hardLinks of [true, false]) {
+  test(`concurrent uploads publish exactly one file with${hardLinks ? '' : 'out'} hard links`, async t => {
+    if (!hardLinks) t.mock.method(fs, 'link', async () => { throw Object.assign(new Error('Unsupported hard link'), { code: 'ENOTSUP' }); });
+    const { base, login, media } = await fixture(t);
+    const cookie = (await login()).cookie, folder = path.join(media, 'nested');
+    const requests = ['first-upload', 'second-upload'].map(text => {
+      let request;
+      const result = new Promise((resolve, reject) => {
+        request = http.request(base + '/api/admin/upload?path=nested%2Fclip.mp4', {
+          method: 'POST', headers: { cookie, 'x-matro': '1', 'content-length': Buffer.byteLength(text) },
+        }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+        request.on('error', reject);
+        request.write(text.slice(0, 1));
+      });
+      return { text, request, result };
     });
-    return { text, request, result };
-  });
-  const results = Promise.all(requests.map(upload => upload.result));
-  try {
-    let parts = [];
-    for (let i = 0; i < 100 && parts.length < 2; i++) {
-      parts = await fs.readdir(folder).catch(() => []);
-      if (parts.length < 2) await delay(25);
+    const results = Promise.all(requests.map(upload => upload.result));
+    try {
+      let parts = [];
+      for (let i = 0; i < 100 && parts.length < 2; i++) {
+        parts = await fs.readdir(folder).catch(() => []);
+        if (parts.length < 2) await delay(25);
+      }
+      assert.equal(parts.filter(file => file.endsWith('.part')).length, 2);
+      for (const upload of requests) upload.request.end(upload.text.slice(1));
+      const statuses = await results;
+      assert.deepEqual([...statuses].sort(), [200, 409]);
+      assert.deepEqual(await fs.readdir(folder), ['clip.mp4']);
+      assert.equal(await fs.readFile(path.join(folder, 'clip.mp4'), 'utf8'), requests[statuses.indexOf(200)].text);
+    } finally {
+      for (const upload of requests) upload.request.destroy();
+      await results.catch(() => {});
     }
-    assert.equal(parts.filter(file => file.endsWith('.part')).length, 2);
-    for (const upload of requests) upload.request.end(upload.text.slice(1));
-    const statuses = await results;
-    assert.deepEqual([...statuses].sort(), [200, 409]);
-    assert.deepEqual(await fs.readdir(folder), ['clip.mp4']);
-    assert.equal(await fs.readFile(path.join(folder, 'clip.mp4'), 'utf8'), requests[statuses.indexOf(200)].text);
-  } finally {
-    for (const upload of requests) upload.request.destroy();
-    await results.catch(() => {});
-  }
-});
+  });
+}
 
 test('download routes preserve explicit statuses and hide upstream and unexpected failures', async t => {
   const { app, call, login } = await fixture(t);

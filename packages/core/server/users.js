@@ -1,7 +1,8 @@
 const { HttpError } = require('./http');
 
 const USERNAME = /^[A-Za-z0-9][A-Za-z0-9._-]{1,31}$/;
-const publicUser = user => ({ id: user.id, accountKey: user.account_key, username: user.username, role: user.role });
+const publicUser = user => ({ id: user.id, accountKey: user.account_key, username: user.username, role: user.role,
+  ...(user.legacy_scope ? { legacyScope: true } : {}) });
 function validateCredentials(username, password) {
   username = String(username || '').trim(); password = String(password || '');
   if (!USERNAME.test(username)) throw new HttpError(400, 'Usernames are 2–32 letters, numbers, dots, dashes or underscores.');
