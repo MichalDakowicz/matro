@@ -28,6 +28,7 @@ function register(app) {
   };
 
   router.add('GET', '/api/admin/users', { auth: 'admin' }, () => ({ users: q.users.all() }));
+  router.add('PUT', '/api/admin/subtitle-search', { auth: 'admin' }, async ctx => app.subtitleSearch.configure((await readJson(ctx.req)).key));
   // New accounts are made by the person joining, with a one-time code created here.
   router.add('GET', '/api/admin/invites', { auth: 'admin' }, () => ({ invites: app.invites.list() }));
   router.add('POST', '/api/admin/invites', { auth: 'admin' }, async ctx => app.invites.create(ctx.user.id, (await readJson(ctx.req)).days));

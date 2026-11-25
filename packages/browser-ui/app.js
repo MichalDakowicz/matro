@@ -322,6 +322,7 @@ function renderLibrary() {
   if (tab === 'movie-requests' && !movieRequests) tab = 'home';
   const page = tab === 'movie-requests' ? '<div id="movie-requests"></div>' : tab === 'downloads' ? downloads.markup() : tab === 'search' ? searchPage() : tab === 'folders' ? foldersPage() : ['movie', 'show', 'audio'].includes(tab) ? browsePage(tab) : landingPage();
   root.innerHTML = `<div class="shell">${dock()}<main class="page">${page}</main>${footer()}</div>`;
+  if (api.configureSubtitleSearch) $('#library-footer').insertAdjacentHTML('beforeend', '<button class="text-button" data-action="subtitle-search-settings">OpenSubtitles settings</button>');
   applyStyles(root);
   $('#search')?.addEventListener('input', event => { const caret = event.target.selectionStart; query = event.target.value; renderLibrary(); $('#search').focus(); $('#search').setSelectionRange(caret, caret); });
   if (tab === 'downloads') void downloads.mount($('#download-browser'));
@@ -1087,10 +1088,93 @@ function renderTracks() {
     <div><h3>Subtitles</h3><button class="track-option ${subtitle === null ? 'selected' : ''}" data-subtitle="off" aria-pressed="${subtitle === null}"><span class="radio"></span><span><strong>Off</strong><small>No subtitles</small></span></button>${subtitleRows}
     ${subtitle === 'external' ? '<button class="track-option selected" disabled><span class="radio"></span><span><strong>External file</strong><small>Loaded subtitles</small></span></button>' : ''}</div></div>
     <div class="track-bottom"><div class="delay-controls"><span>Sub delay</span><button class="icon-button" data-action="delay-down" aria-label="Subtitles earlier by 0.1 seconds">−</button><output>${delay > 0 ? '+' : ''}${delay.toFixed(1)} s</output><button class="icon-button" data-action="delay-up" aria-label="Subtitles later by 0.1 seconds">+</button></div>
-    <button class="text-button" data-action="subtitle-file">Load subtitle file…</button></div>
+    <button class="text-button" data-action="subtitle-file">Load subtitle file…</button>${onlineSubtitles ? '<button class="text-button" data-action="find-subtitles">Find subtitles…</button>' : ''}</div>
     ${subStylePanel(bitmap)}
     ${bitmap ? '<p class="bitmap-note">Bitmap subtitles keep their original appearance. Track or delay changes briefly reload playback.</p>' : ''}
     ${info.chapters.length ? `<div class="player-chapters">${info.chapters.map((c, index) => `<button class="chapter-button" data-chapter="${index}">${esc(c.title)} · ${fmt(c.start)}</button>`).join('')}</div>` : ''}</section>`;
+}
+let onlineSubtitles = false;
+async function openTracks() {
+  openPanel('tracks');
+  if (sidePanel !== 'tracks' || !api.subtitleSearchStatus) return;
+  const id = current.id;
+  const status = await api.subtitleSearchStatus().catch(() => ({ enabled: false }));
+  if (sidePanel === 'tracks' && current?.id === id && onlineSubtitles !== status.enabled) {
+    onlineSubtitles = status.enabled; renderTracks();
+  }
+}
+
+function subtitleDialog(title, content) {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'match-dialog'; dialog.setAttribute('aria-label', title);
+  dialog.innerHTML = `<div class="section-heading"><h2>${esc(title)}</h2><button class="icon-button" type="button" aria-label="Close">×</button></div>${content}`;
+  dialog.querySelector('.icon-button').onclick = () => dialog.close();
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  document.body.append(dialog); dialog.showModal();
+  return dialog;
+}
+async function configureSubtitleSearch() {
+  const { enabled } = await api.subtitleSearchStatus();
+  const dialog = subtitleDialog('OpenSubtitles', `<p class="muted">Search is ${enabled ? 'on' : 'off'}. A search sends the title and language to OpenSubtitles.</p>
+    <form><label class="search-field small"><input aria-label="OpenSubtitles API key" type="password" required autocomplete="off" maxlength="200" placeholder="OpenSubtitles API key"></label>
+    <p role="status"></p><div class="show-actions"><button class="pill primary">Save key</button>${enabled ? '<button class="pill" type="button" data-disable-search>Turn off</button>' : ''}</div></form>`);
+  const update = async key => {
+    try { const status = await api.configureSubtitleSearch(key); onlineSubtitles = status.enabled; dialog.close(); }
+    catch (error) { dialog.querySelector('[role=status]').textContent = error.message; }
+  };
+  dialog.querySelector('form').onsubmit = event => { event.preventDefault(); void update(dialog.querySelector('input').value); };
+  dialog.querySelector('[data-disable-search]')?.addEventListener('click', () => void update(''));
+}
+async function findOnlineSubtitles() {
+  const id = current.id, token = ++subtitleGeneration;
+  const languages = new Intl.DisplayNames(navigator.languages, { type: 'language' });
+  const options = 'ar bg ca cs da de el en es et fa fi fr he hi hr hu id it ja ko lt lv nl no pl pt ro ru sk sl sr sv th tr uk vi zh'.split(' ')
+    .map(code => ({ code, name: languages.of(code) })).sort((a, b) => a.name.localeCompare(b.name));
+  const preferred = (info.subtitles.find(track => track.index === subtitle)?.language || navigator.language).split('-')[0];
+  const initial = options.some(option => option.code === preferred) ? preferred : 'en';
+  const dialog = subtitleDialog('Find subtitles', `<form><div class="show-actions"><select aria-label="Subtitle language">${options.map(({ code, name }) => `<option value="${code}" ${code === initial ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select><button class="pill primary">Search OpenSubtitles</button></div></form>
+    <p class="muted" role="status"></p><div class="match-results"></div>`);
+  const form = dialog.querySelector('form'), status = dialog.querySelector('[role=status]'), results = dialog.querySelector('.match-results');
+  form.onsubmit = async event => {
+    event.preventDefault(); results.replaceChildren(); form.querySelector('button').disabled = true; status.textContent = 'Searching OpenSubtitles…';
+    try {
+      const matches = await api.searchSubtitles({ id, language: form.querySelector('select').value });
+      status.textContent = matches.length ? '' : 'No subtitles found.';
+      for (const match of matches) {
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = 'track-option'; button.textContent = match.name;
+        button.onclick = async () => {
+          const buttons = results.querySelectorAll('button'); buttons.forEach(b => { b.disabled = true; });
+          form.querySelector('button').disabled = true; status.textContent = 'Saving subtitles…';
+          try {
+            const loaded = await api.downloadSubtitle({ id, token: match.token });
+            if (!dialog.open || current?.id !== id || token !== subtitleGeneration) return;
+            if (loaded.refreshTracks) {
+              const { subtitles } = await api.inspect(id);
+              if (!dialog.open || current?.id !== id || token !== subtitleGeneration) return;
+              info.subtitles = subtitles;
+            }
+            dialog.close(); await useLoadedSubtitle(loaded, 'Subtitles saved.');
+          } catch (error) {
+            status.textContent = error.message;
+            buttons.forEach(b => { b.disabled = false; });
+            form.querySelector('button').disabled = false;
+          }
+        };
+        results.append(button);
+      }
+    } catch (error) { status.textContent = error.message; }
+    finally { form.querySelector('button').disabled = false; }
+  };
+}
+
+async function useLoadedSubtitle(loaded, message) {
+  const wasBitmap = !!bitmapTrack(); subtitleText = loaded.text;
+  if (loaded.track) {
+    if (!info.subtitles.some(t => t.index === loaded.track.index)) info.subtitles.push(loaded.track);
+    subtitle = loaded.track.index; rememberTracks(); toast(loaded.warning || message);
+  } else { subtitle = 'external'; if (loaded.warning) toast(loaded.warning); }
+  applySubtitle(); renderTracks(); if (wasBitmap) await restartStream();
 }
 // Subtitle look is one global preference: size (50–200%), font, background box, weight/slant and an edge effect.
 // It is applied through CSS variables that video::cue reads, so restyling never reloads the track.
@@ -1235,20 +1319,18 @@ const actions = {
   toggle, backward: () => seek(offset + video.currentTime - SKIP), forward: () => seek(offset + video.currentTime + SKIP),
   previous: () => step(-1), next: () => step(1), fullscreen: () => api.window('fullscreen'),
   queue: () => { if (fullscreenActive) fullscreenQueueOpen = !fullscreenQueueOpen; else queueOpen = !queueOpen; renderQueue(); },
-  tracks: () => openPanel('tracks'), segments: () => openPanel('segments'), mute: () => { video.muted = !video.muted; const btn = document.querySelector('[data-action="mute"]'); btn.innerHTML = icon(video.muted ? 'mute' : 'volume'); btn.setAttribute('aria-label', video.muted ? 'Unmute (M)' : 'Mute (M)'); updateVolume(); },
+  tracks: openTracks, segments: () => openPanel('segments'), mute: () => { video.muted = !video.muted; const btn = document.querySelector('[data-action="mute"]'); btn.innerHTML = icon(video.muted ? 'mute' : 'volume'); btn.setAttribute('aria-label', video.muted ? 'Unmute (M)' : 'Mute (M)'); updateVolume(); },
   speed: () => { const rates = [.5, .75, 1, 1.25, 1.5, 2]; video.playbackRate = rates[(rates.indexOf(video.playbackRate) + 1) % rates.length]; document.querySelector('[data-action="speed"]').textContent = `${video.playbackRate}×`; },
   autoplay: async () => { library.preferences.autoplay = !library.preferences.autoplay; await save(); renderQueue(); },
   'clear-watched': async () => { library.queue = library.queue.filter(id => id === current.id || !completed(id)); await save(); renderQueue(); },
   'delay-down': () => changeSubtitleDelay(-.1),
   'delay-up': () => changeSubtitleDelay(.1),
+  'find-subtitles': findOnlineSubtitles,
+  'subtitle-search-settings': configureSubtitleSearch,
   'subtitle-file': async () => {
     const id = current.id, token = ++subtitleGeneration; const loaded = await api.loadSubtitle(id);
     if (!loaded || current?.id !== id || token !== subtitleGeneration) return;
-    const wasBitmap = !!bitmapTrack(); subtitleText = loaded.text;
-    // Saved next to the video, it is a regular track from now on and is remembered like one.
-    if (loaded.track) { if (!info.subtitles.some(t => t.index === loaded.track.index)) info.subtitles.push(loaded.track); subtitle = loaded.track.index; rememberTracks(); toast(loaded.warning || 'Subtitles saved next to the video.'); }
-    else { subtitle = 'external'; if (loaded.warning) toast(loaded.warning); }
-    applySubtitle(); renderTracks(); if (wasBitmap) await restartStream();
+    await useLoadedSubtitle(loaded, 'Subtitles saved next to the video.');
   },
   'marker-end': async () => {
     const end = offset + video.currentTime;
@@ -1336,8 +1418,8 @@ document.addEventListener('keydown', event => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) && event.target.type !== 'range';
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); void attempt(actions.files); return; }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && view === 'library') { event.preventDefault(); if (tab !== 'search') goTab('search'); $('#search')?.focus(); return; }
-  if (event.key === 'Escape') { if ($('#shortcuts').open || $('#match-dialog')?.open || $('#ssh-dialog').open) return; if (footerOpen && view === 'library') { actions.about(); return; } if (fullscreenActive) { void api.window('fullscreen'); return; } if (selected) closeDetail(); else if (sidePanel) { sidePanel = null; renderTracks(); } else if (view === 'player') void attempt(backToLibrary); return; }
-  if (typing || $('#shortcuts').open || $('#ssh-dialog').open || view !== 'player') return;
+  if (event.key === 'Escape') { if ($('dialog[open]')) return; if (footerOpen && view === 'library') { actions.about(); return; } if (fullscreenActive) { void api.window('fullscreen'); return; } if (selected) closeDetail(); else if (sidePanel) { sidePanel = null; renderTracks(); } else if (view === 'player') void attempt(backToLibrary); return; }
+  if (typing || $('dialog[open]') || view !== 'player') return;
   // Enter takes a visible skip (intro, recap, outro) unless a control has focus and Enter belongs to it.
   if (event.key === 'Enter' && !$('#skip-segment')?.hidden && !event.target.closest('button, a, input, select, textarea')) { event.preventDefault(); void attempt(actions['skip-segment']); return; }
   const key = event.key.toLowerCase(); const keyActions = { ' ': toggle, arrowleft: actions.backward, arrowright: actions.forward, arrowup: () => setVolume(currentVolume() + .05), arrowdown: () => setVolume(currentVolume() - .05), f: actions.fullscreen, m: actions.mute };

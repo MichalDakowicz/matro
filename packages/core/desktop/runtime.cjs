@@ -307,6 +307,25 @@ app.whenReady().then(async () => {
     return { text, track, warning };
   });
   handle('media:stop', keepUrl => { streams.stop(typeof keepUrl === 'string' ? keepUrl : null); scanner.setPlayback(false); scanner.setCurrent(null); });
+  const subtitleSearch = require('../server/subtitle-search').createSubtitleSearch({ dir: app.getPath('userData'), secure: safeStorage });
+  handle('subtitle-search:status', () => subtitleSearch.status());
+  handle('subtitle-search:configure', key => subtitleSearch.configure(key));
+  handle('subtitle-search:find', ({ id, language }) => subtitleSearch.search(find(id), language, 'local'));
+  handle('subtitle-search:download', async ({ id, token }) => {
+    const item = find(id);
+    if (remote.isRemote(item.path)) throw new Error('OpenSubtitles downloads need a locally mounted media folder.');
+    const { language, body } = await subtitleSearch.download(item, token, 'local');
+    const text = await require('../server/subtitles').toVtt(body, { filename: 'download.srt', language, charset: 'utf-8' });
+    const temporary = await fs.mkdtemp(path.join(app.getPath('temp'), 'matro-subtitle-'));
+    try {
+      const file = path.join(temporary, 'download.vtt');
+      await fs.writeFile(file, text);
+      const kept = await keepSidecar(item.path, file, language);
+      const track = (await sidecars(item.path)).find(entry => entry.path === kept);
+      if (track) delete track.path;
+      return { text, track, refreshTracks: true };
+    } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+  });
   handle('window:action', action => { if (action === 'minimize') win.minimize(); if (action === 'maximize') win.isMaximized() ? win.unmaximize() : win.maximize(); if (action === 'close') win.close(); if (action === 'fullscreen') win.setFullScreen(!win.isFullScreen()); });
   await win.loadURL('matro://app/');
   torrents.start();

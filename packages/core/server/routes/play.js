@@ -36,6 +36,29 @@ function register(app) {
   };
   const subtitleOut = (row, user) => ({ id: row.id, name: row.name, language: row.language, kind: row.kind, addedBy: row.addedBy, created: row.created,
     mine: row.userId === user.id, canEdit: row.userId === user.id || user.role === 'admin' });
+  const limited = item => q.count.get(item.id).n >= MAX_SUBS_PER_ITEM;
+  const overLimit = () => new HttpError(409, 'This title already has the maximum number of subtitle tracks.');
+  function saveSubtitle(item, meta, user, vtt, deduplicate) {
+    let row = deduplicate ? q.sameSubtitle.get(item.id, user.id, meta.name, meta.language, meta.kind, vtt) : null;
+    if (!row) {
+      if (limited(item)) throw overLimit();
+      const created = Date.now(), { lastInsertRowid } = q.insert.run(item.id, user.id, meta.name, meta.language, meta.kind, vtt, created);
+      row = { id: Number(lastInsertRowid), created };
+    }
+    return { subtitle: subtitleOut({ ...row, ...meta, userId: user.id, addedBy: user.username }, user) };
+  }
+
+  router.add('GET', '/api/subtitle-search', () => app.subtitleSearch.status());
+  router.add('GET', '/api/items/:id/subtitle-search', async ctx => ({
+    results: await app.subtitleSearch.search(find(ctx.params.id), ctx.query.get('language'), ctx.user.id)
+  }));
+  router.add('POST', '/api/items/:id/subtitle-search', async ctx => {
+    const item = find(ctx.params.id), { token } = await readJson(ctx.req);
+    if (limited(item)) throw overLimit();
+    const { name, language, kind, body } = await app.subtitleSearch.download(item, token, ctx.user.id);
+    const vtt = await toVtt(body, { filename: 'download.srt', language, charset: 'utf-8' });
+    return saveSubtitle(item, { name: name.replace(/\s+/g, ' ').slice(0, 60), language, kind }, ctx.user, vtt, true);
+  });
 
   router.add('GET', '/api/items/:id/info', async ctx => {
     const item = find(ctx.params.id);
@@ -133,18 +156,10 @@ function register(app) {
   router.add('POST', '/api/items/:id/subtitles', async ctx => {
     const item = find(ctx.params.id), meta = label(ctx);
     const queued = ctx.query.get('queued') === '1';
-    const limited = () => q.count.get(item.id).n >= MAX_SUBS_PER_ITEM;
-    const overLimit = () => new HttpError(409, 'This title already has the maximum number of subtitle tracks.');
-    if (!queued && limited()) throw overLimit();
+    if (!queued && limited(item)) throw overLimit();
     const body = await readBody(ctx.req, MAX_UPLOAD + 1024);
     const vtt = await toVtt(body, { filename: ctx.query.get('filename'), language: meta.language, charset: ctx.query.get('charset') });
-    let row = queued ? q.sameSubtitle.get(item.id, ctx.user.id, meta.name, meta.language, meta.kind, vtt) : null;
-    if (!row) {
-      if (limited()) throw overLimit();
-      const created = Date.now(), { lastInsertRowid } = q.insert.run(item.id, ctx.user.id, meta.name, meta.language, meta.kind, vtt, created);
-      row = { id: Number(lastInsertRowid), created };
-    }
-    return { subtitle: subtitleOut({ ...row, ...meta, userId: ctx.user.id, addedBy: ctx.user.username }, ctx.user) };
+    return saveSubtitle(item, meta, ctx.user, vtt, queued);
   });
 
   const own = (ctx) => {

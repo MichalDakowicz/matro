@@ -551,3 +551,59 @@ test('receiver saves manual episode sections, maps the season and removes marker
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test('the head account turns on OpenSubtitles search and a viewer saves a result as a track', async () => {
+  const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'web-subtitle-search-'));
+  const media = path.join(root, 'media'); await fs.mkdir(media);
+  await fs.copyFile(f.mkv, path.join(media, 'Northbound.mkv'));
+  const requests = [];
+  const provider = async (url, options = {}) => {
+    const u = new URL(url); requests.push(u.pathname);
+    if (u.pathname.endsWith('/subtitles')) return Response.json({ data: [{ attributes: { release: 'Northbound.2020.WEB', language: 'pl', files: [{ file_id: 7 }] } }] });
+    if (u.pathname.endsWith('/download')) return Response.json({ link: 'https://www.opensubtitles.com/download/x/n.srt' });
+    return new Response('1\n00:00:01,000 --> 00:00:02,000\nWitaj\n');
+  };
+  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} }, subtitleSearch: { fetch: provider } });
+  let browser;
+  try {
+    await app.createUser('head', 'native-and-web-test', 'admin');
+    await library.addFolder(media);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: `http://127.0.0.1:${server.address().port}`, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
+    browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
+    const page = await browser.firstWindow();
+    await page.getByRole('textbox', { name: 'Username', exact: true }).fill('head');
+    await page.getByLabel('Password', { exact: true }).fill('native-and-web-test');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: /^(Play now|Resume)$/ }).click();
+    await page.getByRole('button', { name: 'Audio and subtitles' }).click();
+    await expect(page.getByRole('button', { name: 'Load subtitle file…' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Find subtitles…' })).toHaveCount(0);
+    expect(requests).toEqual([]);
+    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+
+    await page.getByRole('button', { name: 'Profile: head' }).click();
+    await expect(page.getByText('Search is off.')).toBeVisible();
+    await page.getByLabel('OpenSubtitles API key').fill('test-key');
+    await page.getByRole('button', { name: 'Save API key' }).click();
+    await expect(page.getByText('Search is on.')).toBeVisible();
+    await expect(page.getByLabel('OpenSubtitles API key')).toHaveValue('');
+    await page.locator('.web-back').click();
+
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: /^(Play now|Resume)$/ }).click();
+    await page.getByRole('button', { name: 'Audio and subtitles' }).click();
+    await page.getByRole('button', { name: 'Find subtitles…' }).click();
+    await page.getByLabel('Subtitle language').selectOption('pl');
+    await page.getByRole('button', { name: 'Search OpenSubtitles' }).click();
+    await page.getByRole('button', { name: 'Northbound.2020.WEB' }).click();
+    await expect(page.getByRole('button', { name: /Northbound\.2020\.WEB/ })).toHaveCount(1);
+    await expect(page.locator('.track-option.selected', { hasText: 'Northbound.2020.WEB' })).toBeVisible();
+    expect((await app.db.prepare('SELECT language, name FROM subtitles').all()).map(s => [s.language, s.name])).toEqual([['pl', 'Northbound.2020.WEB']]);
+  } finally {
+    await browser?.close(); app.downloads.close(); app.closePlayback();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

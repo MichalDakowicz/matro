@@ -1,5 +1,5 @@
 // The one page the desktop app does not have: who you are, what you have added, your password, and for the head account the people.
-import { get, post, patch, del } from './http.js';
+import { get, post, patch, put, del } from './http.js';
 import { h, say, dialog, languageSelect, languageName, copyText, selectText } from './dom.js';
 
 const hue = name => { let n = 2166136261; for (const c of name) n = Math.imul(n ^ c.codePointAt(0), 16777619); return (n >>> 0) % 360; };
@@ -23,6 +23,20 @@ export function openProfile({ session, getState, save, signOut, openSaved }) {
   document.addEventListener('keydown', onKey, true);
 
   const user = session.user, admin = user.role === 'admin' && !session.offline, state = getState();
+  const subtitleStatus = h('p', { class: 'muted', role: 'status' });
+  const subtitleKey = h('input', { type: 'password', required: true, 'aria-label': 'OpenSubtitles API key', maxLength: 200, autocomplete: 'off' });
+  const subtitleOff = h('button', { class: 'pill', type: 'button', hidden: true, onclick: () => configureSubtitles('') }, 'Turn off');
+  const showSubtitleStatus = ({ enabled }) => {
+    subtitleOff.hidden = !enabled;
+    subtitleStatus.textContent = `Search is ${enabled ? 'on' : 'off'}. A search sends the title and language to OpenSubtitles.`;
+  };
+  async function configureSubtitles(key) {
+    try { showSubtitleStatus(await put('/api/admin/subtitle-search', { key })); subtitleKey.value = ''; }
+    catch (error) { subtitleStatus.textContent = error.message; }
+  }
+  const subtitleSettings = h('form', { onsubmit: event => { event.preventDefault(); void configureSubtitles(subtitleKey.value); } },
+    subtitleStatus, h('label', { class: 'search-field small' }, subtitleKey),
+    h('div', { class: 'show-actions' }, h('button', { class: 'pill primary', type: 'submit' }, 'Save API key'), subtitleOff));
   const done = Object.values(state?.progress || {}).filter(p => p.completed).length;
   const going = Object.values(state?.progress || {}).filter(p => !p.completed && p.position > 10 && !p.hidden).length;
   const remembered = Object.keys(state?.preferences?.tracks || {}).length;
@@ -102,12 +116,13 @@ export function openProfile({ session, getState, save, signOut, openSaved }) {
       section('Your watching', null, stats), section('Dub and subtitles', forget, h('p', { class: 'muted' }, 'The player remembers which audio and subtitle language you pick for each show or film, so a dub chosen in one episode carries through the series.')),
       section('Saved for offline', null, h('button', { class: 'pill', type: 'button', onclick: () => { close(); openSaved(); } }, 'View offline downloads')),
       session.offline ? null : section('Subtitles you added', null, added), session.offline ? null : section('Password', null, password),
+      admin ? section('OpenSubtitles', null, subtitleSettings) : null,
       admin ? section('Downloads', null, h('p', { class: 'muted' }, 'Find films and series, add magnet links, and manage downloads on the Matro host.'), h('button', { class: 'pill primary', type: 'button', onclick: () => { close(); document.querySelector('.dock-item[data-tab="downloads"]')?.click(); } }, 'Open downloads')) : null,
       admin ? section('People', null, h('p', { class: 'page-sub', style: { margin: '-6px 0 16px' } }, 'Viewers keep their own progress and choices and can add subtitles. Only you can add or remove films and shows (Folders). To add someone, create a one-time invite code and send it to them: they sign up with it and pick their own password.'), people, h('h3', { class: 'web-sub' }, 'Invites'), invites, addPerson) : null,
       h('div', { class: 'show-actions' }, h('button', { class: 'pill', type: 'button', onclick: signOut }, 'Sign out'))));
   document.body.append(layer); document.body.classList.add('web-layer-open');
   if (!session.offline) loadAdded().catch(fail);
-  if (admin) { loadPeople().catch(fail); loadInvites().catch(fail); }
+  if (admin) { loadPeople().catch(fail); loadInvites().catch(fail); get('/api/subtitle-search').then(showSubtitleStatus).catch(fail); }
   layer.querySelector('.web-back').focus();
   return close;
 }
