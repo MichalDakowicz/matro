@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, BackHandler, FlatList, Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { changeProgress, library, mediaHeaders, request, ServerError, type Item, type Library, type MovieRequest, type ScannerStatus } from '../lib/server';
+import { changeProgress, inspect, library, mediaHeaders, request, ServerError, type Item, type Library, type MovieRequest, type ScannerStatus } from '../lib/server';
 import { progressRecovery, recoveryScope } from '../lib/storage';
-import { continueItems, groupLibrary, metadataFor, nameFor, statusOf, titleKey } from '../../../../packages/core/client/library';
+import { continueItems, groupLibrary, metadataFor, nameFor, savedServes, statusOf, titleKey, trackKey } from '../../../../packages/core/client/library';
 import { dismissedProgress, normalizeProgress } from '../../../../packages/core/client/watch-progress.js';
 import { colors, fonts } from '../theme';
 import { Icon, Pill, styles as t } from '../components/Matro';
@@ -150,7 +150,12 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const startPlayback = async (item: Item, queue: Item[], start?: number) => {
     if (!data) return;
     const run = ++playRun.current;
-    const saved = await savedTitle(base, data.user, item.id).catch(() => undefined);
+    let saved = await savedTitle(base, data.user, item.id).catch(() => undefined);
+    // Online, the saved copy only has the first audio track and text subtitles: stream when the chosen tracks need more.
+    if (saved && !offline) {
+      const full = await inspect(base, item.id).catch(() => null);
+      if (full && !savedServes(saved.info, full, data.preferences.tracks?.[trackKey(item)])) saved = undefined;
+    }
     if (run !== playRun.current) return;
     if (offline && !saved) { setError('This title is not saved on this device.'); return; }
     setPlaying({ item, start, queue, saved });

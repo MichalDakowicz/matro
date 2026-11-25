@@ -132,9 +132,7 @@ test('a stalled caption and a 502 or stalled range retry before completing', asy
     if (url.includes('/subtitles/')) return ++captions === 1 ? never() : new Response('WEBVTT');
     if (++ranges === 1) return new Response(null, { status: 502 });
     if (ranges === 2) {
-      const response = media();
-      response.arrayBuffer = never;
-      return response;
+      return new Response(new ReadableStream({ pull: never }), { status: 206, headers: { 'content-range': 'bytes 0-2/3' } });
     }
     return media();
   };
@@ -179,10 +177,10 @@ test('after a connection outage and relaunch, a download resumes at its last com
     t.mock.timers.tick(delay);
     await until(() => failedRanges === expected);
   }
-  await until(() => !fixture.holds);
+  await until(async () => /503/.test((await records())[0]?.error ?? ''));
   const [waiting] = await records();
-  assert.match(waiting.error!, /503/);
   assert.equal(waiting.paused, false);
+  assert.equal(fixture.holds, 1); // The service stays up for the retry.
 
   const next = setup(new Map(first.entries), new Map(first.files));
   next.fixture.request = async () => ({ ...prepared, size });
@@ -212,14 +210,14 @@ test('preparation can exceed 30 minutes while advancing and a stalled record ret
   assert.equal(offline.activeDownloads(base, user).length, 1);
   await setImmediate();
   t.mock.timers.tick(31 * 60 * 1000);
-  await until(() => !fixture.holds);
+  await until(async () => !!(await records())[0]?.error);
   const [stalled] = await records();
   assert.equal(stalled.state, 'preparing');
   assert.match(stalled.error!, /not advanced/);
   fixture.request = async () => prepared;
-  t.mock.timers.tick(30000);
-  await offline.retryInterrupted(base, user);
-  await until(async () => (await records())[0]?.complete === true);
+  assert.equal(fixture.holds, 1);
+  t.mock.timers.tick(30000); // The retry timer fires without any foreground poll.
+  await until(async () => (await records())[0]?.complete === true && !fixture.holds);
 });
 
 test('version conflicts and disk-full failures retain a reason and require manual resume', async () => {

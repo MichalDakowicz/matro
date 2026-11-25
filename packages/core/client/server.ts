@@ -28,16 +28,17 @@ export async function mediaHeaders(base: string): Promise<Record<string, string>
 }
 
 // Keep the signal attached through the body read, with a fresh deadline after headers arrive.
+// `read` may call `touch` as data arrives to restart the body deadline, making `bodyMs` an idle limit for large bodies.
 export async function fetchWithDeadline<R, T>(
   send: (signal: AbortSignal) => Promise<R>,
-  read: (response: R) => Promise<T>,
+  read: (response: R, touch: () => void) => Promise<T>,
   { signal, requestMs = 15000, bodyMs = 30000 }: { signal?: AbortSignal; requestMs?: number; bodyMs?: number } = {},
 ): Promise<T> {
   const controller = new AbortController();
   const cancel = () => controller.abort();
   signal?.addEventListener('abort', cancel);
   if (signal?.aborted) cancel();
-  async function phase<V>(run: () => Promise<V>, ms: number, message: string) {
+  async function phase<V>(run: (touch: () => void) => Promise<V>, ms: number, message: string) {
     if (controller.signal.aborted) throw new Error('Request cancelled.');
     let timedOut = false;
     let rejectAbort: () => void;
@@ -45,13 +46,15 @@ export async function fetchWithDeadline<R, T>(
       rejectAbort = () => reject(new Error(timedOut ? message : 'Request cancelled.'));
       controller.signal.addEventListener('abort', rejectAbort);
     });
-    const timer = setTimeout(() => { timedOut = true; cancel(); }, ms);
-    try { return await Promise.race([aborted, run()]); }
+    const arm = () => setTimeout(() => { timedOut = true; cancel(); }, ms);
+    let timer = arm();
+    const touch = () => { clearTimeout(timer); timer = arm(); };
+    try { return await Promise.race([aborted, run(touch)]); }
     finally { clearTimeout(timer); controller.signal.removeEventListener('abort', rejectAbort!); }
   }
   try {
     const response = await phase(() => send(controller.signal), requestMs, 'The server took too long to respond.');
-    return await phase(() => read(response), bodyMs, 'The server took too long to send the response.');
+    return await phase(touch => read(response, touch), bodyMs, 'The server took too long to send the response.');
   } catch (error) {
     cancel();
     throw error;

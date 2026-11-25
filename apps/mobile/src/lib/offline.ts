@@ -57,6 +57,7 @@ async function retrying<T>(signal: AbortSignal, run: () => Promise<T>): Promise<
 const jobs = new Map<string, OfflineJob>();
 const holds = new Map<string, () => void>();
 const retryDue = new Map<string, number>();
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const observers = new Set<() => void>();
 const changed = () => { observers.forEach(listener => listener()); };
 export function watchOffline(listener: () => void) { observers.add(listener); return () => { observers.delete(listener); }; }
@@ -119,9 +120,15 @@ async function drain(base: string, scope: string, retry = false) {
       startDownload(base, scope, record);
     }
     const nextRetry = pending.reduce((next, record) => record.retryAt && !jobs.has(recordKey(scope, record.id)) ? Math.min(next, record.retryAt) : next, Infinity);
-    if (nextRetry < Infinity) retryDue.set(scope, nextRetry); else retryDue.delete(scope);
+    clearTimeout(retryTimers.get(scope)); retryTimers.delete(scope);
+    if (nextRetry < Infinity) {
+      retryDue.set(scope, nextRetry);
+      // Keep the service alive and retry on time even when the app stays in the background.
+      if (!holds.has(scope)) holds.set(scope, holdService());
+      retryTimers.set(scope, setTimeout(() => { retryTimers.delete(scope); void editQueue(() => drain(base, scope, true)).catch(() => {}); }, Math.max(0, nextRetry - Date.now())));
+    } else retryDue.delete(scope);
   } finally {
-    if (!scopedJobs(scope).length) { holds.get(scope)?.(); holds.delete(scope); }
+    if (!scopedJobs(scope).length && !retryTimers.has(scope)) { holds.get(scope)?.(); holds.delete(scope); }
     changed();
   }
 }
@@ -226,7 +233,7 @@ function startDownload(base: string, scope: string, record: OfflineRecord) {
     const headers = await mediaHeaders(base);
     const info = await retrying(signal, () => inspect(base, record.id, signal)), text: Record<string, string> = {};
     const captions: Info['embedded'] = [], uploads: Info['uploaded'] = [];
-    const fetchBody = <T>(path: string, readBody: (response: Awaited<ReturnType<typeof fetch>>) => Promise<T>, extraHeaders = {}) =>
+    const fetchBody = <T>(path: string, readBody: (response: Awaited<ReturnType<typeof fetch>>, touch: () => void) => Promise<T>, extraHeaders = {}) =>
       retrying(signal, () => fetchWithDeadline(
         requestSignal => fetch(base + route + path, { headers: { ...headers, ...extraHeaders }, signal: requestSignal }),
         readBody, { signal },
@@ -260,15 +267,24 @@ function startDownload(base: string, scope: string, record: OfflineRecord) {
 
     const fetchPiece = (start: number) => {
       const end = Math.min(start + PIECE, size) - 1;
-      const piece = fetchBody('/offline/file?version=' + version, async response => {
+      const piece = fetchBody('/offline/file?version=' + version, async (response, touch) => {
         if (response.status === 401) throw new ServerError('Sign in again to finish the download.', 401);
         if (response.status === 409) throw new ServerError('The prepared file changed. Retry the download.', 409);
         if (!response.ok) throw new ServerError(`Could not download media (HTTP ${response.status}).`, response.status);
         if (response.status !== 206 || response.headers.get('content-range') !== `bytes ${start}-${end}/${size}`) {
           throw new ServerError('The server returned an invalid byte range.', 422);
         }
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        if (bytes.length !== end - start + 1) throw new Error('The server stopped sending the file.');
+        // Read chunk by chunk so the body deadline is an idle limit: a slow link may take minutes per piece.
+        const bytes = new Uint8Array(end - start + 1), reader = response.body?.getReader();
+        let got = 0;
+        if (!reader) { const whole = new Uint8Array(await response.arrayBuffer()); if (whole.length === bytes.length) bytes.set(whole); got = whole.length; }
+        for (;;) {
+          const chunk = await reader?.read();
+          if (!chunk || chunk.done) break;
+          if (got + chunk.value.length > bytes.length) throw new Error('The server sent too much data.');
+          bytes.set(chunk.value, got); got += chunk.value.length; touch();
+        }
+        if (got !== bytes.length) throw new Error('The server stopped sending the file.');
         return bytes;
       }, { range: `bytes=${start}-${end}` });
       void piece.catch(() => {}); // A prefetched piece may fail before its turn to be written.
@@ -301,7 +317,7 @@ function startDownload(base: string, scope: string, record: OfflineRecord) {
     record.error = diskFull(error) ? new DiskFullError().message : error instanceof Error ? error.message : 'Could not finish saving this title.';
     record.paused = !retry;
     record.retryAt = retry ? Date.now() + RETRY_DELAY_MS : undefined;
-    notice.failed(record.error);
+    if (record.paused) notice.failed(record.error);
     await persist();
   }).catch(() => {}).finally(() => {
     controller.abort(); // Cancel prefetched work if any piece failed.
