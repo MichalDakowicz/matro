@@ -2,11 +2,12 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { createLocalMetadata } = require('../local-metadata.cjs');
 const { createDownloadPreview } = require('./download-preview.cjs');
 
 const API = 'https://api.themoviedb.org/3', IMAGES = 'https://image.tmdb.org/t/p/';
 const RECHECK_MISSING = 7 * 24 * 3600 * 1000;
-const artworkName = /^(?:(?:movie|tv)-\d+-(?:poster|backdrop|thumb)|movie-\d+-[a-z]{2}(?:-[A-Z]{2})?-(?:poster|backdrop)|tv-\d+-s\d+e\d+|person-\d+)\.jpg$/;
+const artworkName = /^(?:(?:movie|tv)-\d+-(?:poster|backdrop|thumb)|movie-\d+-[a-z]{2}(?:-[A-Z]{2})?-(?:poster|backdrop)|tv-\d+-s\d+e\d+|person-\d+|local-[a-f0-9]{64})\.jpg$/;
 
 // Minimal KEY=VALUE reader for the git-ignored .env (packed into local builds, see package.json "files").
 function readEnv(files) {
@@ -68,6 +69,20 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
   const file = path.join(dir, 'metadata.json'), artwork = path.join(dir, 'artwork');
   let entries = {}, queue = [], running = 0, saveTimer, updateTimer;
   let writes = Promise.resolve();
+  const readLocal = createLocalMetadata(artwork, keyFor);
+  let local = {}, localTask = Promise.resolve();
+  function syncLocal(items) {
+    const task = localTask.then(async () => {
+      await loaded;
+      const next = await readLocal(items);
+      if (JSON.stringify(next) === JSON.stringify(local)) return false;
+      local = next;
+      changed();
+      return true;
+    });
+    localTask = task.catch(() => {});
+    return task;
+  }
   const pending = new Set(), failed = new Set(), edits = new Map();
   const loaded = (async () => {
     try { entries = JSON.parse(await fsp.readFile(file, 'utf8')).entries || {}; } catch { entries = {}; }
@@ -89,7 +104,13 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     return task.finally(() => { if (edits.get(key) === task) edits.delete(key); });
   }
   function changed() { clearTimeout(updateTimer); updateTimer = setTimeout(() => onUpdate?.(snapshot()), 300); }
-  function snapshot() { return Object.fromEntries(Object.entries(entries).filter(([, e]) => e.status === 'matched' && e.matcher === MATCHER).map(([key, { status, query, checked, matcher, ...rest }]) => [key, rest])); }
+  function snapshot() {
+    const matched = auth ? Object.fromEntries(Object.entries(entries).filter(([key, entry]) =>
+      entry.status === 'matched' && entry.matcher === MATCHER && (!local[key]?.tmdbId || local[key].tmdbId === entry.tmdbId)
+    ).map(([key, { status, query, checked, matcher, nfoId, ...rest }]) => [key, rest])) : {};
+    for (const [key, fields] of Object.entries(local)) matched[key] = { ...matched[key], ...fields };
+    return matched;
+  }
   async function api(route, params = {}, options) {
     const url = new URL(apiBase.replace(/\/+$/, '') + route);
     for (const [name, value] of Object.entries(params)) if (value !== null && value !== undefined && value !== '') url.searchParams.set(name, value);
@@ -173,14 +194,14 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     return found ? tvDetails(found.id, seasons) : null;
   }
   function record(job, result, manual) {
-    entries[job.key] = { status: result ? 'matched' : 'missing', query: job.query, checked: Date.now(), matcher: MATCHER, details: DETAILS, ...(manual ? { manual: true } : {}), ...(job.language ? { language: job.language } : {}), ...(result || {}) };
+    entries[job.key] = { status: result ? 'matched' : 'missing', query: job.query, checked: Date.now(), matcher: MATCHER, details: DETAILS, nfoId: job.nfoId, ...(manual ? { manual: true } : {}), ...(job.language ? { language: job.language } : {}), ...(result || {}) };
     save();
   }
   async function work() {
     while (queue.length && running < 4) {
       const job = queue.shift(); running++;
       void lookup(job).then(result => {
-        if (entries[job.key] !== job.previous || (job.tmdbId && !result)) return;
+        if (entries[job.key] !== job.previous || (job.tmdbId && !result) || (job.nfoId && local[job.key]?.tmdbId !== job.nfoId)) return;
         record(job, result, job.manual);
         if (result) changed();
       })
@@ -204,7 +225,19 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     if (!auth) return;
     await loaded;
     for (const job of titlesOf(items)) {
-      const entry = entries[job.key];
+      const entry = entries[job.key], fields = local[job.key];
+      const nfoId = fields?.tmdbId;
+      if (nfoId || entry?.nfoId) {
+        const pinChanged = nfoId !== entry?.nfoId;
+        const missingEpisodes = entry?.type === 'tv' && job.seasons.some(season => !entry.episodes?.[season]);
+        if ((pinChanged || missingEpisodes || entry.details !== DETAILS) && !pending.has(job.key) && !failed.has(job.key)) {
+          pending.add(job.key);
+          queue.push({ ...job, query: fields?.title || job.query, year: fields?.year || job.year, nfoId, tmdbId: nfoId, language: entry?.language, previous: entry });
+        }
+        continue;
+      }
+      if (fields?.title) job.query = fields.title;
+      if (fields?.year) job.year = fields.year;
       const missingSeason = entry?.status === 'matched' && entry.type === 'tv' && job.seasons.some(s => !entry.episodes?.[s]);
       // Matched titles with a new season or older stored details are refreshed by id, keeping the match (and whether it was manual).
       const stale = entry?.status === 'matched' && entry.matcher === MATCHER && (missingSeason || entry.details !== DETAILS);
@@ -263,6 +296,6 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     api: (route, params) => api(route, params, previewOptions()),
     image: (pathname, size, name) => image(pathname, size, name, previewOptions()),
   });
-  return { enabled: !!auth, sync, search, assign, setLanguage, preview, snapshot: () => snapshot(), loaded, artworkFile: name => artworkName.test(name) ? path.join(artwork, name) : null };
+  return { enabled: !!auth, sync, syncLocal, search, assign, setLanguage, preview, snapshot: () => snapshot(), loaded, artworkFile: name => artworkName.test(name) ? path.join(artwork, name) : null };
 }
 module.exports = { readEnv, credentials, createMetadata, cleanQuery, yearOf, keyFor };

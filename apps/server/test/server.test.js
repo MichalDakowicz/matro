@@ -148,6 +148,39 @@ test('viewers see the catalog with no server paths', async () => {
   assert.equal(head.items[0].path.startsWith(mediaDir), true);
 });
 
+test('library scans publish local art and NFO details with TMDB disabled', async t => {
+  const isolated = path.join(root, 'local-artwork'), media = path.join(isolated, 'Films');
+  const source = path.join(media, 'Finished Film (2025)');
+  fs.mkdirSync(source, { recursive: true });
+  fs.writeFileSync(path.join(source, 'Finished Film (2025).mp4'), 'a catalog fixture');
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+  fs.writeFileSync(path.join(source, 'poster.jpg'), jpeg);
+  fs.writeFileSync(path.join(source, 'fanart.jpg'), jpeg);
+  const nfo = path.join(source, 'movie.nfo');
+  fs.writeFileSync(nfo, '<movie><title>My Film</title><year>2025</year><plot>A &amp; B</plot><tmdbid>412</tmdbid></movie>');
+  const { app, library, db, server } = createApp({ dataDir: path.join(isolated, 'data'), tmdb: {
+    env: { MATRO_METADATA: 'off' }, fetchImpl: () => assert.fail('TMDB must stay off'),
+  } });
+  t.after(() => { app.downloads.close(); app.scanner.close(); server.close(); db.close(); });
+  const { id } = await library.addFolder(media);
+  const item = db.prepare('SELECT id FROM active_items').get();
+  let meta = app.tmdb.snapshot()[item.id];
+  assert.equal(meta.title, 'My Film');
+  assert.equal(meta.overview, 'A & B');
+  assert.equal(meta.year, '2025');
+  assert.equal(meta.tmdbId, 412);
+  assert.match(meta.poster, /^artwork\/local-[0-9a-f]{64}\.jpg$/);
+  assert.equal(meta.backdrop, meta.poster);
+  assert.deepEqual(fs.readFileSync(app.tmdb.artworkFile(path.basename(meta.poster))), jpeg);
+  const revision = library.state.revision;
+  fs.writeFileSync(nfo, '<movie><title>Renamed Film</title></movie>');
+  await library.rescan(id);
+  assert.notEqual(library.state.revision, revision);
+  meta = app.tmdb.snapshot()[item.id];
+  assert.equal(meta.title, 'Renamed Film');
+  assert.equal(meta.tmdbId, undefined);
+});
+
 test('TMDB metadata is matched on the server and artwork is served to signed-in viewers', async () => {
   const { groups } = await catalog('sam');
   const film = groups[0][0], show = groups[1][0];

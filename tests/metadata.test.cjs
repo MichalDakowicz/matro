@@ -281,3 +281,34 @@ test('a movie keeps its own metadata language across rematches and restarts', as
   assert.equal((await restarted.setLanguage([first], null)).first.title, 'Day of the Wacko');
   assert.equal(restarted.snapshot().first.language, undefined);
 });
+
+test('local NFO fields and same-name art take precedence and update without a match', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-local-art-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const { createMetadata } = require('../packages/core/desktop/metadata.cjs');
+  const metadata = createMetadata({ dir: path.join(dir, 'cache'), auth: null, fetch: () => assert.fail('TMDB was disabled') });
+  const file = path.join(dir, 'Home Video.mkv');
+  const items = [{ id: 'home', kind: 'movie', path: file, group: 'Home Video' }, { id: 'other', kind: 'movie', path: path.join(dir, 'Other.mkv'), group: 'Other' }];
+  await fs.writeFile(path.join(dir, 'Home Video.nfo'), '<movie><title><![CDATA[Matro & friends]]></title><year>1999</year><uniqueid type="tmdb">123</uniqueid></movie>');
+  await fs.writeFile(path.join(dir, 'Home Video-poster.jpg'), Buffer.from([255, 216, 255, 224, 255, 217]));
+  await fs.writeFile(path.join(dir, 'poster.jpg'), Buffer.from([255, 216, 255, 225, 255, 217]));
+  assert.equal(await metadata.syncLocal(items), true);
+  const first = metadata.snapshot();
+  assert.equal(first.home.title, 'Matro & friends');
+  assert.equal(first.home.year, '1999');
+  assert.equal(first.home.tmdbId, 123);
+  assert.ok(first.home.poster);
+  assert.equal(first.other, undefined);
+  assert.equal(await metadata.syncLocal(items), false);
+  await fs.rm(path.join(dir, 'Home Video.nfo'));
+  assert.equal(await metadata.syncLocal(items), true);
+  assert.equal(metadata.snapshot().home.title, undefined);
+  assert.equal(metadata.snapshot().home.poster, first.home.poster);
+});
+
+test('NFO parsing keeps valid fields, ignores entity declarations and rejects bad ids', () => {
+  const { readNfo } = require('../packages/core/local-metadata.cjs');
+  assert.deepEqual(readNfo('<movie><title>A &amp; B</title><year>2001</year><plot>Plot</plot><tmdbid>77</tmdbid></movie>'), { title: 'A & B', overview: 'Plot', year: '2001', tmdbId: 77 });
+  assert.deepEqual(readNfo('<!DOCTYPE x [<!ENTITY a "b">]><movie><title>&a;</title></movie>'), {});
+  assert.deepEqual(readNfo('<tvshow><year>20x1</year><tmdbid>0</tmdbid><title>Show</title></tvshow>'), { title: 'Show' });
+});
