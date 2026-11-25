@@ -25,8 +25,10 @@ export default function ServerScreen({ initial = '', notice = '', onConnected }:
       const { base, status } = await connect(target);
       onConnected(base, status);
     } catch (e) {
-      if (e instanceof ServerError && /^Enter your server/.test(e.message)) setError(e.message);
-      else {
+      if (e instanceof ServerError && (e.status || /^Enter your server/.test(e.message))) {
+        setError(e.message);
+        if (/^Server answered \d+\.$/.test(e.message)) setHint('This does not look like a Matro server. Check the address.');
+      } else {
         setError("Couldn't reach a Matro server at that address.");
         setHint('Check the address and that this phone can reach it. A local address like 192.168.1.5:8484 needs the same Wi-Fi as the server.');
       }

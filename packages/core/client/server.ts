@@ -55,15 +55,17 @@ export async function request(base: string, path: string, init: { method?: strin
 export async function connect(input: string): Promise<{ base: string; status: Status }> {
   const list = candidates(input);
   if (!list.length) throw new ServerError('Enter your server address.');
+  let answered: ServerError | undefined;
   for (const base of list) {
     try {
       const status = await request(base, '/api/status');
       if (status && typeof status.setup === 'boolean') return { base, status };
-    } catch {
+    } catch (error) {
+      if (error instanceof ServerError && error.status) answered = error; // The server replied: keep its own message.
       /* try the next scheme */
     }
   }
-  throw new ServerError("Couldn't reach a Matro server at that address.");
+  throw answered ?? new ServerError("Couldn't reach a Matro server at that address.");
 }
 
 const sessionExchanges = new Map<string, Promise<void>>();
