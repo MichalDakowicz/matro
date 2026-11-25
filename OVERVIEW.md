@@ -95,7 +95,7 @@ The FFmpeg bridge makes broad decoding practical without a native addon or an in
 
 Before positioning Matro as a high-end 4K desktop player, evaluate an embedded libmpv/libVLC engine or another maintained native render integration. Priorities are direct decode, hardware acceleration, color management/HDR, surround/passthrough, richer subtitle rendering, and reliable audio/subtitle preference matching. The UI/IPC boundary is deliberately separate from the current streaming backend to make that replacement possible.
 
-Other gaps: file watching, background scan progress/cancel, real artwork/metadata, a database for very large collections, remembered track choices, duplicate-show disambiguation, OS file associations, accessibility review beyond implemented labels/focus states, code signing, and automated update delivery. Windows is the verified initial target; macOS/Linux installers and platform behavior need their own validation.
+Other gaps: server-side file watching, scan cancel, real artwork/metadata, a database for very large collections, remembered track choices, duplicate-show disambiguation, OS file associations, accessibility review beyond implemented labels/focus states, code signing, and automated update delivery. Windows is the verified initial target; macOS/Linux installers and platform behavior need their own validation.
 
 ## Roadmap
 

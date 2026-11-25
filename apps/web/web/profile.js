@@ -1,4 +1,5 @@
 // The one page the desktop app does not have: who you are, what you have added, your password, and for the head account the people.
+import { scanMessage } from '../../../packages/core/client/scan-status.js';
 import { get, post, patch, del } from './http.js';
 import { h, say, dialog, languageSelect, languageName, copyText, selectText } from './dom.js';
 
@@ -100,6 +101,8 @@ export function openProfile({ session, getState, save, signOut, openSaved }) {
     h('main', { class: 'page web-page' },
       h('header', { class: 'page-head' }, h('div', { class: 'web-who' }, avatar(user.username, true), h('div', {}, h('h1', { class: 'page-title' }, user.username), h('p', { class: 'page-sub' }, admin ? 'Head account · looks after the library and everyone on it' : 'Viewer · watches and adds subtitles')))),
       section('Your watching', null, stats), section('Dub and subtitles', forget, h('p', { class: 'muted' }, 'The player remembers which audio and subtitle language you pick for each show or film, so a dub chosen in one episode carries through the series.')),
+      !session.offline && state?.scanStatus ? section('Library scan', null, h('p', { class: 'muted', role: 'status', 'data-library-scan-status': '' }, scanMessage(state.scanStatus)),
+        h('ul', { class: 'scan-errors', 'data-library-scan-errors': '' }, state.scanStatus.errors.map(row => h('li', {}, row.folder + ': ' + row.error)))) : null,
       section('Saved for offline', null, h('button', { class: 'pill', type: 'button', onclick: () => { close(); openSaved(); } }, 'View offline downloads')),
       session.offline ? null : section('Subtitles you added', null, added), session.offline ? null : section('Password', null, password),
       admin ? section('Downloads', null, h('p', { class: 'muted' }, 'Find films and series, add magnet links, and manage downloads on the Matro host.'), h('button', { class: 'pill primary', type: 'button', onclick: () => { close(); document.querySelector('.dock-item[data-tab="downloads"]')?.click(); } }, 'Open downloads')) : null,

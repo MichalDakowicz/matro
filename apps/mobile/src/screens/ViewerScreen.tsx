@@ -55,13 +55,17 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       if (offline || closed || checking || AppState.currentState === 'background' || !before) return;
       checking = true;
       try {
-        const { catalogRevision } = await request(base, '/api/library/revision');
-        if (closed || revision.current !== before || catalogRevision === before) return;
+        const { catalogRevision, scanStatus } = await request(base, '/api/library/revision');
+        if (closed || revision.current !== before) return;
+        if (catalogRevision === before) {
+          setData(current => current && JSON.stringify(current.scanStatus) !== JSON.stringify(scanStatus) ? { ...current, scanStatus } : current);
+          return;
+        }
         const next = await library(base);
         if (closed || revision.current !== before) return;
         revision.current = next.catalogRevision;
         void rememberLibrary(base, next).catch(() => {});
-        setData(current => current && { ...current, items: next.items, folders: next.folders, metadata: next.metadata, scanner: next.scanner, catalogRevision: next.catalogRevision });
+        setData(current => current && { ...current, items: next.items, folders: next.folders, metadata: next.metadata, scanner: next.scanner, scanStatus: next.scanStatus, catalogRevision: next.catalogRevision });
       } catch (error) {
         if (!closed && error instanceof ServerError && error.status === 401) onSignedOut();
       } finally { checking = false; }

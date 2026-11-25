@@ -784,3 +784,25 @@ test('the next episode is preloaded near the end and starts without waiting', as
     expect(first.completed).toBe(true); expect(first.position).toBeGreaterThan(11);
   } finally { await app.close(); }
 });
+
+test('finished files enter watched folders without Rescan and pending files stay hidden', async () => {
+  const f = await fixtures();
+  const root = await fs.mkdtemp(path.join(f.dir, 'watch-root-'));
+  const media = path.join(root, 'Movies'), pending = path.join(media, '.matro-pending'), profile = path.join(root, 'profile');
+  await fs.mkdir(pending, { recursive: true });
+  await fs.mkdir(profile);
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, folders: [media] }));
+  const app = await electron.launch(launchOptions(profile));
+  try {
+    const page = await app.firstWindow();
+    await expect(page.getByRole('heading', { name: 'Your collection. Your kind of player.' })).toBeVisible();
+    await fs.copyFile(f.mkv, path.join(pending, 'Watched Folder Movie.mkv'));
+    await fs.copyFile(f.mkv, path.join(media, 'Other Movie.mkv'));
+    await expect(page.getByRole('button', { name: 'Open Other Movie', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open Watched Folder Movie', exact: true })).toHaveCount(0);
+    await fs.rename(path.join(pending, 'Watched Folder Movie.mkv'), path.join(media, 'Watched Folder Movie.mkv'));
+    await expect(page.getByRole('button', { name: 'Open Watched Folder Movie', exact: true })).toBeVisible();
+    await fs.rm(path.join(media, 'Watched Folder Movie.mkv'));
+    await expect(page.getByRole('button', { name: 'Open Watched Folder Movie', exact: true })).toHaveCount(0);
+  } finally { await app.close(); }
+});

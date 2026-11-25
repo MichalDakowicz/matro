@@ -58,14 +58,19 @@ export function createAdapter(session) {
       if (session.offline || closed || checking || document.hidden || !before?.catalogRevision) return;
       checking = true;
       try {
-        const { catalogRevision } = await get('/api/library/revision');
-        if (closed || latest !== before || catalogRevision === before.catalogRevision) return;
+        const { catalogRevision, scanStatus } = await get('/api/library/revision');
+        if (closed || latest !== before) return;
+        if (JSON.stringify(scanStatus) !== JSON.stringify(before.scanStatus)) {
+          latest.scanStatus = scanStatus;
+          callback({ scanStatus });
+        }
+        if (catalogRevision === before.catalogRevision) return;
         const data = await get('/api/library');
         data.metadata = artwork(data.metadata);
         if (closed || latest !== before) return;
         acceptLibrary(data);
         void offline.remember(data).catch(() => {});
-        callback({ items: data.items, folders: data.folders, metadata: data.metadata });
+        callback({ items: data.items, folders: data.folders, metadata: data.metadata, scanStatus: data.scanStatus });
       } catch { /* Check again after a temporary outage. */ }
       finally { checking = false; }
     };

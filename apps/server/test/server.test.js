@@ -265,6 +265,29 @@ test('a folder scan reads only that folder and drops copies of art that changed'
   assert.equal(fs.existsSync(path.join(artwork, path.basename(before.b))), false);
 });
 
+test('scan status follows background scans and redacts folder errors for viewers', async () => {
+  const folder = path.join(root, 'Scan status source');
+  fs.mkdirSync(folder);
+  const { id } = await app.library.addFolder(folder);
+  try {
+    const scan = app.library.rescan(id);
+    assert.equal(app.library.scanStatus(false).scanning, true);
+    await scan;
+    assert.equal(app.library.scanStatus(false).scanning, false);
+    fs.renameSync(folder, folder + '-missing');
+    await app.library.rescan(id);
+    const { scanStatus } = (await call('sam', 'GET', '/api/library/revision')).data;
+    assert.ok(scanStatus.lastScanAt > 0);
+    assert.deepEqual(scanStatus.errors, [{ folder: 'Scan status source', error: 'Folder could not be scanned completely.' }]);
+    assert.equal((await call('admin', 'GET', '/api/library')).data.scanStatus.errors[0].folder, folder);
+    fs.renameSync(folder + '-missing', folder);
+    await app.library.rescan(id);
+    assert.deepEqual(app.library.scanStatus(true).errors, []);
+  } finally {
+    app.library.removeFolder(id);
+  }
+});
+
 test('TMDB metadata is matched on the server and artwork is served to signed-in viewers', async () => {
   const { groups } = await catalog('sam');
   const film = groups[0][0], show = groups[1][0];

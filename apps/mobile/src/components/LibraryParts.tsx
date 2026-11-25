@@ -2,6 +2,7 @@ import { memo, useMemo, useRef, useState } from 'react';
 import { Animated, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import { scanMessage } from '../../../../packages/core/client/scan-status.js';
 import type { Item, Library } from '../lib/server';
 import { episodeName, formatTime, metadataFor, nameFor, resumeItem, statusOf } from '../../../../packages/core/client/library';
 import { colors, fonts } from '../theme';
@@ -85,6 +86,7 @@ export function AccountSheet({ visible, onClose, data, base, offline, onGo, onRe
       <View style={t.sectionHeading}><Text style={[t.heading, { fontSize: 28 }]}>Your profile</Text><IconButton name="close" label="Close profile" onPress={onClose} /></View>
       <Text style={[t.text, { fontSize: 20 }]}>{data?.user.username}</Text>
       <Text style={t.muted}>{offline ? 'Offline' : data?.user.role === 'admin' ? 'Head account' : 'Viewer'} · {base.replace(/^https?:\/\//, '')}</Text>
+      {!offline && data?.scanStatus && <Text accessibilityLiveRegion="polite" style={[t.muted, { marginTop: 8 }]}>{scanMessage(data.scanStatus)}</Text>}
       <View style={[t.row, { marginVertical: 24, gap: 36 }]}>
         <View><Text style={s.stat}>{data?.items.length || 0}</Text><Text style={t.dim}>Files</Text></View>
         <View><Text style={s.stat}>{Object.values(data?.progress || {}).filter(p => p.completed).length}</Text><Text style={t.dim}>Watched</Text></View>

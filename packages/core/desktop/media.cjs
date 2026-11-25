@@ -15,9 +15,9 @@ function describe(file, root = '') {
     kind: AUDIO.has(ext.toLowerCase()) ? 'audio' : episode !== null ? 'show' : 'movie',
     season, episode, format: ext.toUpperCase(), added: Date.now() };
 }
-async function scan(root, exclude, knownShows) {
+async function scan(root, exclude, knownShows, onDirectoryError = () => {}) {
   root = path.resolve(root);
-  const walked = await walk(fs, root, extensions, { allowHiddenFiles: true, onDirectoryError() {} });
+  const walked = await walk(fs, root, extensions, { allowHiddenFiles: true, onDirectoryError });
   const excluded = await exclude?.();
   const items = walked.filter(file => !excluded?.has(file)).map(file => describe(file, root));
   const videos = items.filter(item => item.kind !== 'audio');
