@@ -13,6 +13,7 @@ import TitleScreen from './TitleScreen';
 import DownloadsScreen from './DownloadsScreen';
 import FoldersScreen from './FoldersScreen';
 import OfflineScreen from './OfflineScreen';
+import OfflineChoices from './OfflineChoices';
 import MovieRequestsScreen from './MovieRequestsScreen';
 import { useMovieRequestAlerts } from '../lib/movie-request-alerts';
 import { isSaved, offlineLibrary, rememberLibrary, removeOffline, resumeInterrupted, retryInterrupted, savedTitle, savedTitles, saveOffline, saveOfflineBatch, watchOffline, type SavedMedia } from '../lib/offline';
@@ -26,6 +27,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const [requestSearch, setRequestSearch] = useState<MovieRequest | null>(null);
   const [selected, setSelected] = useState<string | null>(null), [playing, setPlaying] = useState<{ item: Item; start?: number; queue: Item[]; saved?: SavedMedia } | null>(null);
   const [offline, setOffline] = useState(false), playRun = useRef(0);
+  const [offlineChoices, setOfflineChoices] = useState<Item[] | null>(null);
   const [refreshing, setRefreshing] = useState(false), [account, setAccount] = useState(false), [folder, setFolder] = useState<string | null>(null);
   const revision = useRef<string | undefined>(undefined), loadRun = useRef(0);
   const alerts = useMovieRequestAlerts(base, !offline && data?.user.role === 'admin' && data.movieRequestPushEnabled === true);
@@ -175,17 +177,16 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     const subscription = AppState.addEventListener('change', state => { if (state === 'active') resume(); });
     return () => subscription.remove();
   }, [base, offline, data?.user.id, data?.user.username]);
-  const save = (item: Item) => {
+  const resumeSave = (item: Item) => {
     if (!data || offline) return;
     void saveOffline(base, data.user, item, saveName(item))
       .then(() => Alert.alert('Save offline', 'Follow preparation and download progress under Saved.'))
       .catch(error => Alert.alert('Could not save title', error.message));
   };
-  const saveMany = (list: Item[]) => {
-    if (!data || offline || !list.length) return;
-    void saveOfflineBatch(base, data.user, list, saveName)
-      .then(() => Alert.alert('Saving offline', 'Matro prepares two titles at a time. Follow progress under Saved.'))
-      .catch(error => Alert.alert('Could not save everything', error.message));
+  const openOfflineChoices = (list: Item[]) => {
+    const pending = list.filter(item => !savedIds.has(item.id));
+    if (pending.length) setOfflineChoices(pending);
+    else Alert.alert('Already saved', 'These titles are saved on this device.');
   };
   const removeSaved = (list: Item[]) => Alert.alert('Remove from this device?', 'The saved files are deleted. They stay in your library on the server.', [
     { text: 'Cancel', style: 'cancel' },
@@ -204,7 +205,14 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       if (next && data.preferences.autoplay !== false) void startPlayback(next, playing.queue);
       else { setPlaying(null); void load(); }
     }} />;
-  if (detail && data) return <TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onComplete={complete} onEnqueue={enqueue} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} />;
+  if (detail && data) return <>
+    <TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onComplete={complete} onEnqueue={enqueue} onSave={offline || savedOnly ? undefined : item => openOfflineChoices([item])} onSaveMany={offline || savedOnly ? undefined : openOfflineChoices} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} />
+    {offlineChoices && <OfflineChoices base={base} items={offlineChoices} preferred={data.preferences.tracks?.[trackKey(offlineChoices[0])]} close={() => setOfflineChoices(null)}
+      save={async choices => {
+        await saveOfflineBatch(base, data.user, offlineChoices, saveName, choices);
+        setOfflineChoices(null); Alert.alert('Save offline', 'Follow preparation and download progress under Saved.');
+      }} />}
+  </>;
   const contentStyle = { paddingTop: insets.top + 76, paddingBottom: insets.bottom + 104, paddingHorizontal: 18 };
   const search = tab === 'search';
   const matches = (items: Item[]) => !search || `${nameFor(data!, items[0])} ${metadataFor(data!, items[0]).people?.join(' ')} ${items.map(i => i.title + ' ' + i.path).join(' ')}`.toLowerCase().includes(query.toLowerCase().trim());
@@ -223,7 +231,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   return <View style={s.fill}>
     {tab === 'offline' && data ? <OfflineScreen {...art} data={data} offline={offline}
       onOpenTitle={items => { setSavedOnly(true); setSelected(titleKey(items[0])); }}
-      onResume={id => { const item = data.items.find(item => item.id === id); if (item) save(item); }}
+      onResume={id => { const item = data.items.find(item => item.id === id); if (item) resumeSave(item); }}
       onRemoved={() => { if (offline) void load(); }} /> :
     !data ? <View style={[s.center, { padding: 24 }]}>{refreshing ? <ActivityIndicator color={colors.text} /> : <><Text style={t.heading}>Your library</Text><Text style={[t.muted, { marginVertical: 16 }]}>{error || 'Could not load your library.'}</Text><Pill label="Try again" onPress={() => void load()} /></>}</View> :
     tab === 'movie-requests' && !offline && data.movieRequestsEnabled ? <View style={{ flex: 1, paddingTop: insets.top + 76 }}><MovieRequestsScreen key={alerts.opened} base={base} admin={data.user.role === 'admin'} alerts={alerts} onSearch={request => { changeTab('downloads'); setRequestSearch(request); }} /></View> :

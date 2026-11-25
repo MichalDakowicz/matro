@@ -41,6 +41,12 @@ function register(app) {
   };
   const subtitleOut = (row, user) => ({ id: row.id, name: row.name, language: row.language, kind: row.kind, addedBy: row.addedBy, created: row.created,
     mine: row.userId === user.id, canEdit: row.userId === user.id || user.role === 'admin' });
+  const qualityOf = query => {
+    const quality = query.get('quality');
+    if (quality === null || quality === 'original') return null;
+    if (!QUALITIES[quality]) throw new HttpError(400, 'Unknown quality.');
+    return quality;
+  };
 
   router.add('GET', '/api/items/:id/info', async ctx => {
     const item = find(ctx.params.id);
@@ -67,9 +73,13 @@ function register(app) {
     const item = find(ctx.params.id), info = await library.info(item);
     if (info.broken) throw new HttpError(422, 'This file could not be prepared for offline playback.');
     const audio = ctx.query.has('audio') ? Number(ctx.query.get('audio')) : null;
+    const burn = ctx.query.has('burn') ? Number(ctx.query.get('burn')) : null;
+    const quality = qualityOf(ctx.query);
     if (audio !== null && !info.audio.some(track => track.index === audio)) throw new HttpError(400, 'Unknown audio track.');
-    const direct = canDirectPlay(item.path, info) && (audio === null || audio === info.audio[0]?.index);
-    const entry = direct ? null : await transcode.offline(item.path, info, audio);
+    if (burn !== null && (!info.video || !info.subtitles.some(track => track.index === burn && track.bitmap))) throw new HttpError(400, 'Unknown image subtitle track.');
+    if (quality && !info.video) throw new HttpError(400, 'There is no video to resize.');
+    const direct = !quality && burn === null && info.audio.length <= 1 && !info.subtitles.some(track => track.bitmap) && canDirectPlay(item.path, info);
+    const entry = direct ? null : await transcode.offline(item.path, info, { audio, burn, quality });
     const changed = () => new HttpError(409, 'The offline file changed. Retry the download.');
     if (entry?.error) throw new HttpError(422, 'This file could not be prepared for offline playback.');
     if (entry && !entry.done) {
@@ -85,7 +95,9 @@ function register(app) {
       });
       try {
         const { size, mtimeMs, ctimeMs, ino } = await handle.stat();
-        const version = createHash('sha256').update(JSON.stringify([2, item.id, audio, size, mtimeMs, ctimeMs, ino])).digest('hex');
+        const identity = [2, item.id, audio, size, mtimeMs, ctimeMs, ino];
+        if (burn !== null || quality) identity.push(burn, quality);
+        const version = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
         if (!download) return { state: 'ready', size, version, type };
         if (ctx.query.get('version') !== version) throw changed();
         await sendOpenFile(ctx.req, ctx.res, handle, size, type, { 'Cache-Control': 'private, no-store' });
@@ -119,9 +131,7 @@ function register(app) {
     if (!Number.isFinite(offset) || offset < 0 || (info.duration && offset >= info.duration)) throw new HttpError(400, 'Bad start time.');
     if (audio !== null && !info.audio.some(t => t.index === audio)) throw new HttpError(400, 'Unknown audio track.');
     if (burn !== null && !info.subtitles.some(t => t.index === burn && t.bitmap)) throw new HttpError(400, 'Unknown image subtitle track.');
-    const quality = ctx.query.get('quality');
-    if (quality !== null && quality !== 'original' && !QUALITIES[quality]) throw new HttpError(400, 'Unknown quality.');
-    await transcode(ctx.req, ctx.res, { session, file: item.path, info, offset, audio, burn, delay: Number.isFinite(delay) ? delay : 0, preload, quality: QUALITIES[quality] ? quality : null });
+    await transcode(ctx.req, ctx.res, { session, file: item.path, info, offset, audio, burn, delay: Number.isFinite(delay) ? delay : 0, preload, quality: qualityOf(ctx.query) });
   });
 
   // A still frame, used for seek previews and thumbnails.

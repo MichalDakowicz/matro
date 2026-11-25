@@ -7,7 +7,7 @@ import { holdService, offlineNotice } from './offline-notifications';
 
 import {
   CHUNK, DOWNLOAD_SLOTS, PREFETCH_PIECES, RETRY_DELAY_MS, RetryableDownloadError, chunkRange,
-  fetchPiece, isTextCaption, offlinePath, optionalCaption, prepareDownload, retrying,
+  fetchPiece, isTextCaption, keptAudio, offlinePath, optionalCaption, prepareDownload, retrying, withChoice,
 } from '../../../../packages/core/client/offline-rules.js';
 
 const account = (base: string, user: MatroUser) => encodeURIComponent(recoveryScope(base, user));
@@ -21,8 +21,10 @@ const decode = <T>(raw: string | null): T | null => {
 const read = async <T>(key: string) => decode<T>(await AsyncStorage.getItem(key));
 
 type Media = { uri: string; version: string; info: Info; text: Record<string, string> };
+export type OfflineChoice = { audio: number | null; burn: number | null; quality: string };
 type RecordState = {
   id: string; title: string; size: number; have: number; complete: boolean; paused?: boolean;
+  choice?: OfflineChoice;
   state?: 'queued' | 'preparing' | 'downloading'; prepared?: number; progressAt?: number; error?: string; retryAt?: number;
 };
 export type OfflineRecord = RecordState & Partial<Media>;
@@ -122,7 +124,7 @@ export function retryInterrupted(base: string, user: MatroUser) {
   }
 }
 
-export function saveOfflineBatch(base: string, user: MatroUser, items: Item[], nameOf: (item: Item) => string) {
+export function saveOfflineBatch(base: string, user: MatroUser, items: Item[], nameOf: (item: Item) => string, choices?: Map<string, OfflineChoice>) {
   const scope = account(base, user), release = holdService();
   return editQueue(async () => {
     const records = new Map((await recordsFor(scope)).map(record => [record.id, record]));
@@ -132,6 +134,7 @@ export function saveOfflineBatch(base: string, user: MatroUser, items: Item[], n
       if (jobs.has(key) || previous && isSaved(previous)) continue;
       const record: OfflineRecord = {
         have: 0, size: 0, ...previous, id: item.id, title: nameOf(item), complete: false,
+        choice: choices?.get(item.id) ?? previous?.choice,
         state: 'queued', paused: false, error: undefined, retryAt: undefined, prepared: undefined, progressAt: undefined,
       };
       entries.set(key, JSON.stringify(record));
@@ -176,7 +179,7 @@ function startDownload(base: string, scope: string, record: OfflineRecord) {
     record.progressAt ??= Date.now();
     await persist();
     notice.preparing(job.prepared);
-    const preparation = await prepareDownload(signal, () => request(base, route, { signal }), async (progress, advancedAt) => {
+    const preparation = await prepareDownload(signal, () => request(base, withChoice(route, record.choice), { signal }), async (progress, advancedAt) => {
       if (progress !== undefined && (progress !== record.prepared || advancedAt !== record.progressAt)) {
         record.prepared = progress;
         record.progressAt = advancedAt;
@@ -217,7 +220,7 @@ function startDownload(base: string, scope: string, record: OfflineRecord) {
     }
     if (signal.aborted) return;
     Object.assign(record, {
-      uri: file.uri, size, have, version, info: { ...info, embedded: captions, uploaded: uploads, audio: info.audio.slice(0, 1) }, text,
+      uri: file.uri, size, have, version, info: { ...info, embedded: captions, uploaded: uploads, audio: keptAudio(info.audio, record.choice) }, text,
       error: undefined, retryAt: undefined,
     });
     // Save the path before writing so a kill or disk error leaves a removable partial file.
@@ -227,7 +230,7 @@ function startDownload(base: string, scope: string, record: OfflineRecord) {
     notice.progress(have, size); changed();
 
     const requestPiece = (start: number) => {
-      const piece = fetchPiece(send, route, preparation, chunkRange(size, start / CHUNK), signal);
+      const piece = fetchPiece(send, route, preparation, chunkRange(size, start / CHUNK), signal, record.choice);
       void piece.catch(() => {}); // A prefetched piece may fail before its turn to be written.
       return piece;
     };

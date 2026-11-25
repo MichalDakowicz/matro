@@ -1,3 +1,5 @@
+import { knownQuality } from './quality.js';
+
 export const CHUNK = 8 * 1024 * 1024;
 export const DOWNLOAD_SLOTS = 2;
 export const PREFETCH_PIECES = 3;
@@ -12,6 +14,29 @@ export const chunkRange = (size, index) => ({ start: index * CHUNK, end: Math.mi
 export const offlinePath = id => `/api/items/${encodeURIComponent(id)}/offline`;
 /** @param {{text?: boolean, bitmap?: boolean}} track */
 export const isTextCaption = track => track.text && !track.bitmap;
+
+/** @typedef {{ audio?: number|null, burn?: number|null, quality?: string }} OfflineChoice */
+/** Query for the chosen audio, burned captions and size; empty when the choice is the default. @param {OfflineChoice} [choice] */
+export function offlineParams(choice) {
+  const query = new URLSearchParams();
+  if (choice?.audio != null) query.set('audio', String(choice.audio));
+  if (choice?.burn != null) query.set('burn', String(choice.burn));
+  if (knownQuality(choice?.quality) !== 'original') query.set('quality', String(choice?.quality));
+  return query;
+}
+/** @param {string} path @param {OfflineChoice} [choice] */
+export const withChoice = (path, choice) => { const query = offlineParams(choice); return query.size ? `${path}?${query}` : path; };
+/** A saved copy keeps only the chosen audio track, or the first one. @template {{index: number}} T @param {T[]} audio @param {OfflineChoice} [choice] @returns {T[]} */
+export const keptAudio = (audio, choice) => { const track = audio.find(t => t.index === choice?.audio) ?? audio[0]; return track ? [track] : []; };
+
+/** @typedef {{ index: number, language?: string, title?: string }} Track */
+/** @param {Track[]} tracks @param {Track|null|undefined} reference */
+export function matchOfflineTrack(tracks, reference) {
+  if (!reference) return null;
+  return tracks.find(track => track.language === reference.language && track.title === reference.title)
+    ?? tracks.find(track => track.language === reference.language)
+    ?? null;
+}
 
 export class RetryableDownloadError extends Error {}
 
@@ -124,10 +149,13 @@ const responseError = (status, message) => Object.assign(new Error(message), { s
  * @param {Ready} prepared
  * @param {{start: number, end: number}} range
  * @param {AbortSignal} signal
+ * @param {OfflineChoice} [choice]
  */
-export function fetchPiece(send, path, { version, size }, { start, end }, signal) {
+export function fetchPiece(send, path, { version, size }, { start, end }, signal, choice) {
+  const query = offlineParams(choice);
+  query.set('version', version);
   return retrying(signal, () => fetchWithDeadline(
-    requestSignal => send(`${path}/file?version=${encodeURIComponent(version)}`, { range: `bytes=${start}-${end}` }, requestSignal),
+    requestSignal => send(`${path}/file?${query}`, { range: `bytes=${start}-${end}` }, requestSignal),
     async (response, touch) => {
       if (response.status === 401) throw responseError(401, 'Sign in again to finish the download.');
       if (response.status === 409) throw responseError(409, 'The prepared file changed. Retry the download.');

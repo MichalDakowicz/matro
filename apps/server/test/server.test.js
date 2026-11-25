@@ -309,6 +309,20 @@ test('offline media preparation is authenticated and serves versioned, seekable 
   const second = await fetch(base + episode + '/file?audio=' + audio + '&version=' + ready.version, { headers });
   assert.equal(second.status, 206);
   assert.match(Buffer.from(await second.arrayBuffer()).toString('latin1'), /ftyp/);
+  assert.equal((await call('sam', 'GET', episode + '?burn=' + info.embedded[0].index)).status, 400);
+  assert.equal((await call('sam', 'GET', episode + '?quality=bogus')).status, 400);
+  let small;
+  for (let i = 0; i < 100; i++) {
+    small = (await call('sam', 'GET', episode + '?audio=' + audio + '&quality=480p')).data;
+    if (small.state === 'ready') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(small.state, 'ready');
+  assert.notEqual(small.version, ready.version);
+  assert.equal((await call('sam', 'GET', episode + '/file?audio=' + audio + '&version=' + small.version)).status, 409);
+  const sized = await fetch(base + episode + '/file?audio=' + audio + '&quality=480p&version=' + small.version, { headers });
+  assert.equal(sized.status, 206);
+  await sized.arrayBuffer();
 });
 
 test('any viewer can add labelled subtitles; only owner or head account can edit them', async () => {

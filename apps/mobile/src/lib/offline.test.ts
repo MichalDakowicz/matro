@@ -78,7 +78,7 @@ function setup(entries = new Map<string, string>(), files = new Map<string, numb
   };
   const load = <T>(code: string) => {
     const context = { exports: {}, require: (name: string) => { assert.ok(modules[name], name); return modules[name]; },
-      setTimeout, clearTimeout, AbortController, Date, Error, Uint8Array,
+      setTimeout, clearTimeout, AbortController, URLSearchParams, Date, Error, Uint8Array,
     };
     vm.runInNewContext(code, context);
     return context.exports as T;
@@ -121,6 +121,30 @@ test('relaunch restores queued and preparing records and respects a pause', asyn
   const saved = (await next.offline.savedTitle(base, user, 'one'))!;
   next.files.set(saved.uri, saved.size - 1);
   assert.equal(await next.offline.savedTitle(base, user, 'one'), undefined);
+});
+
+test('the chosen offline variant survives a pause and is used for preparation and media ranges', async () => {
+  const { fixture, offline, records } = setup();
+  const [item] = items('one');
+  const choice = { audio: 2, burn: 3, quality: '480p' };
+  let attempt = 0;
+  fixture.request = async (route, { signal } = {}) => {
+    const query = new URL(route, base).searchParams;
+    assert.deepEqual(Object.fromEntries(query), { audio: '2', burn: '3', quality: '480p' });
+    if (attempt++ === 0) await new Promise((_, reject) => signal!.addEventListener('abort', () => reject(new Error('Cancelled.'))));
+    return prepared;
+  };
+  fixture.fetch = async url => {
+    const query = new URL(url).searchParams;
+    assert.deepEqual(Object.fromEntries(query), { audio: '2', burn: '3', quality: '480p', version: prepared.version });
+    return media();
+  };
+  await offline.saveOfflineBatch(base, user, [item], nameOf, new Map([[item.id, choice]]));
+  await until(() => attempt === 1);
+  await offline.pauseOffline(base, user, item.id);
+  assert.deepEqual((await records())[0].choice, choice);
+  await offline.saveOffline(base, user, item, item.title);
+  await until(async () => (await records()).some(record => record.complete));
 });
 
 test('a stalled caption and a 502 or stalled range retry before completing', async t => {

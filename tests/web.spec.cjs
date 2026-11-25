@@ -444,6 +444,11 @@ test('a receiver plays saved media during an outage and syncs offline changes af
     await page.evaluate(() => window.matroTheme.set('dark'));
     await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
     await page.getByRole('button', { name: 'Save offline', exact: true }).click();
+    const optionsDialog = page.getByRole('dialog', { name: 'Save offline' });
+    await expect(optionsDialog.getByText(/Selectable text subtitles · English/)).toBeVisible();
+    await optionsDialog.getByLabel('Audio track').selectOption({ label: 'Polish · Dub' });
+    await optionsDialog.getByLabel('Size preset').selectOption('480p');
+    await optionsDialog.getByRole('button', { name: 'Start download' }).click();
     await expect(page.getByRole('status').filter({ hasText: 'Saved for offline playback.' })).toBeVisible();
     await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
     hangPlayback = true;
@@ -459,6 +464,9 @@ test('a receiver plays saved media during an outage and syncs offline changes af
     await expect(page.getByRole('button', { name: 'Offline · Reconnect' })).toBeVisible();
     await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
     await page.getByRole('button', { name: /^(Play now|Resume)$/ }).click();
+    await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
+    await expect(page.locator('.track-option[data-audio] strong')).toHaveText('Polish');
+    await page.getByRole('button', { name: 'Close audio and subtitles' }).click();
     const resumedAt = await page.locator('video').evaluate(v => v.currentTime);
     await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(resumedAt + .2);
     expect(await page.locator('video').evaluate(v => v.src.startsWith('blob:'))).toBe(true);

@@ -1310,14 +1310,18 @@ document.addEventListener('click', event => {
   void attempt(async () => {
     if (btn.dataset.offlineMany && api.offlineSaveMany) {
       const ids = btn.dataset.offlineMany.split(',');
+      const choices = await api.offlineSaveOptions(ids);
+      if (!choices) return;
       toast(`Preparing ${ids.length} episodes to save offline. See progress in your profile.`);
-      try { await api.offlineSaveMany(ids); toast('Saved for offline playback.'); }
+      try { await api.offlineSaveMany(ids, choices); toast('Saved for offline playback.'); }
       catch (error) { if (error.name !== 'AbortError') throw error; }
       return;
     }
     if (btn.dataset.offlineSave && api.offlineSave) {
+      const choices = await api.offlineSaveOptions([btn.dataset.offlineSave]);
+      if (!choices) return;
       toast('Preparing to save offline. See progress in your profile.');
-      try { await api.offlineSave(btn.dataset.offlineSave); toast('Saved for offline playback.'); }
+      try { await api.offlineSave(btn.dataset.offlineSave, choices); toast('Saved for offline playback.'); }
       catch (error) { if (error.name !== 'AbortError') throw error; }
       return;
     }
