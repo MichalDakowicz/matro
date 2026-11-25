@@ -35,12 +35,13 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, probeFil
     dropFolder: db.prepare('UPDATE folders SET removed = 1 WHERE id = ? AND removed = 0'),
     moveItem: db.prepare('UPDATE items SET folder_id = ? WHERE id = ?'),
     existing: db.prepare('SELECT id, path FROM active_items WHERE folder_id = ?'),
+    // Catalogs from before fingerprints keep their probes while size and mtime still match.
     upsert: db.prepare(`INSERT INTO items (id, folder_id, path, title, group_id, group_title, year, kind, season, episode, size, mtime, added, fingerprint)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET folder_id = excluded.folder_id, title = excluded.title, group_id = excluded.group_id, group_title = excluded.group_title,
         year = excluded.year, kind = excluded.kind, season = excluded.season, episode = excluded.episode, removed = 0,
-        probe = CASE WHEN items.fingerprint = excluded.fingerprint THEN items.probe END,
-        duration = CASE WHEN items.fingerprint = excluded.fingerprint THEN items.duration END,
+        probe = CASE WHEN (items.fingerprint = excluded.fingerprint OR (items.fingerprint IS NULL AND items.size = excluded.size AND items.mtime = excluded.mtime)) THEN items.probe END,
+        duration = CASE WHEN (items.fingerprint = excluded.fingerprint OR (items.fingerprint IS NULL AND items.size = excluded.size AND items.mtime = excluded.mtime)) THEN items.duration END,
         probe_failures = CASE WHEN items.fingerprint = excluded.fingerprint THEN items.probe_failures ELSE 0 END,
         probe_error = CASE WHEN items.fingerprint = excluded.fingerprint THEN items.probe_error END,
         probed_at = CASE WHEN items.fingerprint = excluded.fingerprint THEN items.probed_at END,
@@ -80,7 +81,7 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, probeFil
     let error;
     if (live.length !== rows.length) error = 'Some media files could not be read. Existing titles were kept.';
     else if (previousCount && !live.length) error = 'No media files were found. Existing titles were kept.';
-    else if (known.size > previousCount * maxRemovedShare) error = 'More than 25% of this folder is missing. Existing titles were kept.';
+    else if (known.size > Math.max(1, previousCount * maxRemovedShare)) error = 'More than 25% of this folder is missing. Existing titles were kept.';
     let catalogChanged = false;
     tx(db, () => {
       for (const [row, stat] of live) {
