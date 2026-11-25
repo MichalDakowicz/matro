@@ -81,7 +81,6 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
         <Pill label="Add to queue" icon="plus" style={s.action} onPress={() => onEnqueue(items)} />
         {onEditLists && <Pill label="Add to list" icon="plus" style={s.action} onPress={() => { setListError(''); setMenu('lists'); }} />}
         {show && onFollow && <Pill label={following ? 'Unfollow show' : 'Follow show'} icon={following ? 'check' : 'plus'} style={s.action} disabled={followBusy} onPress={() => void toggleFollow()} />}
-        {followError ? <Text accessibilityRole="alert" style={t.muted}>{followError}</Text> : null}
         {show && following && onFollow && <Pill label="Episode schedule" style={s.action} onPress={() => setMenu('schedule')} />}
         {show ? <Pill label="Mark watched" icon="check" style={s.action} onPress={() => setMenu('watched')} />
           : <Pill label={done(items) ? 'Mark unwatched' : 'Mark watched'} icon="check" style={s.action} onPress={() => onMark(items, !done(items))} />}
@@ -89,7 +88,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
           : <Pill label={saveLabel(target.id)} icon={state(target.id) === 'saved' ? 'check' : 'download'} style={s.action} disabled={state(target.id) !== 'idle'} onPress={() => onSave(target)} />)}
         {onRemoveSaved && <Pill label="Remove from this device" icon="trash" style={s.action} onPress={() => onRemoveSaved(items)} />}
       </View>
-      {scheduleError && menu !== 'schedule' ? <Text accessibilityLiveRegion="polite" style={t.muted}>{scheduleError}</Text> : null}
+      {followError ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={t.muted}>{followError}</Text> : null}
       {m.rating ? <View style={s.ratings}><Text style={[t.mono, { marginBottom: 6 }]}>TMDB</Text><View style={[t.row, { alignItems: 'baseline', gap: 5 }]}><Text style={s.score}>{m.rating.toFixed(1)}</Text><Text style={t.dim}>/10{m.votes ? ` · ${m.votes.toLocaleString()} votes` : ''}</Text></View></View> : null}
       {show && <View style={{ marginTop: 28 }}><View style={t.sectionHeading}><Text accessibilityRole="header" style={t.sectionTitle}>Episodes</Text><Text style={t.dim}>{items.filter(i => data.progress[i.id]?.completed).length} / {items.length} watched</Text></View><ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -18 }} contentContainerStyle={{ gap: 8, paddingHorizontal: 18, paddingBottom: 14 }}>{seasons.map(value => <Chip key={value} small label={`Season ${value}`} selected={season === value} onPress={() => setSeason(value)} />)}</ScrollView></View>}
     </View>

@@ -171,7 +171,9 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
           }
         }
       }
-      await Promise.all(Array.from({ length: Math.min(3, seasons.length) }, loadSeasons));
+      const results = await Promise.allSettled(Array.from({ length: Math.min(3, seasons.length) }, loadSeasons));
+      const failure = results.find(result => result.status === 'rejected');
+      if (failure) throw failure.reason;
       return episodes;
     })();
     schedules.set(id, { expires: now + 3600000, promise });
