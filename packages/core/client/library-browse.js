@@ -1,4 +1,4 @@
-﻿const nameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+const nameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 export function browseTitles(groups, { sort, genre, short }, metadata, name, progress) {
   const rows = groups.flatMap(items => {
