@@ -1,7 +1,7 @@
 import { forwardRef, type ReactNode } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, fonts } from './theme';
+import { colors, fonts, type } from './theme';
 
 /** Native account/server page frame: kicker, title, description and form. */
 export function Page({ kicker, title, lede, children }: { kicker: string; title: string; lede: string; children: ReactNode }) {
@@ -47,7 +47,7 @@ const s = StyleSheet.create({
   fill: { flex: 1, backgroundColor: colors.ground },
   page: { paddingHorizontal: 28, flexGrow: 1 },
   kicker: { fontFamily: fonts.mono, fontSize: 12, color: colors.dim, letterSpacing: 0.4, marginBottom: 14 },
-  title: { fontFamily: fonts.semibold, fontSize: 40, lineHeight: 42, letterSpacing: -1.6, color: colors.text },
+  title: { fontFamily: fonts.semibold, ...type.display, color: colors.text },
   lede: { fontFamily: fonts.regular, fontSize: 15, lineHeight: 22, color: colors.muted, marginTop: 14, maxWidth: 420 },
   form: { gap: 12, marginTop: 28, maxWidth: 420 },
   field: {
