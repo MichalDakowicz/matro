@@ -6,7 +6,7 @@ const flag = process.argv.findIndex(value => value === '--server');
 const saved = loadSource(app.getPath('userData'));
 const server = process.argv.includes('--local') ? null : process.env.MATRO_SERVER_URL || (flag >= 0 ? process.argv[flag + 1] : saved.enabled ? saved.url : null);
 const source = require('../../packages/core/desktop/source-switch.cjs').installSourceSwitch(server);
-if (server) require('../../packages/core/desktop/receiver.cjs').launchReceiver(server, { onChooseSource: () => source.show(), onUnavailable: () => source.show('Could not reach the saved server. Try another address or use this PC.') });
-// One local window: opening another file from Explorer hands it to the running window (see runtime.cjs).
-else if (!app.requestSingleInstanceLock()) app.quit();
+// One window in either mode: opening another file from Explorer hands it to the running window (see runtime.cjs and receiver.cjs).
+if (!app.requestSingleInstanceLock()) app.quit();
+else if (server) require('../../packages/core/desktop/receiver.cjs').launchReceiver(server, { onChooseSource: () => source.show(), onUnavailable: () => source.show('Could not reach the saved server. Try another address or use this PC.') });
 else require('../../packages/core/desktop/runtime.cjs');
