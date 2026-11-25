@@ -454,6 +454,50 @@ test('an older client echoing server times cannot overwrite a slow-clock phone',
   assert.equal((await catalog('slow-viewer')).progress[id].position, 500);
 });
 
+test('batch marks reject older playback checkpoints for every changed title', async () => {
+  assert.equal((await join('batch-viewer', 'batch-viewer', 'viewer-pass-6')).status, 200);
+  const { user, groups } = await catalog('batch-viewer');
+  const ids = groups[1].map(item => item.id);
+  const headers = { 'x-matro-account': String(user.id) };
+  const put = (position, updated) => call('batch-viewer', 'PUT', '/api/state', {
+    progress: Object.fromEntries(ids.map(id => [id, { position, duration: 200, completed: false, updated }])),
+  }, headers);
+  const earlier = Date.now() - 60000;
+  assert.equal((await put(20, earlier)).status, 200);
+
+  const before = Date.now();
+  const marked = await call('batch-viewer', 'PATCH', '/api/progress', { ids, completed: true }, headers);
+  assert.equal(marked.status, 200);
+  assert.deepEqual(Object.keys(marked.data.progress).sort(), [...ids].sort());
+  const timestamps = new Set(Object.values(marked.data.progress).map(entry => entry.updated));
+  assert.equal(timestamps.size, 1);
+  const [updated] = timestamps;
+  assert.ok(updated >= before && updated <= Date.now());
+  assert.ok(Object.values(marked.data.progress).every(entry => entry.completed && entry.position === 20));
+  const stale = await put(30, earlier + 30000);
+  assert.deepEqual(stale.data.progress, marked.data.progress);
+  assert.deepEqual((await catalog('batch-viewer')).progress, marked.data.progress);
+});
+
+test('one batch call marks several titles watched or unwatched for one person only', async () => {
+  const { groups } = await catalog('eve');
+  const show = groups.find(g => g[0].kind === 'show' && g.length > 1), ids = show.map(i => i.id), already = (await catalog('eve')).progress;
+  const before = (await catalog('sam')).progress;
+  for (const bad of [{}, { ids: [], completed: true }, { ids: [1], completed: true }, { ids, completed: 'yes' }]) assert.equal((await call('eve', 'PATCH', '/api/progress', bad)).status, 400);
+  assert.equal((await call(null, 'PATCH', '/api/progress', { ids, completed: true })).status, 401);
+  const marked = await call('eve', 'PATCH', '/api/progress', { ids: [...ids, 'missing'], completed: true });
+  assert.equal(marked.status, 200);
+  assert.deepEqual(Object.keys(marked.data.progress).sort(), ids.filter(id => !already[id]?.completed).sort());
+  const mine = (await catalog('eve')).progress;
+  assert.ok(ids.every(id => mine[id].completed === true));
+  // Already-watched titles are skipped; unmarking rewinds them and keeps everything else.
+  assert.deepEqual((await call('eve', 'PATCH', '/api/progress', { ids, completed: true })).data.progress, {});
+  const cleared = (await call('eve', 'PATCH', '/api/progress', { ids: [ids[0]], completed: false })).data.progress;
+  assert.equal(cleared[ids[0]].completed, false); assert.equal(cleared[ids[0]].position, 0);
+  assert.ok((await catalog('eve')).progress[ids[1]].completed);
+  assert.deepEqual((await catalog('sam')).progress, before);
+});
+
 test('head account upload lands in the library; logout and password reset end sessions', async () => {
   const bytes = fs.readFileSync(path.join(mediaDir, 'Heat (1995)', 'Heat.1995.mp4'));
   const up = await call('admin', 'POST', '/api/admin/upload?path=' + encodeURIComponent('Up Movie (2001)/../Up.Movie.mp4'), bytes, { 'content-type': 'application/octet-stream' });

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, BackHandler, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { accountChanged, changeProgress, library, mediaHeaders, request, ServerError, syncDismissal, updateWatchOptions, type Item, type Library, type MovieRequest } from '../lib/server';
+import { accountChanged, changeProgress, changeProgressMany, library, mediaHeaders, request, ServerError, syncDismissal, updateWatchOptions, type Item, type Library, type MovieRequest } from '../lib/server';
 import { progressRecovery, recoveryScope, rememberProgress } from '../lib/storage';
 import { continueItems, groupLibrary, nameFor, titleKey } from '../../../../packages/core/client/library';
-import { normalizeProgress, queueChange } from '../../../../packages/core/client/watch-progress.js';
+import { markedProgress, normalizeProgress, queueChange } from '../../../../packages/core/client/watch-progress.js';
 import { applyDismissals } from '../../../../packages/core/client/recovery';
 import { colors, dock } from '../theme';
 import { Pill, styles as t } from '../components/Matro';
@@ -217,11 +217,27 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     void saveOfflineBatch(base, data.user, list, saveName).catch(error => notify(`Couldn’t save everything. ${friendly(error.message)}`));
     notify(`Saving ${plural(list.length, 'episode')}, two at a time. Follow them under Saved.`, savedLink);
   };
-  // Marks a whole season or show: one request per episode whose state changes.
+  // Marks a season, a whole show or earlier episodes in one request (or one local change when offline).
   const markMany = async (list: Item[], done: boolean) => {
-    const todo = list.filter(item => !!dataRef.current?.progress[item.id]?.completed !== done);
-    if (!todo.length) return;
-    for (const item of todo) await updateProgress(item, false);
+    const current = dataRef.current, todo = list.filter(item => !!current?.progress[item.id]?.completed !== done);
+    if (!current || !todo.length) return;
+    try {
+      const episodesOf = (item: Item) => allGroups.find(items => titleKey(items[0]) === titleKey(item)) || [item];
+      const resolved = offline ? markedProgress(todo, current.progress, done, { episodesOf }) : normalizeProgress((await changeProgressMany(base, current.user.id, todo.map(item => item.id), done)).progress);
+      setData(latest => {
+        if (latest?.user.id !== current.user.id) return latest;
+        const patch = Object.fromEntries(Object.entries(resolved).filter(([id, entry]) => entry.updated >= (latest.progress[id]?.updated || 0)));
+        return { ...latest, progress: { ...latest.progress, ...patch } };
+      });
+      if (offline) {
+        const scope = recoveryScope(base, current.user);
+        await Promise.all(Object.entries(resolved).map(([id, entry]) => progressRecovery.write(scope, id, entry)));
+      } else await rememberProgress(base, current.user, resolved);
+    } catch (e) {
+      if (accountChanged(e)) onSignedOut();
+      else setError(e instanceof Error ? e.message : 'Could not save progress.');
+      return;
+    }
     notify(todo.length === 1 ? (done ? 'Marked as watched.' : 'Marked as unwatched.') : `Marked ${plural(todo.length, 'episode')} ${done ? 'watched' : 'unwatched'}.`);
   };
   const removeSaved = (list: Item[]) => Alert.alert('Remove from this device?', 'The saved files are deleted. They stay in your library on the server.', [
@@ -255,14 +271,15 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const playFromQueue = (item: Item) => { if (data) void startPlayback(item, data.queue.flatMap(id => data.items.find(i => i.id === id) || [])); };
   const setQueue = (queue: string[]) => {
     if (!data) return;
-    setData({ ...data, queue });
-    if (!offline) void request(base, '/api/state', { method: 'PUT', body: { queue } }).catch(() => notify('Couldn’t update the queue on your server.'));
+    updateQueue(queue, queueChange(data.queue, queue));
   };
   const setAutoplay = (autoplay: boolean) => {
     if (!data) return;
-    const preferences = { ...data.preferences, autoplay };
-    setData({ ...data, preferences });
-    if (!offline) void request(base, '/api/state', { method: 'PUT', body: { preferences } }).catch(() => notify('Couldn’t save the autoplay setting.'));
+    setData(latest => latest?.user.id === data.user.id ? { ...latest, preferences: { ...latest.preferences, autoplay } } : latest);
+    if (!offline) void updateWatchOptions(base, data.user, { preferences: { autoplay } }).catch(e => {
+      if (accountChanged(e)) onSignedOut();
+      else notify('Couldn’t save the autoplay setting.');
+    });
   };
   const top = (node: React.ReactNode) => <View style={{ flex: 1, paddingTop: layout.top + 76 }}>{node}</View>;
   const common = { ...art, layout, refreshing, onRefresh: () => void load(), onOpen: open };

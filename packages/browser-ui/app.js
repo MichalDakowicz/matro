@@ -2,7 +2,7 @@ import icons from './icons.json' with { type: 'json' };
 import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
-import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, normalizeProgress, queueChange, resumeTarget } from '../core/client/watch-progress.js';
+import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, markedProgress, normalizeProgress, queueChange, resumeTarget } from '../core/client/watch-progress.js';
 const api = window.matro;
 if (api?.chooseSource && !document.querySelector('.desktop-source-button')) {
   const button = document.createElement('button'); button.className = 'pill desktop-source-button'; button.textContent = 'Server'; button.setAttribute('aria-label', 'Playback source');
@@ -190,6 +190,28 @@ async function markComplete(id) {
   }
   if (view === 'player') { renderQueue(); renderSegments(); }
   else { const selectedId = selected?.id; renderLibrary(); if (selectedId) detail(selectedId); }
+}
+// Marks several episodes watched or unwatched. A server takes one batch request; standalone builds the same change and saves it once.
+async function markMany(list, done) {
+  const todo = list.filter(i => completed(i.id) !== done);
+  if (!todo.length) return;
+  if (api.setCompletedMany) {
+    const patch = normalizeProgress(await api.setCompletedMany(todo.map(i => i.id), done));
+    applyProgress(Object.fromEntries(Object.entries(patch).filter(([id, entry]) => entry.updated >= (library.progress[id]?.updated || 0))));
+  } else {
+    applyProgress(markedProgress(todo, library.progress, done, { episodesOf: orderedEpisodes }), true);
+    await save();
+  }
+  toast(todo.length === 1 ? (done ? 'Marked as watched.' : 'Marked as unwatched.') : `Marked ${todo.length} episodes ${done ? 'watched' : 'unwatched'}.`);
+  const selectedId = selected?.id; renderLibrary(); if (selectedId) detail(selectedId);
+}
+// The buttons beside a season, the whole show, or an episode: what they mark follows what the page shows.
+function markTargets(button) {
+  const items = selected ? orderedEpisodes(selected) : [];
+  if (button.dataset.markSeason) return items.filter(i => i.season === Number(button.dataset.markSeason));
+  if (button.dataset.markShow !== undefined) return items;
+  const at = items.findIndex(i => i.id === button.dataset.markBefore);
+  return items.slice(0, Math.max(0, at));
 }
 function applyProgress(patch, local = false) {
   Object.assign(library.progress, patch);
@@ -669,16 +691,17 @@ function productionPanel(m) {
 // Episodes: one season at a time behind season tabs, each episode a card with its TMDB still, summary and progress.
 let detailSeason = null;
 const episodeInfo = item => meta(item)?.episodes?.[item.season]?.[item.episode] || null;
-function episodeCard(i, resume) {
+function episodeCard(i, resume, firstUnwatched) {
   const e = episodeInfo(i), p = library.progress[i.id], done = completed(i.id), now = resume?.id === i.id, pct = p?.duration ? Math.min(100, p.position / p.duration * 100) : 0;
   const facts = [e?.runtime ? `${e.runtime}m` : null, i.format, now ? `${fmt(p.position)} watched` : done ? 'Watched' : p?.position > 0 ? 'In progress' : null].filter(Boolean);
-  return `<div class="episode-entry ${now ? 'current' : ''}"><button class="episode-row" data-play="${i.id}"><span class="episode-still ${artFor(i)}">${e?.still ? `<img src="${esc(e.still)}" alt="" loading="lazy" draggable="false">` : ''}<span class="episode-code">${code(i)}</span>${done ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : ''}${pct && !done ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}<span class="episode-play">${icon('play')}</span></span><span class="episode-text min"><strong>${i.prelude ? '' : `${i.episode}. `}${esc(episodeName(i))}</strong><small>${facts.map(esc).join(' · ')}</small>${e?.overview ? `<span class="episode-overview">${esc(e.overview)}</span>` : ''}</span></button>${api.offlineSave ? `<button class="text-button" data-offline-save="${i.id}" aria-label="Save ${esc(episodeName(i))} offline">Save offline</button>` : ''}<button class="text-button" data-complete="${i.id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(i.title)}">${done ? 'Completed' : 'Mark complete'}</button></div>`;
+  return `<div class="episode-entry ${now ? 'current' : ''}"><button class="episode-row" data-play="${i.id}"><span class="episode-still ${artFor(i)}">${e?.still ? `<img src="${esc(e.still)}" alt="" loading="lazy" draggable="false">` : ''}<span class="episode-code">${code(i)}</span>${done ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : ''}${pct && !done ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}<span class="episode-play">${icon('play')}</span></span><span class="episode-text min"><strong>${i.prelude ? '' : `${i.episode}. `}${esc(episodeName(i))}</strong><small>${facts.map(esc).join(' · ')}</small>${e?.overview ? `<span class="episode-overview">${esc(e.overview)}</span>` : ''}</span></button>${api.offlineSave ? `<button class="text-button" data-offline-save="${i.id}" aria-label="Save ${esc(episodeName(i))} offline">Save offline</button>` : ''}<button class="text-button" data-complete="${i.id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(i.title)}">${done ? 'Completed' : 'Mark complete'}</button>${firstUnwatched && compareEpisodes(firstUnwatched, i) < 0 ? `<button class="mark-before" data-mark-before="${i.id}" aria-label="Mark episodes before ${esc(code(i))} watched">Mark earlier watched</button>` : ''}</div>`;
 }
 function episodesPanel(selected, items, resume, target) {
   const seasons = [...new Set(items.map(i => i.season))], key = titleKey(selected);
   const open = detailSeason?.key === key && seasons.includes(detailSeason.season) ? detailSeason.season : (resume || target).season;
+  const firstUnwatched = items.find(i => !completed(i.id));
   const stats = s => { const eps = items.filter(i => i.season === s); return { eps, watched: eps.filter(i => completed(i.id)).length }; };
-  return `<section class="panel wide episodes" aria-labelledby="episodes-h"><div class="panel-head"><h3 id="episodes-h">Episodes</h3>${seasons.length > 1 ? `<div class="chip-row season-tabs" role="tablist" aria-label="Seasons">${seasons.map(s => { const { eps, watched } = stats(s); return `<button class="chip" role="tab" data-season-tab="${s}" aria-selected="${s === open}" aria-pressed="${s === open}">Season ${s}<span class="season-count">${watched}/${eps.length}</span></button>`; }).join('')}</div>` : ''}<span class="panel-actions">${preludeActions(items)}<button class="text-button" data-enqueue-show="${selected.id}">Queue all</button></span></div>${seasons.map(s => { const { eps, watched } = stats(s); return `<section class="season" data-season-panel="${s}" ${s === open ? '' : 'hidden'}><h3 class="season-heading">Season ${s} · ${eps.length} ${eps.length === 1 ? 'episode' : 'episodes'} · ${watched} watched</h3><div class="episode-grid">${eps.map(i => episodeCard(i, resume)).join('')}</div></section>`; }).join('')}</section>`;
+  return `<section class="panel wide episodes" aria-labelledby="episodes-h"><div class="panel-head"><h3 id="episodes-h">Episodes</h3>${seasons.length > 1 ? `<div class="chip-row season-tabs" role="tablist" aria-label="Seasons">${seasons.map(s => { const { eps, watched } = stats(s); return `<button class="chip" role="tab" data-season-tab="${s}" aria-selected="${s === open}" aria-pressed="${s === open}">Season ${s}<span class="season-count">${watched}/${eps.length}</span></button>`; }).join('')}</div>` : ''}<span class="panel-actions">${preludeActions(items)}<button class="text-button" data-mark-show>${items.every(i => completed(i.id)) ? 'Mark show unwatched' : 'Mark show watched'}</button><button class="text-button" data-enqueue-show="${selected.id}">Queue all</button></span></div>${seasons.map(s => { const { eps, watched } = stats(s); return `<section class="season" data-season-panel="${s}" ${s === open ? '' : 'hidden'}><div class="season-bar"><h3 class="season-heading">Season ${s} · ${eps.length} ${eps.length === 1 ? 'episode' : 'episodes'} · ${watched} watched</h3><button class="text-button" data-mark-season="${s}">${watched === eps.length ? 'Mark season unwatched' : 'Mark season watched'}</button></div><div class="episode-grid">${eps.map(i => episodeCard(i, resume, firstUnwatched)).join('')}</div></section>`; }).join('')}</section>`;
 }
 // Any file can be the prelude, whatever it is called: the picker opens in the show's folder.
 const preludeActions = items => items.some(i => i.prelude) ? `<button class="text-button" data-action="pick-prelude">Change prelude…</button><button class="text-button" data-action="clear-prelude">Remove prelude</button>` : '<button class="text-button" data-action="pick-prelude">Add prelude…</button>';
@@ -1331,6 +1354,10 @@ document.addEventListener('matro:saved-title', event => {
 });
 document.addEventListener('click', event => {
   const btn = event.target.closest('button'); if (!btn || btn.disabled) return;
+  if (btn.dataset.markSeason || btn.dataset.markShow !== undefined || btn.dataset.markBefore) {
+    const targets = markTargets(btn);
+    return void attempt(() => markMany(targets, btn.dataset.markBefore ? true : !targets.every(i => completed(i.id))));
+  }
   void attempt(async () => {
     if (btn.dataset.offlineMany && api.offlineSaveMany) {
       const ids = btn.dataset.offlineMany.split(',');

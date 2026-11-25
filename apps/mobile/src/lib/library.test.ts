@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { continueItems, groupLibrary, matchTrack, metadataFor, resumeItem, trackKey } from '../../../../packages/core/client/library.ts';
+import { markedProgress } from '../../../../packages/core/client/watch-progress.js';
 import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
 import type { Item, Library } from '../../../../packages/core/client/server.ts';
 const episode = (id: string, number: number): Item => ({ id, title: id, groupId: 'show', group: 'Show', kind: 'show', season: 1, episode: number, format: 'MKV' });
@@ -63,4 +64,16 @@ test('track preferences follow language/title across episode stream-index change
 test('native subtitle parsing retains timing and line breaks without rendering HTML', () => {
   const cues = parseVtt('WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.500\n<i>Hello</i>\nworld\n\n00:03.000 --> 00:04.000\nNext');
   assert.deepEqual(cues, [{ start: 1, end: 2.5, text: 'Hello\nworld' }, { start: 3, end: 4, text: 'Next' }]);
+});
+
+test('marking a season watched skips finished episodes, rewinds on unwatch and keeps a dismissed show hidden', () => {
+  const list = [episode('one', 1), episode('two', 2), episode('three', 3)];
+  const progress = { one: { position: 99, duration: 100, completed: true, updated: 5 }, two: { position: 10, duration: 100, updated: 6, hidden: true } };
+  const watched = markedProgress(list, progress, true, { now: 50 });
+  assert.deepEqual(Object.keys(watched), ['two', 'three']);
+  assert.equal(watched.two.completed, true); assert.equal(watched.two.hidden, true); assert.equal(watched.three.updated, 50);
+  const unwatched = markedProgress(list, { ...progress, ...watched }, false, { now: 40 });
+  assert.deepEqual(Object.keys(unwatched), ['one', 'two', 'three']);
+  assert.equal(unwatched.one.position, 0); assert.equal(unwatched.three.updated, 51);
+  assert.deepEqual(markedProgress(list, {}, false), {});
 });

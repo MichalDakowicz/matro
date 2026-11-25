@@ -1,6 +1,6 @@
 const path = require('node:path');
 const { HttpError, readJson, sendFile } = require('../http');
-const { isContinueDismissed } = require('../../client/watch-progress.js');
+const { isContinueDismissed, markedProgress } = require('../../client/watch-progress.js');
 
 const DEFAULT_STATE = () => ({ progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 }, markers: {}, markerDismissals: {} });
 const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -177,6 +177,22 @@ function register(app) {
     }
     Object.assign(state.progress, progress);
     q.set.run(ctx.user.id, JSON.stringify(state), Date.now());
+    return { progress };
+  });
+  // Marks many titles watched or unwatched in one save (a season, a whole show, "earlier episodes"). Unknown ids are ignored.
+  router.add('PATCH', '/api/progress', async ctx => {
+    const { ids, completed } = await readJson(ctx.req);
+    if (!Array.isArray(ids) || !ids.length || ids.length > 5000 || ids.some(id => typeof id !== 'string') || typeof completed !== 'boolean') throw new HttpError(400, 'Bad progress change.');
+    const state = stateOf(ctx.user.id), rows = [...new Set(ids)].map(id => library.item(id)).filter(Boolean);
+    const known = Object.fromEntries(Object.entries(state.progress).filter(([, entry]) => isObject(entry)));
+    const now = Date.now();
+    const progress = markedProgress(rows, known, completed, { now, episodesOf: row => row.kind === 'show' ? q.episodes.all(row.group_id) : [row], durationOf: row => row.duration || 0 });
+    for (const [id, entry] of Object.entries(progress)) {
+      entry.updated = now;
+      state.progressTimes[id] = now;
+      state.progress[id] = entry;
+    }
+    if (Object.keys(progress).length) q.set.run(ctx.user.id, JSON.stringify(state), now);
     return { progress };
   });
   router.add('PUT', '/api/state', async ctx => {

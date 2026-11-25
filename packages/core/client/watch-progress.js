@@ -71,6 +71,25 @@ export function dismissedProgress(items, previous, current, resolved = {}) {
   return patch;
 }
 
+/**
+ * Progress changes that mark `items` (one episode, a season, a whole show or a few movies) watched or unwatched.
+ * Items already in that state are skipped. A show dismissed from Continue watching stays dismissed.
+ * @param {Item[]} items @param {ProgressMap} progress @param {boolean} completed
+ * @param {{ now?: number, episodesOf?: (item: Item) => Item[], durationOf?: (item: Item) => number }} [options]
+ */
+export function markedProgress(items, progress, completed, { now = Date.now(), episodesOf = item => [item], durationOf = () => 0 } = {}) {
+  /** @type {ProgressMap} */
+  const patch = {};
+  for (const item of items) {
+    const previous = progress[item.id];
+    if (isCompleted(previous) === completed) continue;
+    const hidden = item.kind === 'show' && (!!previous?.hidden || isContinueDismissed(episodesOf(item), progress));
+    patch[item.id] = { ...previous, position: completed ? previous?.position ?? 0 : 0, duration: previous?.duration || durationOf(item) || 0, completed, hidden,
+      updated: Math.max(now, (previous?.updated || 0) + 1) };
+  }
+  return patch;
+}
+
 /** @param {Item[]} items @param {ProgressMap} progress */
 function continuationForTitle(items, progress) {
   const anchor = items.filter(item => !progress[item.id]?.hidden && hasActivity(progress[item.id])).sort((a, b) => {

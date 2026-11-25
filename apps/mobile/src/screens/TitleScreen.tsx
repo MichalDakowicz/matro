@@ -62,6 +62,8 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
     <View><Text style={[t.sectionTitle, { marginBottom: 18 }]}>File</Text><View style={[t.row, { gap: 40, alignItems: 'flex-start' }]}><View><Text style={t.dim}>Format</Text><Text style={[t.text, { fontFamily: fonts.medium, marginTop: 6 }]}>{item.format}</Text><Text style={[t.dim, { marginTop: 4 }]}>{show ? 'Series' : 'Movie'}</Text></View><View style={{ flex: 1 }}><Text style={t.dim}>Source</Text><Text style={[t.text, { fontFamily: fonts.medium, marginTop: 6 }]} numberOfLines={2}>{item.root?.split(/[\\/]/).filter(Boolean).pop() || 'Library'}</Text><Text style={[t.dim, { marginTop: 4 }]}>Matro server</Text></View></View></View>
   </View>;
   const episode = menu && typeof menu === 'object' ? menu.episode : null;
+  // Episodes before the chosen one that are not watched yet (items are in play order).
+  const earlier = episode ? items.slice(0, items.indexOf(episode)).filter(i => !data.progress[i.id]?.completed) : [];
   return <View style={s.fill}>
     <FlatList data={show ? inSeason : []} keyExtractor={i => i.id} contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: insets.bottom + 40 }} ListHeaderComponent={header} ListFooterComponent={footer} showsVerticalScrollIndicator={false}
       scrollEventThrottle={64} onScroll={e => { const far = e.nativeEvent.contentOffset.y > 160; if (far !== scrolled) setScrolled(far); }}
@@ -89,6 +91,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
       {episode && <>
         <Row icon="play" label="Play" onPress={() => close(() => onPlay(episode))} />
         <Row icon="check" label={data.progress[episode.id]?.completed ? 'Mark unwatched' : 'Mark watched'} onPress={() => close(() => onMark([episode], !data.progress[episode.id]?.completed))} />
+        {earlier.length > 0 && <Row icon="check" label="Mark earlier episodes watched" detail={plural(earlier.length, 'episode')} onPress={() => close(() => onMark(earlier, true))} />}
         <Row icon="plus" label="Add to queue" onPress={() => close(() => onEnqueue([episode]))} />
         {onSave && <Row icon={state(episode.id) === 'saved' ? 'check' : 'download'} label={saveLabel(episode.id)} last onPress={() => state(episode.id) === 'idle' ? close(() => onSave(episode)) : setMenu(null)} />}
       </>}

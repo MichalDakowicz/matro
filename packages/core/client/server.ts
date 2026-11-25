@@ -127,6 +127,8 @@ export const writeWatchState = (base: string, accountId: number, body: { progres
   request(base, '/api/state', { method: 'PUT', body, accountId });
 export const changeProgress = (base: string, accountId: number, id: string, body: { dismiss: true; dismissedAt?: number } | { completed: boolean; checkpoint?: Progress }): Promise<{ progress: Record<string, Progress> }> =>
   request(base, `/api/items/${encodeURIComponent(id)}/progress`, { method: 'PATCH', body, accountId });
+export const changeProgressMany = (base: string, accountId: number, ids: string[], completed: boolean): Promise<{ progress: Record<string, Progress> }> =>
+  request(base, '/api/progress', { method: 'PATCH', body: { ids, completed }, accountId });
 export function playbackPath(id: string, info: Info, position: number, audio: number | null, burn: number | null, delay = 0) {
   const root = `/api/items/${encodeURIComponent(id)}`;
   if (info.directPlay && burn === null && (audio === null || audio === info.audio[0]?.index)) return { path: root + '/direct', offset: 0, start: position };

@@ -230,6 +230,7 @@ export function createAdapter(session) {
     },
     dismissContinue: session.offline ? undefined : async id => (await stateRequest('PATCH', `/api/items/${encodeURIComponent(id)}/progress`, { dismiss: true })).progress,
     setCompleted: session.offline ? undefined : async (id, completed, checkpoint) => (await stateRequest('PATCH', `/api/items/${encodeURIComponent(id)}/progress`, { completed, checkpoint })).progress,
+    setCompletedMany: session.offline ? undefined : async (ids, completed) => (await stateRequest('PATCH', '/api/progress', { ids, completed })).progress,
     savePreferences: preferences => updateState({ preferences }),
     changeQueue: queueChange => updateState({ queueChange }),
     save: ({ progress }, { keepalive = false } = {}) => {
