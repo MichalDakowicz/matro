@@ -11,8 +11,8 @@ export function Icon({ name, size = 20, color = colors.text }: { name: Glyph; si
   return <SvgXml width={size} height={size} xml={`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${icons[name]}</svg>`} />;
 }
 export const Brand = ({ size = 34 }: { size?: number }) => <SvgXml xml={brand.svg} width={size} height={size} />;
-export function SkipIcon({ back }: { back?: boolean }) {
-  return <Svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke={colors.text} strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round"><Path d={back ? 'M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4.5v4h4' : 'M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4'} /><SvgText x={12} y={15.4} textAnchor="middle" strokeWidth={0} fill={colors.text} fontSize={9} fontFamily={fonts.medium}>5</SvgText></Svg>;
+export function SkipIcon({ back, seconds = 10 }: { back?: boolean; seconds?: number }) {
+  return <Svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke={colors.text} strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round"><Path d={back ? 'M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4.5v4h4' : 'M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4'} /><SvgText x={12} y={15.4} textAnchor="middle" strokeWidth={0} fill={colors.text} fontSize={8} fontFamily={fonts.medium}>{seconds}</SvgText></Svg>;
 }
 export function IconButton({ name, label, onPress, active, disabled, size = 44, children }: { name?: Glyph; label: string; onPress: () => void; active?: boolean; disabled?: boolean; size?: number; children?: React.ReactNode }) {
   return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected: !!active, disabled: !!disabled }} disabled={disabled} onPress={onPress} hitSlop={3} style={({ pressed }) => [styles.iconButton, { width: size, height: size }, active && styles.selected, pressed && styles.pressed, disabled && { opacity: .3 }]}>{children || (name && <Icon name={name} />)}</Pressable>;

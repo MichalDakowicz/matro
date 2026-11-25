@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Slider from '@react-native-community/slider';
 import { Pill, styles as t } from '../components/Matro';
 import { colors } from '../theme';
+import { chrome } from './playerTheme';
 import { parseSubtitlePosition, subtitlePresets, type SubtitlePosition } from './subtitlePosition';
 
 const key = 'matro.subtitlePosition';
@@ -28,26 +29,23 @@ export function useSubtitlePosition() {
 
 export function SubtitlePositionControls({ position, onChange }: { position: SubtitlePosition; onChange: (position: SubtitlePosition) => void }) {
   return <View style={s.settings}>
-    <View style={s.row}>
-      <Text style={t.muted}>Position</Text>
-      <Pressable onPress={() => onChange(subtitlePresets.Bottom)} accessibilityRole="button" hitSlop={12}>
+    <View style={t.row}>
+      {Object.entries(subtitlePresets).map(([label, preset]) => <Pill key={label} label={label} compact style={{ height: 44 }} primary={position.x === preset.x && position.y === preset.y} onPress={() => onChange(preset)} />)}
+      <Pressable onPress={() => onChange(subtitlePresets.Bottom)} accessibilityRole="button" style={{ minHeight: 44, justifyContent: 'center', marginLeft: 'auto' }}>
         <Text style={t.text}>Reset position</Text>
       </Pressable>
     </View>
-    <View style={t.row}>
-      {Object.entries(subtitlePresets).map(([label, preset]) => <Pill key={label} label={label} compact primary={position.x === preset.x && position.y === preset.y} onPress={() => onChange(preset)} />)}
-    </View>
     {([['x', 'Horizontal'], ['y', 'Vertical']] as const).map(([axis, label]) => <View key={axis} style={s.row}>
-      <Text style={t.muted}>{label}</Text>
+      <Text style={[t.muted, { width: 82 }]}>{label}</Text>
       <Slider accessibilityLabel={`${label} subtitle position`} style={s.slider} minimumValue={0} maximumValue={100} step={1} value={position[axis]}
-        minimumTrackTintColor={colors.primary} maximumTrackTintColor={colors.hairline} thumbTintColor={colors.primary}
+        minimumTrackTintColor={colors.primary} maximumTrackTintColor={chrome.track} thumbTintColor={colors.primary}
         onValueChange={value => onChange({ ...position, [axis]: value })} />
     </View>)}
   </View>;
 }
 
 const s = StyleSheet.create({
-  settings: { gap: 6, borderTopWidth: 1, borderTopColor: colors.hairline, paddingTop: 12, marginBottom: 16 },
+  settings: { gap: 6 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  slider: { width: 170, height: 44 },
+  slider: { flex: 1, height: 44 },
 });
