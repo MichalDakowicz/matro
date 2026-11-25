@@ -177,7 +177,7 @@ async function removeContinue(id) {
   const item = library.items.find(i => i.id === id); if (!item) return;
   const siblings = item.kind === 'show' ? orderedEpisodes(item) : [item];
   const previous = { ...library.progress };
-  const resolved = api.dismissContinue ? normalizeProgress(await api.dismissContinue(id)) : {};
+  const resolved = api.dismissContinue ? normalizeProgress(await api.dismissContinue(id, previous)) : {};
   const patch = dismissedProgress(siblings, previous, library.progress, resolved);
   applyProgress(patch);
   if (!api.dismissContinue) await save();
@@ -769,12 +769,21 @@ async function play(id, keepQueue = false, compareEdition = false) {
   const item = library.items.find(i => i.id === id); if (!item) return;
   // Starting playback from the library always opens with the queue closed; next, previous and autoplay keep it as it was.
   if (view !== 'player') queueOpen = false;
-  hidePreview(); remember(); await save(); const token = ++generation; subtitleGeneration++; loading = true; frameRun++; selected = null;
+  hidePreview(); remember();
+  const token = ++generation, saved = await api.savedPlayback?.(id);
+  if (token !== generation) return;
+  if (!saved) await save();
+  if (token !== generation) return;
+  subtitleGeneration++; loading = true; frameRun++; selected = null;
   // A preloaded stream is used only if its track choice still matches what this title would pick now.
-  const fresh = prepared?.id === id && (({ audio: a, subtitle: s, delay: d }) => a === prepared.audio && s === prepared.subtitle && d === prepared.delay)(chooseTracks(item, prepared.info));
+  const fresh = prepared?.id === id && (!saved || prepared.url.split('#')[0] === saved.url)
+    && (({ audio: a, subtitle: s, delay: d }) => a === prepared.audio && s === prepared.subtitle && d === prepared.delay)(chooseTracks(item, prepared.info));
   const ready = fresh ? prepared : null; if (ready) prepared = null; discardPrepared();
   resetPlayer();
-  await api.stop(ready?.url); current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
+  if (saved) await api.stop(saved.url, { background: true });
+  else await api.stop(ready?.url);
+  if (token !== generation) return;
+  current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
   if (item.kind === 'show') {
     rewatchingShow = completed(id);
     dismissedShow = isContinueDismissed(orderedEpisodes(item), library.progress);
@@ -789,12 +798,12 @@ async function play(id, keepQueue = false, compareEdition = false) {
   try {
     if (ready) {
       // Preloaded: tracks were chosen and the stream has been buffering; the inspect call only tells the scanner what plays.
-      ({ info, audio, subtitle, delay, subtitleText } = ready); void api.inspect(id).catch(() => {});
+      ({ info, audio, subtitle, delay, subtitleText } = ready); if (!saved) void api.inspect(id).catch(() => {});
     } else {
-      const metadata = await api.inspect(id); if (token !== generation) return; info = metadata;
+      const metadata = saved?.info || await api.inspect(id); if (token !== generation) return; info = metadata;
       ({ audio, subtitle, delay } = chooseTracks(item, info));
       if (info.subtitles.find(t => t.index === subtitle)?.text) {
-        try { subtitleText = await api.subtitles({ id, index: subtitle }); } catch { subtitle = null; subtitleText = null; }
+        try { subtitleText = saved ? saved.subtitles[subtitle] : await api.subtitles({ id, index: subtitle }); } catch { subtitle = null; subtitleText = null; }
         if (token !== generation) return;
       }
     }
@@ -803,8 +812,10 @@ async function play(id, keepQueue = false, compareEdition = false) {
     const start = startAt(item, info.duration);
     // Starting an already watched title begins a new viewing session with a resumable position.
     if (item.kind !== 'show' && completed(id) && !start) library.progress[id] = { ...library.progress[id], position: 0, completed: false, updated: Date.now() };
-    if (ready) await adoptStream(ready, token); else await loadStream(start, true, token);
-    await save(); void detectMarkers(id);
+    if (ready) await adoptStream(ready, token); else await loadStream(start, true, token, saved?.url);
+    if (saved) void attempt(save);
+    else await save();
+    if (token === generation) void detectMarkers(id);
   } catch (error) { if (token === generation) { loading = false; playbackError = error.message; showMessage(); } }
 }
 function chooseTracks(item, details) {
@@ -921,9 +932,9 @@ function updateMetadata() {
   $('#player-chips').innerHTML = `<span class="chip">${esc(current.format)}</span>${info.video ? `<span class="chip">${info.video.height}p · ${esc(info.video.codec.toUpperCase())}</span>` : '<span class="chip">Audio</span>'}${info.audio.length ? `<span class="chip">${esc(info.audio.find(a => a.index === audio)?.codec.toUpperCase())} · Stereo output</span>` : ''}`;
   $('#seek').max = info.duration || 1; $('#duration').textContent = fmt(info.duration); showTimes(offset + (video?.currentTime || 0)); renderSeekMarks();
 }
-async function loadStream(position, shouldPlay = true, token = generation) {
+async function loadStream(position, shouldPlay = true, token = generation, savedUrl) {
   playIntent = shouldPlay; loading = true; playbackError = ''; showMessage(); updateToggle(); pendingStream = { id: current.id, position };
-  const result = await api.stream({ id: current.id, offset: position, audio, bitmapSubtitle: bitmapTrack()?.index ?? null, subtitleDelay: delay, forceTranscode: supportsFullBuffer(!!info.video) || video.dataset.forceTranscode === 'true' }); if (token !== generation) return;
+  const result = savedUrl ? { url: savedUrl, offset: 0 } : await api.stream({ id: current.id, offset: position, audio, bitmapSubtitle: bitmapTrack()?.index ?? null, subtitleDelay: delay, forceTranscode: supportsFullBuffer(!!info.video) || video.dataset.forceTranscode === 'true' }); if (token !== generation) return;
   offset = result.offset; streamId = current.id;
   const player = video, start = Math.max(0, position - offset);
   // Preserve the target until this source has reached it. load() emits zero-time

@@ -7,7 +7,7 @@ export async function api(method, url, body, { keepalive = false, signal } = {})
   if (!res.ok) {
     // The session ended (password reset elsewhere, or expired): start over at the sign-in page.
     if (res.status === 401 && !url.includes('/login') && !url.includes('/status')) location.reload();
-    throw new ApiError(res.status, data.error || 'Request failed.');
+    throw new ApiError(res.status, typeof data?.error === 'string' && data.error ? data.error : 'Request failed.');
   }
   return data;
 }

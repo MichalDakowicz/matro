@@ -15,3 +15,15 @@ test('offline downloads retry dropped connections and 5xx answers, but not refus
     assert.equal(tries, 1);
   }
 });
+
+test('offline preparation times out after stalled progress, not elapsed download time', async () => {
+  const { preparationTracker } = await import('../apps/web/web/offline.js');
+  const stalled = preparationTracker(), minutes = 60 * 1000;
+  assert.equal(stalled(null, 0), false);
+  assert.equal(stalled(null, 45 * minutes), false);
+  assert.equal(stalled(0, 46 * minutes), false);
+  assert.equal(stalled(.3, 70 * minutes), false);
+  assert.equal(stalled(.5, 90 * minutes), false);
+  assert.equal(stalled(.4, 110 * minutes), false, 'regressions do not reset the clock');
+  assert.equal(stalled(.5, 120 * minutes), true);
+});
