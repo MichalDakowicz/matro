@@ -142,7 +142,7 @@ test('the chosen offline variant survives a pause and is used for preparation an
   await offline.saveOfflineBatch(base, user, [item], nameOf, new Map([[item.id, choice]]));
   await until(() => attempt === 1);
   await offline.pauseOffline(base, user, item.id);
-  assert.deepEqual((await records())[0].choice, choice);
+  assert.equal(JSON.stringify((await records())[0].choice), JSON.stringify(choice));
   await offline.saveOffline(base, user, item, item.title);
   await until(async () => (await records()).some(record => record.complete));
 });

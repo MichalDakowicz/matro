@@ -29,8 +29,8 @@ export const withChoice = (path, choice) => { const query = offlineParams(choice
 /** A saved copy keeps only the chosen audio track, or the first one. @template {{index: number}} T @param {T[]} audio @param {OfflineChoice} [choice] @returns {T[]} */
 export const keptAudio = (audio, choice) => { const track = audio.find(t => t.index === choice?.audio) ?? audio[0]; return track ? [track] : []; };
 
-/** @typedef {{ index: number, language?: string, title?: string }} Track */
-/** @param {Track[]} tracks @param {Track|null|undefined} reference */
+/** @typedef {{ language?: string, title?: string }} Reference */
+/** @template {Reference} T @param {T[]} tracks @param {Reference|null|undefined} reference @returns {T|null} */
 export function matchOfflineTrack(tracks, reference) {
   if (!reference) return null;
   return tracks.find(track => track.language === reference.language && track.title === reference.title)
