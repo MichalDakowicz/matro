@@ -4,17 +4,14 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 
-test('overlapping large progress saves work on a slow connection', async () => {
-  const requests = [];
+async function withWebPage(respond, run) {
   const server = http.createServer(async (req, res) => {
-    if (req.url === '/api/state') {
-      let body = ''; for await (const chunk of req) body += chunk;
-      requests.push(JSON.parse(body));
-      await new Promise(resolve => setTimeout(resolve, 500));
-      res.writeHead(200, { 'Content-Type': 'application/json' }).end('{}');
-    } else if (['/adapter.js', '/http.js', '/dom.js', '/offline.js', '/offline-store.js', '/movie-requests.js'].includes(req.url)) {
+    if (['/adapter.js', '/http.js', '/dom.js', '/offline.js', '/offline-store.js', '/movie-requests.js'].includes(req.url)) {
       res.writeHead(200, { 'Content-Type': 'text/javascript' }).end(await fs.readFile(path.join(__dirname, '../apps/web/web', req.url.slice(1))));
-    } else res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><title>Network regression</title>');
+    } else if (req.url === '/packages/core/client/watch-progress.js') {
+      res.writeHead(200, { 'Content-Type': 'text/javascript' }).end(await fs.readFile(path.join(__dirname, '..', req.url.slice(1))));
+    } else if (req.url.startsWith('/api/')) await respond(req, res);
+    else res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><title>Network regression</title><div id="toast"></div>');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-network-'));
@@ -23,6 +20,21 @@ test('overlapping large progress saves work on a slow connection', async () => {
   try {
     browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
     const page = await browser.firstWindow(); await page.waitForLoadState();
+    await run(page);
+  } finally {
+    await browser?.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+    await fs.rm(profile, { recursive: true, force: true });
+  }
+}
+
+test('overlapping large progress saves work on a slow connection', async () => {
+  const requests = [];
+  await withWebPage(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    requests.push(JSON.parse(body));
+    await new Promise(resolve => setTimeout(resolve, 500));
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end('{}');
+  }, async page => {
     const results = await page.evaluate(async () => {
       const { createAdapter } = await import('/adapter.js');
       const { matro } = createAdapter({ user: { id: 1, username: 'viewer', role: 'viewer' } });
@@ -41,8 +53,66 @@ test('overlapping large progress saves work on a slow connection', async () => {
     expect(results.normal).toEqual(['saved', 'saved', 'saved']);
     expect(results.options).toEqual([true, false]);
     expect(requests.slice(-5).every(body => !Object.hasOwn(body, 'markers'))).toBe(true);
-  } finally {
-    await browser?.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
-    await fs.rm(profile, { recursive: true, force: true });
-  }
+  });
+});
+
+test('reloading resumes both preparing and waiting episodes in an offline save batch', async () => {
+  const ids = ['one', 'two', 'three'], requested = new Set();
+  const user = { id: 1, username: 'viewer', role: 'viewer' };
+  let preparing = true;
+  await withWebPage((req, res) => {
+    const json = body => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
+    if (req.url === '/api/library') return json({ user, items: ids.map(id => ({ id, title: id })), metadata: {}, progress: {} });
+    const [, id, route] = req.url.match(/^\/api\/items\/([^/]+)\/(.+)$/) || [];
+    if (route === 'info') return json({ duration: 1, audio: [], embedded: [], uploaded: [] });
+    if (route === 'offline') {
+      requested.add(id);
+      return json(preparing ? { state: 'preparing', progress: .2 } : { state: 'ready', size: 1, version: '1', type: 'video/mp4' });
+    }
+    if (route === 'offline/file?version=1') return res.writeHead(206, { 'Content-Range': 'bytes 0-0/1' }).end('x');
+    res.writeHead(404).end();
+  }, async page => {
+    const load = () => page.evaluate(async user => {
+      const { createAdapter } = await import('/adapter.js');
+      window.adapter = createAdapter({ user });
+      await window.adapter.matro.load();
+    }, user);
+    await load();
+    await page.evaluate(ids => { void window.adapter.matro.offlineSaveMany(ids).catch(() => {}); }, ids);
+    await expect.poll(() => [...requested].sort()).toEqual(['one', 'two']);
+    const state = () => page.evaluate(async () => Object.fromEntries((await window.adapter.offline.store.list()).map(({ id, state }) => [id, state])));
+    await expect.poll(state).toEqual({ one: 'preparing', two: 'preparing', three: 'queued' });
+    preparing = false;
+    await page.reload();
+    await load();
+    await expect.poll(state).toEqual({ one: 'complete', two: 'complete', three: 'complete' });
+  });
+});
+
+test('web uploads settle on a proxy rejection, connection failure, abort and timeout', async () => {
+  await withWebPage((req, res) => {
+    if (req.url.endsWith('proxy.mkv')) res.writeHead(413, { 'Content-Type': 'text/html' }).end('<h1>Payload too large</h1>');
+    else if (req.url.endsWith('failed.mkv')) req.socket.destroy();
+  }, async page => {
+    const messages = await page.evaluate(async () => {
+      const { createAdapter } = await import('/adapter.js');
+      const { matro } = createAdapter({ user: { id: 1, username: 'head', role: 'admin' } });
+      const send = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.send = function (file) {
+        if (file.name === 'timeout.mkv') this.timeout = 25;
+        send.call(this, file);
+        if (file.name === 'abort.mkv') setTimeout(() => this.abort(), 25);
+      };
+      try {
+        return await Promise.all(['proxy.mkv', 'failed.mkv', 'abort.mkv', 'timeout.mkv'].map(async name => {
+          try { await matro.importDrop([new File(['x'], name)]); return 'uploaded'; }
+          catch (error) { return error.message; }
+        }));
+      } finally { XMLHttpRequest.prototype.send = send; }
+    });
+    expect(messages).toEqual([
+      'Could not upload proxy.mkv (HTTP 413).', 'Upload of failed.mkv failed (connection lost).',
+      'Upload of abort.mkv was canceled.', 'Upload of timeout.mkv timed out.',
+    ]);
+  });
 });
