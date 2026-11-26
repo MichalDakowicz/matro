@@ -1,6 +1,5 @@
 const { HttpError } = require('./http');
 const { tx } = require('./db');
-const { sessionHash } = require('./auth');
 
 const USERNAME = /^[A-Za-z0-9][A-Za-z0-9._-]{1,31}$/;
 const publicUser = user => ({ id: user.id, accountKey: user.account_key, username: user.username, role: user.role,
@@ -36,7 +35,7 @@ function createUsers(db, auth) {
         setHash.run(hash, userId);
         if (!current) { auth.destroyAll(userId); return undefined; }
         const token = auth.create(userId);
-        moveDevice.run(sessionHash(token), sessionHash(current));
+        moveDevice.run(auth.sessionHash(token), auth.sessionHash(current));
         auth.destroyOthers(userId, token);
         return token;
       });

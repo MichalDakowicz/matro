@@ -42,6 +42,7 @@ function createAuth(db) {
   };
   return {
     hashPassword,
+    sessionHash: sha,
     async attempt(key, verify, sharedKey) {
       const now = Date.now(), previous = attempts.get(key);
       if (previous?.until > now) throw rateLimited(Math.ceil((previous.until - now) / 1000));
