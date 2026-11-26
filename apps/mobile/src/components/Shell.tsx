@@ -111,8 +111,7 @@ export function AccountSheet({ visible, onClose, data, base, offline, requests, 
       <View><Text style={s.stat}>{Object.values(data?.progress || {}).filter(p => p.completed).length}</Text><Text style={t.dim}>Watched</Text></View>
     </View>
     <SectionLabel>Library</SectionLabel>
-    {data && <ThemeRow />
-    <Row icon="download" label="Saved for offline" chevron onPress={() => go('offline')} />}
+    {data && <Row icon="download" label="Saved for offline" chevron onPress={() => go('offline')} />}
     {admin && <Row icon="folder" label="Folders" chevron onPress={() => go('folders')} />}
     {admin && <Row icon="arrows" label="Host downloads" detail="Find releases and add them to the server" chevron onPress={() => go('downloads')} />}
     {!offline && !!requests && <Row icon="requests" label={requests} chevron onPress={() => go('movie-requests')} />}
@@ -120,6 +119,7 @@ export function AccountSheet({ visible, onClose, data, base, offline, requests, 
     <Row icon="refresh" label={offline ? 'Reconnect' : 'Refresh library'} onPress={() => { onClose(); onRefresh(); }} />
     <Row icon="network" label="Change server" detail={base.replace(/^https?:\/\//, '')} onPress={() => confirm('Change server?', 'Matro forgets this server address and asks for a new one. Titles saved on this device stay here.', 'Change server', onServer)} />
     <SectionLabel>Account</SectionLabel>
+    <View style={{ marginVertical: 10 }}><ThemeRow /></View>
     <Row icon="file" label="About Matro" onPress={() => { onClose(); onAbout(); }} />
     <Row icon="close" label="Sign out" destructive last onPress={() => confirm('Sign out?', 'You will need your password to sign back in. Titles saved on this device stay here.', 'Sign out', onSignOut)} />
   </Sheet>;
