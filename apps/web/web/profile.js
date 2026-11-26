@@ -6,6 +6,7 @@ const hue = name => { let n = 2166136261; for (const c of name) n = Math.imul(n 
 const avatar = (name, big) => h('span', { class: `web-avatar${big ? ' big' : ''}`, style: { '--h': String(hue(name)) }, 'aria-hidden': 'true' }, name.slice(0, 1).toUpperCase());
 const KIND = { full: 'Full', forced: 'Forced only', sdh: 'SDH / captions' };
 const fail = error => say(error.message);
+const group = (title, ...sections) => h('div', { class: 'web-group' }, h('p', { class: 'web-group-title', 'aria-hidden': 'true' }, title), ...sections.filter(Boolean));
 const section = (title, aside, ...body) => h('section', { class: 'section' }, h('div', { class: 'section-heading' }, h('h2', {}, title), aside || null), ...body);
 
 export function profileButton(session, open) {
@@ -39,7 +40,7 @@ export function openProfile({ session, getState, forgetTracks, signOut, openSave
     added.replaceChildren(...(subtitles.length ? subtitles.map(s => h('div', { class: 'source-row web-row' }, h('span', { class: 'source-icon' }, h('span', { class: 'mono' }, s.language.toUpperCase())),
       h('div', { class: 'min' }, h('span', { class: 'source-name' }, s.name), h('span', { class: 'source-path' }, `${languageName(s.language)} · ${KIND[s.kind]} · ${s.groupTitle}${s.itemKind === 'show' ? ` S${String(s.season).padStart(2, '0')}E${String(s.episode).padStart(2, '0')}` : ''}${admin && s.addedBy ? ` · by ${s.addedBy}` : ''}`)),
       h('span'), h('div', { class: 'source-actions' }, h('button', { class: 'pill small', type: 'button', onclick: () => relabel(s) }, 'Edit'),
-        h('button', { class: 'pill small', type: 'button', 'aria-label': `Delete ${s.name}`, onclick: async () => { if (confirm(`Delete the subtitles "${s.name}" for everyone?`)) { try { await del(`/api/subtitles/${s.id}`); loadAdded(); } catch (e) { fail(e); } } } }, 'Delete'))))
+        h('button', { class: 'pill small danger', type: 'button', 'aria-label': `Delete ${s.name}`, onclick: async () => { if (confirm(`Delete the subtitles "${s.name}" for everyone?`)) { try { await del(`/api/subtitles/${s.id}`); loadAdded(); } catch (e) { fail(e); } } } }, 'Delete'))))
       : [h('p', { class: 'muted' }, 'Subtitles you add from the player show up here, where you can rename or remove them.')]));
   }
   function relabel(s) {
@@ -63,7 +64,7 @@ export function openProfile({ session, getState, forgetTracks, signOut, openSave
     people.replaceChildren(...users.map(u => h('div', { class: 'source-row web-row' }, avatar(u.username), h('div', { class: 'min' }, h('span', { class: 'source-name' }, u.username),
       h('span', { class: 'source-path' }, u.role === 'admin' ? 'Head account' : `Viewer${u.lastWatched ? ` · last watched ${new Date(u.lastWatched).toLocaleDateString()}` : ''} · ${u.subtitles} subtitle file${u.subtitles === 1 ? '' : 's'} added`)), h('span'),
       u.role === 'admin' ? h('span') : h('div', { class: 'source-actions' }, h('button', { class: 'pill small', type: 'button', onclick: () => reset(u) }, 'Reset password'),
-        h('button', { class: 'pill small', type: 'button', onclick: async () => { if (confirm(`Remove ${u.username}? Their watch history and settings go too. Subtitles they added stay.`)) { try { await del(`/api/admin/users/${u.id}`); loadPeople(); } catch (e) { fail(e); } } } }, 'Remove')))));
+        h('button', { class: 'pill small danger', type: 'button', onclick: async () => { if (confirm(`Remove ${u.username}? Their watch history and settings go too. Subtitles they added stay.`)) { try { await del(`/api/admin/users/${u.id}`); loadPeople(); } catch (e) { fail(e); } } } }, 'Remove')))));
   }
   function reset(u) {
     const input = h('input', { type: 'text', autocomplete: 'off', placeholder: 'New password (8 or more characters)', required: true });
@@ -98,13 +99,16 @@ export function openProfile({ session, getState, forgetTracks, signOut, openSave
 
   layer.append(h('button', { class: 'web-back', type: 'button', 'aria-label': 'Close profile', title: 'Back (Esc)', onclick: close }, '←'),
     h('main', { class: 'page web-page' },
-      h('header', { class: 'page-head' }, h('div', { class: 'web-who' }, avatar(user.username, true), h('div', {}, h('h1', { class: 'page-title' }, user.username), h('p', { class: 'page-sub' }, admin ? 'Head account · looks after the library and everyone on it' : 'Viewer · watches and adds subtitles')))),
-      section('Your watching', null, stats), section('Dub and subtitles', forget, h('p', { class: 'muted' }, 'The player remembers which audio and subtitle language you pick for each show or film, so a dub chosen in one episode carries through the series.')),
-      section('Saved for offline', null, h('button', { class: 'pill', type: 'button', onclick: () => { close(); openSaved(); } }, 'View offline downloads')),
-      session.offline ? null : section('Subtitles you added', null, added), session.offline ? null : section('Password', null, password),
-      admin ? section('Downloads', null, h('p', { class: 'muted' }, 'Find films and series, add magnet links, and manage downloads on the Matro host.'), h('button', { class: 'pill primary', type: 'button', onclick: () => { close(); document.querySelector('.dock-item[data-tab="downloads"]')?.click(); } }, 'Open downloads')) : null,
-      admin ? section('People', null, h('p', { class: 'page-sub', style: { margin: '-6px 0 16px' } }, 'Viewers keep their own progress and choices and can add subtitles. Only you can add or remove films and shows (Folders). To add someone, create a one-time invite code and send it to them: they sign up with it and pick their own password.'), people, h('h3', { class: 'web-sub' }, 'Invites'), invites, addPerson) : null,
-      h('div', { class: 'show-actions' }, h('button', { class: 'pill', type: 'button', onclick: signOut }, 'Sign out'))));
+      h('header', { class: 'page-head' }, h('div', { class: 'web-who' }, avatar(user.username, true), h('div', {}, h('h1', { class: 'page-title' }, user.username), h('p', { class: 'page-sub' }, admin ? 'Head account · looks after the library and everyone on it' : 'Viewer · watches and adds subtitles'))), h('button', { class: 'pill', type: 'button', onclick: signOut }, 'Sign out')),
+      section('Activity', null, stats),
+      group('Playback',
+        section('Dub and subtitles', forget, h('p', { class: 'muted' }, 'The player remembers which audio and subtitle language you pick for each show or film, so a dub chosen in one episode carries through the series.')),
+        section('Saved for offline', null, h('button', { class: 'pill', type: 'button', onclick: () => { close(); openSaved(); } }, 'View offline downloads')),
+        session.offline ? null : section('Subtitles you added', null, added)),
+      session.offline ? null : group('Account', section('Password', null, password)),
+      admin ? group('People and host',
+        section('Downloads', null, h('p', { class: 'muted' }, 'Find films and series, add magnet links, and manage downloads on the Matro host.'), h('button', { class: 'pill primary', type: 'button', onclick: () => { close(); document.querySelector('.dock-item[data-tab="downloads"]')?.click(); } }, 'Open downloads')),
+        section('People', null, h('p', { class: 'page-sub', style: { margin: '-6px 0 16px' } }, 'Viewers keep their own progress and choices and can add subtitles. Only you can add or remove films and shows (Folders). To add someone, create a one-time invite code and send it to them: they sign up with it and pick their own password.'), people, h('h3', { class: 'web-sub' }, 'Invites'), invites, addPerson)) : null));
   document.body.append(layer); document.body.classList.add('web-layer-open');
   if (!session.offline) loadAdded().catch(fail);
   if (admin) { loadPeople().catch(fail); loadInvites().catch(fail); }
