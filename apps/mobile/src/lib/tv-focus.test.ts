@@ -15,7 +15,7 @@ test('TV pressables keep accessibility when D-pad focus is disabled', () => {
     react: { useState: (initial: boolean) => [initial, () => {}], forwardRef: (render: Function) => render },
     'react/jsx-runtime': { jsx: (type: unknown, props: object) => ({ type, props }) },
     'react-native': { Platform: { OS: 'android', isTV: true }, Pressable: 'Pressable', StyleSheet: { create: (styles: object) => styles } },
-    '../theme': { colors: { primary: '#fff' } },
+    '../theme': { colors: { primary: '#fff' }, themed: (create: () => object) => create() },
   };
   const context = { exports: {} as { FocusPressable: (props: object) => { type: string; props: { accessible: boolean; focusable: boolean } } },
     require: (name: string) => { assert.ok(modules[name], name); return modules[name]; } };

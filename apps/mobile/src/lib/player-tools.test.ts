@@ -60,7 +60,7 @@ test('subtitle style reads the shared preference, falls back to the web defaults
   assert.deepEqual(parseSubtitleStyle(undefined), defaultSubtitleStyle);
   assert.deepEqual(parseSubtitleStyle({ font: 'comic', background: 'solid', bold: true, edge: 'laser' }), { ...defaultSubtitleStyle, background: 'solid', bold: true });
   const solid = subtitleTextStyle({ ...defaultSubtitleStyle, background: 'solid', bold: true, edge: 'shadow', font: 'serif' });
-  assert.equal(solid.backgroundColor, '#000ff');
+  assert.equal(solid.backgroundColor, '#000000ff');
   assert.equal(solid.fontWeight, '700');
   assert.equal(solid.fontFamily, 'serif');
   assert.equal(solid.textShadowRadius, 4);

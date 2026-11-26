@@ -1,6 +1,6 @@
 import { forwardRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, TextInput, type PressableProps, type TextInputProps } from 'react-native';
-import { colors } from '../theme';
+import { colors, themed } from '../theme';
 
 export const isAndroidTv = Platform.OS === 'android' && Platform.isTV;
 
@@ -36,7 +36,7 @@ const TvTextInput = forwardRef<TextInput, TextInputProps>(function TvTextInput({
 export const FocusPressable = isAndroidTv ? TvPressable : Pressable;
 export const FocusInput = isAndroidTv ? TvTextInput : TextInput;
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   target: { minWidth: 44, minHeight: 44 },
   focus: { outlineWidth: 3, outlineOffset: 1, outlineColor: colors.primary, outlineStyle: 'solid' },
-});
+}));

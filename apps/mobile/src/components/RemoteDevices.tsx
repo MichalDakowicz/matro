@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Modal, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Field } from '../ui';
-import { colors } from '../theme';
+import { colors, themed } from '../theme';
 import { isAndroidTv } from './TvFocus';
 import { IconButton, Pill, styles as t } from './Matro';
 import type { RemoteController, RemotePlayback, RemoteState } from '../../../../packages/core/client/remote';
@@ -92,8 +92,8 @@ export function RemoteDevices({ visible, onClose, remote, state, outgoing, conti
   </Modal>;
 }
 
-const s = StyleSheet.create({
-  backdrop: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 16, backgroundColor: '#0009' },
+const s = themed(() => StyleSheet.create({
+  backdrop: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 16, backgroundColor: colors.scrim },
   panel: { width: '100%', maxWidth: 530, maxHeight: '90%', padding: 18, borderRadius: 22, borderWidth: 1, borderColor: colors.hairline, backgroundColor: colors.panel },
   content: { gap: 12 },
-});
+}));

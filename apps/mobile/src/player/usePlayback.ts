@@ -88,10 +88,14 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     prefChanges.current = {};
     if (!offline && Object.keys(changes).length) void updateWatchOptions(base, dataRef.current.user, { preferences: { tracks: { [trackKey(item)]: changes } } }).catch(() => {});
   }, [base, item, offline]);
+  const reportsActivity = !offline && !savedCopy;
+  const reportActivity = useCallback((playing: boolean, buffering = false) => {
+    if (reportsActivity) void playbackState(base, session, playing, buffering).catch(() => {});
+  }, [base, reportsActivity, session]);
   const pictureInPicture = useMemo(() => createPictureInPictureLifecycle(
     () => { void persist().catch(() => {}); },
-    () => { intent.current = false; player.pause(); },
-  ), [persist, player]);
+    () => { intent.current = false; player.pause(); reportActivity(false); },
+  ), [persist, player, reportActivity]);
   const allowPiP = !!supportsPiP && !!info?.video;
   const autoPiP = allowPiP && Number(Platform.Version) >= 31 && playing && !busy && !error;
   const autoPiPRef = useRef(autoPiP); autoPiPRef.current = autoPiP;
@@ -202,14 +206,10 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       void persist().catch(() => {});
     };
   }, [base, item.id, load, loadText, persist, flushPreferences, savedCopy, trySavedCopy]);
-  const reportsActivity = !offline && !savedCopy;
   useEffect(() => {
     if (reportsActivity) return () => { void stopPlayback(base, session).catch(() => {}); };
   }, [base, reportsActivity, session]);
   useEffect(() => {
-    const reportActivity = (playing: boolean, buffering = false) => {
-      if (reportsActivity) void playbackState(base, session, playing, buffering).catch(() => {});
-    };
     const sample = (currentTime: number) => {
       if (replacing.current) return;
       // Native decoders emit time zero while applying the initial seek. Keep
@@ -245,7 +245,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     const checkpoint = setInterval(() => { if (sourceReady.current && player.playing) sample(player.currentTime); }, 1000);
     const status = player.addListener('statusChange', event => {
       setBusy(event.status === 'loading');
-      if (event.status === 'loading' && intent.current && (AppState.currentState === 'active' || pictureInPicture.isFloating())) reportActivity(true, true);
+      if (event.status === 'loading' && intent.current && (AppState.currentState === 'active' || pictureInPicture.isFloating() || backgroundRef.current)) reportActivity(true, true);
       if (event.status === 'readyToPlay') { setError(''); moved.current = Date.now(); }
       if (event.status === 'error' && !replacing.current) recover();
     });
@@ -277,7 +277,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       else reportActivity(false);
     }, 20000);
     return () => { clearInterval(heartbeat); clearInterval(checkpoint); time.remove(); status.remove(); playing.remove(); end.remove(); appState.remove(); pictureInPicture.dispose(); clearInterval(timer); };
-  }, [base, player, persist, recover, pictureInPicture, reportsActivity, session]);
+  }, [player, persist, recover, pictureInPicture, reportActivity]);
   const seek = useCallback((value: number, automatic = false) => {
     const duration = infoRef.current?.duration || 0; if (!duration) return;
     playbackStart.current = null;
