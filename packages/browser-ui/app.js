@@ -440,10 +440,15 @@ function renderLibrary() {
 }
 function rerender() {
   if (view !== 'library' || tab === 'downloads' || tab === 'movie-requests') return;
-  const focused = document.activeElement?.id === 'search' ? $('#search').selectionStart : null, scroll = $('.shell')?.scrollTop || 0, open = selected?.id;
+  const active = document.activeElement;
+  const caret = active?.id === 'search' ? active.selectionStart : null;
+  const title = active?.matches('.card[data-detail]') ? active.dataset.detail : null;
+  const focusVisible = active?.matches(':focus-visible');
+  const scroll = $('.shell')?.scrollTop || 0, open = selected?.id;
   renderLibrary(); if ($('.shell')) $('.shell').scrollTop = scroll;
-  if (focused !== null && $('#search')) { $('#search').focus(); $('#search').setSelectionRange(focused, focused); }
+  if (caret !== null && $('#search')) { $('#search').focus(); $('#search').setSelectionRange(caret, caret); }
   if (open) detail(open, false);
+  else if (title) root.querySelector('.card[data-detail="' + CSS.escape(title) + '"]')?.focus({ preventScroll: true, focusVisible });
 }
 // Landing poster reel: an endless strip moved by sideways scroll, drag or arrow keys.
 const LINES = [
