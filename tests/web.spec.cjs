@@ -670,7 +670,9 @@ test('Vite production UI signs in, plays through the HTTP adapter and saves prog
     await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
     await page.getByRole('button', { name: /^(Play now|Resume)$/ }).click();
     await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.2);
-    await page.getByRole('button', { name: 'Pause', exact: true }).click();
+    // The controls auto-hide after 3.2 s of playback and the hidden test window renders about one frame a second,
+    // so a pointer click can wait until the 12 s clip ends. Press the Pause control directly instead.
+    await page.getByRole('button', { name: 'Pause', exact: true }).dispatchEvent('click');
     // Pausing the decoder must not stop downloading the rest of the movie.
     await expect(page.locator('video')).toHaveAttribute('data-buffer-complete', 'true');
     expect(await page.locator('video').evaluate(v => v.src.startsWith('blob:'))).toBe(true);
