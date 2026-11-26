@@ -5,7 +5,7 @@
     "version": "0.7.12",
     "orientation": "default",
     "scheme": "matro",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "automatic",
     "backgroundColor": "#0a0a0b",
     "icon": "./assets/icon.png",
     "android": {
