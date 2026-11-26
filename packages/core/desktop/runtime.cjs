@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog, protocol, net, session, shell, safeStorage } = require('electron');
 const fs = require('node:fs/promises');
+const { watchFolders } = require('./folder-watcher.cjs');
 const { createTorrents } = require('./torrents.cjs');
 const { createPathChecker, destinationFile } = require('./download-files.cjs');
 const { createMovieUpgrades } = require('./movie-upgrades.cjs');
@@ -9,20 +10,43 @@ const { createEmbeddedSubtitles } = require('./embedded-subtitles.cjs');
 const { remote } = require('./ssh-media.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { scan, describe, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
+const { mediaArgs } = require('./open-with.cjs');
+const { scan, describe, groupFolders, existingShowGroups, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
 const { createStreamServer } = require('./stream.cjs');
 const { createPreviews } = require('./previews.cjs');
 const { createSegments } = require('./segments.cjs');
 const { createSegmentScheduler, mergeMarkers } = require('./segment-scheduler.cjs');
 const { readEnv, credentials, createMetadata, cleanQuery, yearOf } = require('./metadata.cjs');
+const { findUpdate } = require('./update-check.cjs');
 const previews = createPreviews();
 protocol.registerSchemesAsPrivileged([{ scheme: 'matro', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 let win, streams, storage, segments, scanner, metadata, torrents, upgrades, embeddedSubtitles;
 if (!app.isPackaged && process.env.MATRO_USER_DATA) app.setPath('userData', path.resolve(process.env.MATRO_USER_DATA));
-let state = { folders: [], items: [], progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 } };
+let state = { folders: [], items: [], progress: {}, queue: [], preferences: { autoplay: true, volume: 0.72 }, checkForUpdates: false };
 let writeQueue = Promise.resolve();
 let scanQueue = Promise.resolve();
+let updateRequest;
 function persist() { const contents = JSON.stringify(state); writeQueue = writeQueue.catch(() => {}).then(async () => { await fs.writeFile(storage + '.tmp', contents); await fs.rename(storage + '.tmp', storage); }); return writeQueue; }
+async function offerUpdate() {
+  if (state.checkForUpdates !== true || updateRequest) return;
+  const request = new AbortController();
+  updateRequest = request;
+  try {
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(10000)]);
+    const release = await findUpdate(app.getVersion(), (url, options) => net.fetch(url, options), signal);
+    if (!release || signal.aborted || win.isDestroyed()) return;
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'info', title: 'Matro update', message: `Matro ${release.version} is available.`,
+      detail: 'Open the GitHub release page to download the installer.',
+      buttons: ['Open release page', 'Later'], defaultId: 1, cancelId: 1, signal: request.signal
+    });
+    if (response === 0 && !request.signal.aborted) await shell.openExternal(release.url);
+  } catch {
+    // A later launch can retry when GitHub or the browser is unavailable.
+  } finally {
+    if (updateRequest === request) updateRequest = null;
+  }
+}
 const find = id => { const item = state.items.find(i => i.id === id); if (!item) throw new Error('Media is no longer in the library.'); return item; };
 function handle(channel, fn) { ipcMain.handle(channel, (event, ...args) => { if (event.sender !== win.webContents || !event.senderFrame?.url.startsWith('matro://app/')) throw new Error('Untrusted caller'); return fn(...args); }); }
 async function downloadArtwork(items) {
@@ -35,6 +59,12 @@ async function downloadArtwork(items) {
   const cached = metadata.snapshot();
   return items.map((item, index) => ({ ...item, banner: cached[titles[index].id]?.backdrop || cached[titles[index].id]?.poster || null }));
 }
+async function refreshMetadata() {
+  if (!metadata) return;
+  const items = state.items;
+  await metadata.syncLocal(items.filter(item => !remote.isRemote(item.path))).catch(() => {});
+  await metadata.sync(items);
+}
 async function importFiles(files) {
   for (const file of files) {
     if (typeof file !== 'string' || !extensions.has(path.extname(file).slice(1).toLowerCase())) continue;
@@ -42,8 +72,32 @@ async function importFiles(files) {
     const item = describe(path.resolve(file));
     if (!state.items.some(i => i.id === item.id)) state.items.push(item);
   }
-  await persist(); scanner?.invalidate(); void metadata?.sync(state.items); return state;
+  await persist(); scanner?.invalidate(); void refreshMetadata(); return state;
 }
+// "Open with Matro": files named on the command line at launch, or by a second launch while Matro runs.
+// The renderer is pinged and takes the file when it is ready; the latest request wins.
+const pendingOpen = mediaArgs(process.argv);
+async function takeOpen() {
+  const files = pendingOpen.splice(0);
+  for (const file of files) {
+    try {
+      if (!(await fs.stat(file)).isFile()) continue;
+      const same = item => process.platform === 'win32' ? item.path.toLowerCase() === file.toLowerCase() : item.path === file;
+      if (!state.items.some(same)) await importFiles([file]);
+      const item = state.items.find(same);
+      if (item) return item.id;
+    } catch { /* A file that vanished or cannot be read is skipped. */ }
+  }
+  return null;
+}
+app.on('second-instance', (_event, argv, cwd) => {
+  const files = mediaArgs(argv, { cwd });
+  if (files.length) pendingOpen.splice(0, pendingOpen.length, ...files);
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.focus();
+  if (files.length) win.webContents.send('library:open');
+});
 const subtitleStyle = value => {
   const style = value && typeof value === 'object' ? value : {}, pick = (key, options, fallback) => options.includes(style[key]) ? style[key] : fallback;
   return { size: Math.max(.5, Math.min(2, Number(style.size) || 1)), font: pick('font', ['sans', 'classic', 'serif', 'mono', 'casual'], 'sans'), background: pick('background', ['none', 'light', 'dark', 'solid'], 'light'), bold: !!style.bold, italic: !!style.italic, edge: pick('edge', ['none', 'outline', 'shadow'], 'none') };
@@ -67,21 +121,33 @@ async function pendingLibraryFiles() {
   }
   return excluded;
 }
-const scanLibraryFolder = root => scan(root, pendingLibraryFiles);
-function rescan(roots = state.folders) {
-  scanQueue = scanQueue.catch(() => {}).then(() => scanFolders(roots.filter(root => state.folders.includes(root))));
+const scanLibraryFolder = (root, knownShows = existingShowGroups(state.items), onDirectoryError) => scan(root, pendingLibraryFiles, knownShows, onDirectoryError);
+const folderWatcher = watchFolders(async root => {
+  await rescan([root], true);
+  publishDownloads();
+});
+const syncFolderWatcher = () => folderWatcher.sync(state.folders.filter(root => !remote.isRemote(root)));
+function rescan(roots = state.folders, fromWatcher = false) {
+  scanQueue = scanQueue.catch(() => {}).then(() => scanFolders(roots.filter(root => state.folders.includes(root)), fromWatcher));
   return scanQueue;
 }
-async function scanFolders(roots) {
-  const results = await Promise.all(roots.map(async root => { try { return { root, items: await scanLibraryFolder(root) }; } catch { return { root, error: 'Folder unavailable. Check the drive or network connection.' }; } }));
+async function scanFolders(roots, fromWatcher) {
+  const knownShows = existingShowGroups(state.items);
+  const results = await Promise.all(roots.map(async root => {
+    const unavailable = [];
+    try { return { root, items: await scanLibraryFolder(root, knownShows, (_error, dir) => unavailable.push(dir)), unavailable }; }
+    catch { return { root, error: 'Folder unavailable. Check the drive or network connection.' }; }
+  }));
   const previous = new Map(state.items.map(item => [item.id, item]));
-  for (const { root, items } of results) if (items && state.folders.includes(root)) {
+  for (const { root, items, unavailable } of results) if (items && state.folders.includes(root)) {
+    // A change event that leaves nothing behind is trusted only when the whole folder was read.
+    if (fromWatcher && !items.length && unavailable.length) continue;
     for (const item of items) item.added = previous.get(item.id)?.added ?? item.added;
-    state.items = state.items.filter(i => i.root !== root).concat(items);
+    state.items = state.items.filter(i => i.root !== root || unavailable.some(dir => contains(dir, i.path))).concat(items);
   }
   state.items = regroup([...new Map(state.items.map(item => [item.id, item])).values()]);
   state.libraryVersion = 2;
-  await persist(); scanner?.invalidate(); void metadata?.sync(state.items); return { ...state, warnings: results.filter(r => r.error).map(r => `${r.root}: ${r.error}`) };
+  await persist(); scanner?.invalidate(); void refreshMetadata(); return { ...state, warnings: results.filter(r => r.error).map(r => `${r.root}: ${r.error}`) };
 }
 async function importCompletedShow(job, config) {
   const localPath = file => destinationFile(downloadFiles, job.target, config, file);
@@ -118,7 +184,7 @@ app.whenReady().then(async () => {
     onComplete: async (job, config) => {
       if (job.release.kind === 'show') await importCompletedShow(job, config);
       else await upgrades.completed(job, config);
-      scanner?.invalidate(); void metadata?.sync(state.items); publishDownloads();
+      scanner?.invalidate(); void refreshMetadata(); publishDownloads();
     },
     checkPaths: createPathChecker(downloadFiles)
   });
@@ -132,19 +198,26 @@ app.whenReady().then(async () => {
   for (const config of state.sshConnections || []) {
     try { remote.register(config); } catch { /* Leave cached titles available if a saved configuration is invalid. */ }
   }
-  if (state.libraryVersion !== 2) await rescan();
+  syncFolderWatcher();
+  const catchUp = state.libraryVersion === 2;
+  if (!catchUp) await rescan();
   streams = await createStreamServer({ dir: path.join(app.getPath('userData'), 'playback') });
   protocol.handle('matro', request => {
     const url = new URL(request.url);
-    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/playback-buffer.js': 'playback-buffer.js', '/recovery.js': 'recovery.js', '/core/client/watch-progress.js': '../core/client/watch-progress.js', '/icons.json': 'icons.json', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-discovery.js': 'downloads-discovery.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg', '/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
+    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/playback-buffer.js': 'playback-buffer.js', '/recovery.js': 'recovery.js', '/core/client/watch-progress.js': '../core/client/watch-progress.js', '/core/client/reel-start.js': '../core/client/reel-start.js', '/core/client/scan-status.js': '../core/client/scan-status.js', '/icons.json': 'icons.json', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-discovery.js': 'downloads-discovery.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg', '/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
     const artwork = url.hostname === 'app' && url.pathname.startsWith('/artwork/') && metadata.artworkFile(url.pathname.slice('/artwork/'.length));
     if (artwork) return net.fetch(pathToFileURL(artwork).href);
     const file = url.hostname === 'app' && files[url.pathname];
     return file ? net.fetch(pathToFileURL(path.join(__dirname, file === 'index.html' ? '../../../apps/desktop' : '../../browser-ui', file)).href) : new Response('Not found', { status: 404 });
   });
+  let checkOnStartup = state.checkForUpdates === true;
   win = new BrowserWindow({ width: 1440, height: 940, minWidth: 900, minHeight: 640, backgroundColor: '#0a0a0b', title: 'Matro', icon: path.join(__dirname, '../../../assets/icon.png'), frame: false, show: false, webPreferences: { preload: path.join(__dirname, '../../../apps/desktop/preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false } });
   // Open maximized, shown only once the first frame is ready so the window never flashes at its default size.
-  win.once('ready-to-show', () => { win.maximize(); win.show(); });
+  win.once('ready-to-show', () => {
+    win.maximize();
+    win.show();
+    if (checkOnStartup) void offerUpdate();
+  });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
   // Page zoom: Ctrl + / Ctrl = zoom in (the default menu only binds Ctrl+Shift+=), Ctrl - out, Ctrl 0 reset.
@@ -165,6 +238,26 @@ app.whenReady().then(async () => {
   win.on('leave-full-screen', () => win.webContents.send('window:fullscreen', false));
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   scanner = createSegmentScheduler({ getState: () => state, engine: segments, persist, onUpdate: update => { if (!win.isDestroyed()) win.webContents.send('media:segments-progress', update); } });
+  handle('desktop:updates-set', async enabled => {
+    if (typeof enabled !== 'boolean') throw new Error('Invalid update setting.');
+    const previous = state.checkForUpdates === true;
+    if (enabled === previous) return enabled;
+    // The renderer can become interactive before ready-to-show fires.
+    checkOnStartup = false;
+    state.checkForUpdates = enabled;
+    if (!enabled) {
+      updateRequest?.abort();
+      updateRequest = null;
+    }
+    try {
+      await persist();
+    } catch (error) {
+      state.checkForUpdates = previous;
+      throw error;
+    }
+    if (enabled) void offerUpdate();
+    return enabled;
+  });
   handle('downloads:series-search', options => torrents.seriesSearch(options));
   handle('downloads:series-releases', options => torrents.seriesReleases(options));
   handle('downloads:series-source', id => shell.openExternal(torrents.seriesSource(id)));
@@ -187,7 +280,7 @@ app.whenReady().then(async () => {
     });
     return downloadArtwork(items);
   });
-  handle('library:load', async () => { await metadata.loaded; return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
+  handle('library:load', async () => { await metadata.loaded; void refreshMetadata(); return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
   handle('library:ssh', async options => {
     const root = remote.register(options);
     const wasSaved = state.folders.includes(root);
@@ -197,15 +290,16 @@ app.whenReady().then(async () => {
       state.sshConnections ||= [];
       if (!state.sshConnections.some(config => remote.register(config) === root)) state.sshConnections.push({ ...remote.configs.get(root), root });
       state.items = regroup(state.items.filter(item => item.root !== root).concat(items));
-      await persist(); scanner.invalidate(); void metadata.sync(state.items);
+      await persist(); scanner.invalidate(); void refreshMetadata();
       return state;
     } catch (error) {
       if (!wasSaved) remote.remove(root);
       throw new Error(`Could not read SSH media: ${error.message}. Check that SSH key login works in your terminal and Python 3 is installed on the server.`);
     }
   });
-  handle('library:folder', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (result.canceled) return state; const root = result.filePaths[0]; const items = await scanLibraryFolder(root); if (!state.folders.includes(root)) state.folders.push(root); const existing = new Map(state.items.map(i => [i.id, i])); for (const item of items) existing.set(item.id, item); state.items = regroup([...existing.values()]); await persist(); scanner.invalidate(); void metadata.sync(state.items); return state; });
+  handle('library:folder', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (result.canceled) return state; const root = result.filePaths[0]; const items = await scanLibraryFolder(root); if (!state.folders.includes(root)) state.folders.push(root); syncFolderWatcher(); const existing = new Map(state.items.map(i => [i.id, i])); for (const item of items) existing.set(item.id, item); state.items = regroup([...existing.values()]); await persist(); scanner.invalidate(); void refreshMetadata(); return state; });
   handle('library:files', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Media', extensions: [...extensions] }, { name: 'All files', extensions: ['*'] }] }); return result.canceled ? state : importFiles(result.filePaths); });
+  handle('library:take-open', takeOpen);
   handle('library:import', files => { if (!Array.isArray(files) || files.length > 5000) throw new Error('Invalid file selection'); return importFiles(files); });
   handle('library:rescan', rescan);
   // Pick (or clear) a show's prelude. Rescanning restores the regular numbering of a file that stops being the prelude.
@@ -243,7 +337,7 @@ app.whenReady().then(async () => {
     if (!win.isDestroyed()) win.webContents.send('library:metadata', snapshot);
     return snapshot;
   });
-  handle('library:remove-folder', async root => { state.folders = state.folders.filter(f => f !== root); state.items = state.items.filter(i => i.root !== root); state.sshConnections = (state.sshConnections || []).filter(config => remote.register(config) !== root); remote.remove(root); await persist(); scanner.invalidate(); return state; });
+  handle('library:remove-folder', async root => { state.folders = state.folders.filter(f => f !== root); syncFolderWatcher(); state.items = state.items.filter(i => i.root !== root); state.sshConnections = (state.sshConnections || []).filter(config => remote.register(config) !== root); remote.remove(root); await persist(); scanner.invalidate(); void refreshMetadata(); return state; });
   handle('library:save', async data => {
     const ids = new Set(state.items.map(i => i.id));
     if (data.progress && typeof data.progress === 'object') for (const [id, value] of Object.entries(data.progress)) if (ids.has(id) && value && Number.isFinite(value.position) && Number.isFinite(value.duration) && !(Number.isFinite(value.updated) && value.updated < (state.progress[id]?.updated || 0))) state.progress[id] = { position: Math.max(0, value.position), duration: Math.max(0, value.duration), updated: Number.isFinite(value.updated) ? value.updated : Date.now(), completed: !!value.completed, hidden: !!value.hidden };
@@ -285,8 +379,13 @@ app.whenReady().then(async () => {
     const audio = info.audio.find(a => a.index === options.audio)?.index ?? info.audio.find(a => a.default)?.index ?? info.audio[0]?.index ?? null;
     const bitmapSubtitle = info.video ? info.subtitles.find(s => s.index === options.bitmapSubtitle && s.bitmap)?.index ?? null : null;
     const subtitleDelay = Math.max(-60, Math.min(60, Number(options.subtitleDelay) || 0));
-    const direct = !options.forceTranscode && !remote.isRemote(item.path) && require('../playback/direct.cjs').canDirectPlay(item.path, info) && bitmapSubtitle === null && (audio === null || audio === info.audio[0]?.index);
-    return { url: streams.create({ file: item.path, offset, audio, info, direct, bitmapSubtitle, subtitleDelay }, { preload: !!options.preload }) + (direct && offset ? `#t=${offset}` : ''), offset: direct ? 0 : offset };
+    const audioDelay = Math.max(-10, Math.min(10, Number(options.audioDelay) || 0));
+    const remoteSource = remote.isRemote(item.path);
+    const direct = !options.forceTranscode && !remoteSource && require('../playback/direct.cjs').canDirectPlay(item.path, info, { hdr: options.hdr === true }) && bitmapSubtitle === null && !audioDelay && (audio === null || audio === info.audio[0]?.index);
+    const channels = options.channels === 6 ? 6 : 2;
+    const toneMap = !direct && !!info.video?.hdr && await require('../playback/encoding.cjs').supportsToneMap(ffmpeg);
+    const diagnostics = require('../client/playback-info.js').describePlayback(info, { direct, audio, offset, burn: bitmapSubtitle, force: options.forceTranscode, remote: remoteSource, channels, audioDelay, toneMap });
+    return { url: streams.create({ file: item.path, offset, audio, info, direct, bitmapSubtitle, subtitleDelay, audioDelay, channels }, { preload: !!options.preload }) + (direct && offset ? `#t=${offset}` : ''), offset: direct ? 0 : offset, progressive: direct && !!info.video?.hdr, diagnostics };
   });
   handle('media:preview', async ({ id, time, hover }) => { const item = find(id); if (!Number.isFinite(time) || time < 0) throw new Error('Invalid preview time'); return previews.frame(item.path, time, { hover: !!hover }); });
   handle('media:subtitles', async ({ id, index }) => {
@@ -307,11 +406,34 @@ app.whenReady().then(async () => {
     return { text, track, warning };
   });
   handle('media:stop', keepUrl => { streams.stop(typeof keepUrl === 'string' ? keepUrl : null); scanner.setPlayback(false); scanner.setCurrent(null); });
+  const subtitleSearch = require('../server/subtitle-search').createSubtitleSearch({ dir: app.getPath('userData'), secure: safeStorage });
+  handle('subtitle-search:status', () => subtitleSearch.status());
+  handle('subtitle-search:configure', key => subtitleSearch.configure(key));
+  handle('subtitle-search:find', ({ id, language }) => subtitleSearch.search(find(id), language, 'local'));
+  handle('subtitle-search:download', async ({ id, token }) => {
+    const item = find(id);
+    if (remote.isRemote(item.path)) throw new Error('OpenSubtitles downloads need a locally mounted media folder.');
+    const { language, body } = await subtitleSearch.download(item, token, 'local');
+    const text = await require('../server/subtitles').toVtt(body, { filename: 'download.srt', language, charset: 'utf-8' });
+    const temporary = await fs.mkdtemp(path.join(app.getPath('temp'), 'matro-subtitle-'));
+    try {
+      const file = path.join(temporary, 'download.vtt');
+      await fs.writeFile(file, text);
+      const kept = await keepSidecar(item.path, file, language);
+      const track = (await sidecars(item.path)).find(entry => entry.path === kept);
+      if (track) delete track.path;
+      return { text, track, refreshTracks: true };
+    } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+  });
   handle('window:action', action => { if (action === 'minimize') win.minimize(); if (action === 'maximize') win.isMaximized() ? win.unmaximize() : win.maximize(); if (action === 'close') win.close(); if (action === 'fullscreen') win.setFullScreen(!win.isFullScreen()); });
   await win.loadURL('matro://app/');
   torrents.start();
   scanner.refresh();
-  void metadata.sync(state.items);
+  void refreshMetadata();
+  if (catchUp) {
+    const localRoots = state.folders.filter(root => !remote.isRemote(root));
+    if (localRoots.length) void rescan(localRoots, true).then(publishDownloads).catch(() => {});
+  }
 });
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => { torrents?.close(); streams?.close(); previews.close(); scanner?.close(); remote.close(); });
+app.on('before-quit', () => { updateRequest?.abort(); folderWatcher.close(); torrents?.close(); streams?.close(); previews.close(); scanner?.close(); remote.close(); });

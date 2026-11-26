@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { palettes } from '../palette';
 import * as Notifications from 'expo-notifications';
 import { registerMovieRequestDevice, ServerError, testMovieRequestAlert, unregisterMovieRequestDevice } from './server';
 
@@ -86,7 +87,7 @@ export function useMovieRequestAlerts(base: string, available: boolean) {
     supported, ready, enabled, opened,
     enable: () => update(async () => {
       await Notifications.setNotificationChannelAsync('movie-requests', {
-        name: 'Movie requests', importance: Notifications.AndroidImportance.HIGH, lightColor: '#ece9e4', sound: 'default',
+        name: 'Movie requests', importance: Notifications.AndroidImportance.HIGH, lightColor: palettes.dark.text, sound: 'default',
       });
       const current = await Notifications.getPermissionsAsync();
       if (!current.granted && (!current.canAskAgain || !(await Notifications.requestPermissionsAsync()).granted)) {
