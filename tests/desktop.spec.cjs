@@ -1045,3 +1045,30 @@ test('the sleep timer stops autoplay and Media Session controls the full timelin
     expect(await page.evaluate(() => [navigator.mediaSession.metadata, window.testMediaActions.nexttrack])).toEqual([null, null]);
   } finally { await app.close(); }
 });
+
+test('a season, the earlier episodes or a whole show are marked watched in one step', async () => {
+  const f = await fixtures();
+  const names = ['Batchwatch.S01E01.One.mkv', 'Batchwatch.S01E02.Two.mkv', 'Batchwatch.S02E01.Three.mkv'].map(name => path.join(f.dir, name));
+  await Promise.all(names.map(file => fs.copyFile(f.mkv, file)));
+  const [one, two, three] = names.map(file => describe(file));
+  const profile = path.join(f.dir, `batch-profile-${Date.now()}`); await fs.mkdir(profile);
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, folders: [], items: [one, two, three], queue: [], progress: {}, preferences: { autoplay: false, volume: .3, motion: 'off' } }));
+  const app = await electron.launch(launchOptions(profile)), page = await app.firstWindow();
+  const done = async () => Object.entries((await page.evaluate(() => window.matro.load())).progress).filter(([, p]) => p.completed).map(([id]) => id).sort();
+  try {
+    await page.getByRole('button', { name: 'Open Batchwatch', exact: true }).press('Enter');
+    // The first episode has nothing before it, so it offers no "earlier" action.
+    await expect(page.locator(`[data-mark-before="${one.id}"]`)).toHaveCount(0);
+    await page.getByRole('tab', { name: /Season 2/ }).click();
+    await page.locator(`[data-mark-before="${three.id}"]`).click();
+    await expect.poll(done).toEqual([one.id, two.id].sort());
+    await expect(page.locator('[data-mark-before]')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Mark show watched' }).click();
+    await expect.poll(done).toEqual([one.id, two.id, three.id].sort());
+    await page.getByRole('button', { name: 'Mark show unwatched' }).click();
+    await expect.poll(done).toEqual([]);
+    await page.getByRole('tab', { name: /Season 1/ }).click();
+    await page.locator('[data-mark-season="1"]').click();
+    await expect.poll(done).toEqual([one.id, two.id].sort());
+  } finally { await app.close(); }
+});

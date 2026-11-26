@@ -330,6 +330,11 @@ export function createAdapter(session) {
     get offlineSaveMany() { return session.offline ? null : saveOffline; },
     dismissContinue: (id, progress) => changeProgress(id, { dismiss: true }, progress),
     setCompleted: (id, completed, checkpoint) => changeProgress(id, { completed, checkpoint }),
+    async setCompletedMany(ids, completed) {
+      if (session.offline) return null;
+      try { return (await stateRequest('PATCH', '/api/progress', { ids, completed })).progress; }
+      catch (error) { if (!networkLost(error)) throw error; return null; }
+    },
     savePreferences: preferences => updateState({ preferences }),
     changeQueue: queueChange => updateState({ queueChange }),
     save: ({ progress }, { keepalive = false } = {}) => {

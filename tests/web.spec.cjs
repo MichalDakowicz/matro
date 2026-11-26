@@ -649,6 +649,41 @@ test('Vite production UI signs in, plays through the HTTP adapter and saves prog
   }
 });
 
+test('web marks a season watched with one server request and keeps it after a reload', async () => {
+  const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'web-mark-'));
+  const media = path.join(root, 'media', 'Batchweb'); await fs.mkdir(media, { recursive: true });
+  for (const name of ['Batchweb.S01E01.One.mkv', 'Batchweb.S01E02.Two.mkv']) await fs.copyFile(f.mkv, path.join(media, name));
+  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} } });
+  let browser;
+  try {
+    await app.createUser('head', 'native-and-web-test', 'admin');
+    await library.addFolder(path.join(root, 'media'));
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: `http://127.0.0.1:${server.address().port}`, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
+    browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
+    const page = await browser.firstWindow(), batches = [];
+    page.on('request', request => { if (request.method() === 'PATCH' && request.url().endsWith('/api/progress')) batches.push(request.postData()); });
+    await page.getByRole('textbox', { name: 'Username', exact: true }).fill('head');
+    await page.getByLabel('Password', { exact: true }).fill('native-and-web-test');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.getByRole('button', { name: 'Open Batchweb', exact: true }).click();
+    await page.locator('[data-mark-season="1"]').click();
+    await expect(page.getByText('Marked 2 episodes watched.')).toBeVisible();
+    expect(batches).toHaveLength(1);
+    await page.reload();
+    await page.getByRole('button', { name: 'Open Batchweb', exact: true }).click();
+    await expect(page.locator('[data-mark-season="1"]')).toHaveText('Mark season unwatched');
+    // A failed request changes nothing on the page.
+    await page.route('**/api/progress', route => route.abort());
+    await page.locator('[data-mark-season="1"]').click();
+    await expect(page.locator('[data-mark-season="1"]')).toHaveText('Mark season unwatched');
+  } finally {
+    await browser?.close(); app.downloads.close(); app.closePlayback();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a receiver plays saved media during an outage and syncs offline changes after reconnecting', async () => {
   const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'offline-ui-'));
   const media = path.join(root, 'media'); await fs.mkdir(media);

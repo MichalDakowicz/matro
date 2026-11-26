@@ -169,6 +169,8 @@ export const writeWatchState = (base: string, accountId: number, body: { progres
   request(base, '/api/state', { method: 'PUT', body, accountId });
 export const changeProgress = (base: string, accountId: number, id: string, body: { dismiss: true; dismissedAt?: number } | { completed: boolean; checkpoint?: Progress }): Promise<{ progress: Record<string, Progress> }> =>
   request(base, `/api/items/${encodeURIComponent(id)}/progress`, { method: 'PATCH', body, accountId });
+export const changeProgressMany = (base: string, accountId: number, ids: string[], completed: boolean): Promise<{ progress: Record<string, Progress> }> =>
+  request(base, '/api/progress', { method: 'PATCH', body: { ids, completed }, accountId });
 type PlaybackOptions = {
   position: number;
   audio?: number | null;
