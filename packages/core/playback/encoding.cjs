@@ -1,5 +1,15 @@
 const { execFile } = require('node:child_process');
+const { sdrFilters } = require('./color.cjs');
 const probes = new Map();
+const filterProbes = new Map();
+function supportsToneMap(ffmpeg) {
+  if (!filterProbes.has(ffmpeg)) filterProbes.set(ffmpeg, new Promise(resolve => {
+    execFile(ffmpeg, ['-hide_banner', '-filters'], { timeout: 6000, windowsHide: true }, (error, stdout) => {
+      resolve(!error && /^\s*[A-Z.]+\s+zscale\s/m.test(stdout) && /^\s*[A-Z.]+\s+tonemap\s/m.test(stdout));
+    });
+  }));
+  return filterProbes.get(ffmpeg);
+}
 const SOFTWARE = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21'];
 const encoders = {
   // NVENC B-frame composition offsets in fragmented MP4 can be enormous on
@@ -50,36 +60,47 @@ function cappedScale({ width, height }) {
 }
 function canCopyVideo(info, burn = null, offset = 0, quality = null) {
   // Copying at an arbitrary timestamp starts at an earlier keyframe and corrupts resume/subtitle timing.
-  return !QUALITIES[quality] && offset === 0 && burn === null && info?.video?.codec === 'h264' && (!info.video.pixelFormat || info.video.pixelFormat === 'yuv420p');
+  return !QUALITIES[quality] && !info?.video?.hdr && offset === 0 && burn === null && info?.video?.codec === 'h264' && (!info.video.pixelFormat || info.video.pixelFormat === 'yuv420p');
 }
-function argumentsFor({ input, offset = 0, audio = null, burn = null, delay = 0, info, remote = false, quality = null }, encoder = SOFTWARE) {
+function outputChannels(info, audio, channels) {
+  const source = audio == null ? info.audio?.[0] : info.audio?.find(track => track.index === audio);
+  return channels === 6 && source?.channels >= 6 ? 6 : 2;
+}
+function argumentsFor({ input, offset = 0, audio = null, burn = null, delay = 0, info, remote = false, quality = null, channels = 2, toneMap = !!info.video?.hdr }, encoder = SOFTWARE) {
   const tier = QUALITIES[quality], name = encoder[1], vaapi = name === 'h264_vaapi';
   const scale = tier ? cappedScale(tier) : 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
+  // Shrink the high-bit-depth input before expanding it to float for tone-mapping.
+  const sdr = toneMap ? `${cappedScale(tier || QUALITIES['1080p'])},${sdrFilters(info.video.hdr)}` : '';
+  const count = outputChannels(info, audio, channels);
+  const audioRate = (tier?.audio || 192) * (count === 6 ? 2 : 1);
   const filters = vaapi ? `${scale},${VAAPI_UPLOAD}` : scale;
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-progress', 'pipe:2', '-stats_period', '0.25', '-threads', '2', '-filter_threads', '1', '-filter_complex_threads', '1', '-protocol_whitelist', remote ? 'file,pipe,crypto,http,tcp' : 'file,pipe,crypto'];
   const copy = canCopyVideo(info, burn, offset, quality);
   if (info.video && !copy) {
     if (vaapi) args.push(...VAAPI_DEVICE);
-    else if (encoder !== SOFTWARE && !tier && burn === null) args.push('-hwaccel', 'auto');
+    else if (encoder !== SOFTWARE && !tier && !sdr && burn === null) args.push('-hwaccel', 'auto');
   }
   args.push('-ss', String(offset), '-i', input);
   if (info.video) {
     if (copy) args.push('-map', '0:v:0', '-c:v', 'copy');
     else {
-      if (burn !== null) args.push('-filter_complex', `[0:${burn}]setpts=PTS+${delay}/TB[sub];[0:v:0][sub]overlay=eof_action=pass:shortest=0,${filters}[video]`, '-map', '[video]');
-      else args.push('-map', '0:v:0', '-vf', filters);
+      if (burn !== null) {
+        const picture = sdr ? `[0:v:0]${sdr}[sdr];[sub][sdr]scale2ref=w=iw:h=ih[scaledSub][picture];[picture][scaledSub]` : '[0:v:0][sub]';
+        args.push('-filter_complex', `[0:${burn}]setpts=PTS+${delay}/TB[sub];${picture}overlay=eof_action=pass:shortest=0,${filters}[video]`, '-map', '[video]');
+      } else args.push('-map', '0:v:0', '-vf', sdr ? `${sdr},${filters}` : filters);
       const capped = tier && cappedEncoders[name];
       args.push(...(capped || encoder));
       if (capped) args.push('-b:v', `${Math.round(tier.maxrate * 0.75)}k`);
       if (tier) args.push('-maxrate', `${tier.maxrate}k`, '-bufsize', `${tier.maxrate * 2}k`);
       if (!vaapi) args.push('-pix_fmt', name === 'h264_qsv' ? 'nv12' : 'yuv420p');
       args.push('-threads', '2', '-g', '48');
+      if (sdr) args.push('-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709', '-color_range', 'tv');
     }
   } else args.push('-vn');
   // Wait for the first fragment before writing track timing. An empty moov
   // cannot describe AAC priming / reordered video starts, so the muxer resets
   // their first timestamps independently and stretches the first audio gap.
-  args.push('-map', audio === null ? '0:a:0?' : `0:${audio}`, '-c:a', 'aac', '-ac', '2', '-b:a', `${tier?.audio || 192}k`, '-sn', '-movflags', '+frag_keyframe+delay_moov+default_base_moof', '-frag_duration', '500000', '-f', 'mp4', 'pipe:1');
+  args.push('-map', audio === null ? '0:a:0?' : `0:${audio}`, '-c:a', 'aac', '-ac', String(count), '-b:a', `${audioRate}k`, '-sn', '-movflags', '+frag_keyframe+delay_moov+default_base_moof', '-frag_duration', '500000', '-f', 'mp4', 'pipe:1');
   return args;
 }
-module.exports = { selectEncoder, argumentsFor, canCopyVideo, QUALITIES, SOFTWARE };
+module.exports = { selectEncoder, argumentsFor, canCopyVideo, QUALITIES, outputChannels, supportsToneMap, SOFTWARE };

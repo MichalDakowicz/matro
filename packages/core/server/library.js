@@ -221,7 +221,10 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, onScan, 
   async function info(item) {
     item = q.item.get(item.id);
     if (!item) throw new HttpError(404, 'That title is not in the library.');
-    if (item.probe) return JSON.parse(item.probe);
+    if (item.probe) {
+      const cached = JSON.parse(item.probe);
+      if (!cached.video || cached.colorVersion === 1) return cached;
+    }
     if (item.retry_probe_after > Date.now()) throw probeUnavailable(item.probe_failures);
     return probeItem(item);
   }

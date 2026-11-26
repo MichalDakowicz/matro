@@ -1,5 +1,6 @@
 const { HttpError, readJson, readBody, sendFile, sendOpenFile, sendBytes, MIME } = require('../http');
 const { canDirectPlay } = require('../media');
+const { hdrDirectType } = require('../../playback/color.cjs');
 const { normalize } = require('../lang');
 const { toVtt, createEmbedded, MAX_UPLOAD } = require('../subtitles');
 const { createFrames } = require('../previews');
@@ -93,6 +94,7 @@ function register(app) {
     return {
       id: item.id, groupId: item.group_id, title: item.title, groupTitle: item.group_title, kind: item.kind, season: item.season, episode: item.episode,
       duration: info.duration, video: info.video, directPlay: canDirectPlay(item.path, info), chapters: info.chapters,
+      hdrDirectMime: canDirectPlay(item.path, info, { hdr: true }) ? hdrDirectType(item.path, info) : null,
       audio: info.audio.map(t => ({ ...t, language: normalize(t.language) })),
       embedded: info.subtitles.map(t => ({ ...t, language: normalize(t.language) })),
       uploaded: q.uploaded.all(item.id).map(row => subtitleOut(row, ctx.user)),
@@ -164,7 +166,8 @@ function register(app) {
     if (burn !== null && !info.subtitles.some(t => t.index === burn && t.bitmap)) throw new HttpError(400, 'Unknown image subtitle track.');
     const quality = ctx.query.get('quality');
     if (quality !== null && quality !== 'original' && !QUALITIES[quality]) throw new HttpError(400, 'Unknown quality.');
-    await transcode(ctx.req, ctx.res, { session, file: item.path, info, offset, audio, burn, delay: Number.isFinite(delay) ? delay : 0, preload, quality: QUALITIES[quality] ? quality : null });
+    const channels = ctx.query.get('channels') === '6' ? 6 : 2;
+    await transcode(ctx.req, ctx.res, { session, file: item.path, info, offset, audio, burn, delay: Number.isFinite(delay) ? delay : 0, preload, channels, quality: QUALITIES[quality] ? quality : null });
   });
 
   // A still frame, used for seek previews and thumbnails.
