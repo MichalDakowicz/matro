@@ -17,6 +17,19 @@ export const seasonLabel = season => season === 0 ? 'Specials' : `Season ${seaso
 /** @param {Item[]} items */
 export const seasonNumbers = items => [...new Set(items.map(seasonOf))].sort((a, b) => a - b);
 
+/** @param {Item} item */
+function hasEditionLabel(item) {
+  // The scanner uses the filename stem when it finds no cut or encode label.
+  const filename = item.path?.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '');
+  return Boolean(item.editionLabel && item.editionLabel !== filename);
+}
+
+/** @param {Item} a @param {Item} b */
+export function compareEditions(a, b) {
+  return Number(hasEditionLabel(a)) - Number(hasEditionLabel(b))
+    || (a.path ?? '').localeCompare(b.path ?? '', 'en') || a.id.localeCompare(b.id);
+}
+
 /** @param {Item[]} items */
 export function groupTitles(items) {
   /** @type {Map<string, Item[]>} */

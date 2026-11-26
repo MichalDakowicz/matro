@@ -17,12 +17,12 @@ function loadEnv(files) {
 }
 
 // What the matcher needs to know about a title, in the desktop's item shape.
-const asItem = row => ({ folderId: row.folder_id, id: row.id, kind: row.kind, group: row.group_title, year: row.year, groupId: row.group_id, root: row.root, path: row.path, season: row.season });
-const keyOf = item => item.kind === 'show' ? item.groupId || item.group : item.id;
+const asItem = row => ({ folderId: row.folder_id, id: row.id, kind: row.kind, group: row.group_title, year: row.year, groupId: row.group_id, root: row.root, path: row.path, season: row.season, editionGroup: row.edition_group });
+const keyOf = vendor.keyFor;
 
 function createTmdb(db, { dataDir = config.dataDir, fetchImpl = fetch, onLocalChange, onUpdate, env = loadEnv([path.join(dataDir, '.env'), path.join(__dirname, '../../../apps/server/.env'), path.join(__dirname, '../../../.env')]) } = {}) {
   const auth = vendor && vendor.credentials(env);
-  const rows = db.prepare('SELECT i.id, i.folder_id, i.kind, i.group_id, i.group_title, i.year, i.path, i.season, f.path AS root FROM active_items i JOIN folders f ON f.id = i.folder_id');
+  const rows = db.prepare('SELECT i.id, i.folder_id, i.kind, i.group_id, i.group_title, i.year, i.path, i.season, i.edition_group, f.path AS root FROM active_items i JOIN folders f ON f.id = i.folder_id');
   const items = () => rows.all().map(asItem);
   function matchingItems(key) {
     const matching = items().filter(item => keyOf(item) === key);

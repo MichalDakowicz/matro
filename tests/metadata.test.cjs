@@ -44,6 +44,26 @@ async function previewFixture(t, handle, auth = { token: 'host-token' }) {
   return { metadata, dir, calls };
 }
 
+test('movie editions inherit a manual file match and take updates under the group key', async t => {
+  const { metadata, calls } = await previewFixture(t, url => {
+    const id = Number(url.pathname.split('/').pop());
+    return json({ id, title: id === 1 ? 'Earlier match' : 'Corrected match' });
+  });
+  const theatrical = { id: 'theatrical', kind: 'movie', group: 'Film', path: 'Film.mkv' };
+  const extended = { ...theatrical, id: 'extended', path: 'Film Extended.mkv' };
+  await metadata.assign([extended], 1);
+  const cuts = [theatrical, extended].map(item => ({ ...item, editionGroup: 'cuts' }));
+
+  await metadata.sync(cuts);
+  assert.equal(metadata.snapshot().cuts.tmdbId, 1);
+  assert.equal(calls.length, 1);
+  assert.equal((await metadata.assign(cuts, 2)).cuts.title, 'Corrected match');
+  assert.equal((await metadata.assign(cuts, null)).cuts, undefined);
+  await metadata.sync(cuts);
+  assert.equal(metadata.snapshot().cuts, undefined);
+  assert.equal(calls.length, 2);
+});
+
 test('Downloads previews are opt-in and leave the library metadata untouched', async t => {
   const disabled = await previewFixture(t, () => assert.fail('a disabled preview called TMDB'), null);
   const titles = [{ key: 'heat', kind: 'movie', title: 'A release title', imdbId: 'tt0113277' }];

@@ -16,7 +16,7 @@ const { createStreamServer } = require('./stream.cjs');
 const { createPreviews } = require('./previews.cjs');
 const { createSegments } = require('./segments.cjs');
 const { createSegmentScheduler, mergeMarkers } = require('./segment-scheduler.cjs');
-const { readEnv, credentials, createMetadata, cleanQuery, yearOf } = require('./metadata.cjs');
+const { readEnv, credentials, createMetadata, cleanQuery, yearOf, keyFor } = require('./metadata.cjs');
 const { findUpdate } = require('./update-check.cjs');
 const previews = createPreviews();
 protocol.registerSchemesAsPrivileged([{ scheme: 'matro', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
@@ -353,14 +353,14 @@ app.whenReady().then(async () => {
   });
   handle('metadata:search',options => metadata.search(options?.kind, options?.query, /^\d{4}$/.test(String(options?.year || '')) ? options.year : null));
   handle('metadata:assign', async options => {
-    const items = state.items.filter(i => (i.kind === 'show' ? i.groupId || i.group : i.id) === options?.key);
+    const items = state.items.filter(i => keyFor(i) === options?.key);
     if (!items.length) throw new Error('That title is no longer in the library.');
     const snapshot = await metadata.assign(items, options.tmdbId ?? null);
     if (!win.isDestroyed()) win.webContents.send('library:metadata', snapshot);
     return snapshot;
   });
   handle('metadata:language', async options => {
-    const items = state.items.filter(item => item.kind === 'movie' && item.id === options?.key);
+    const items = state.items.filter(item => item.kind === 'movie' && keyFor(item) === options?.key);
     const snapshot = await metadata.setLanguage(items, options?.language);
     if (!win.isDestroyed()) win.webContents.send('library:metadata', snapshot);
     return snapshot;

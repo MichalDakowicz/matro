@@ -1075,12 +1075,20 @@ test('on a phone the show page keeps every action labelled and reachable, with m
   }
 });
 
-test('a movie folder with several cuts is one movie with an editions picker and no upgrade action', async () => {
+test('movie editions share a TMDB match and default to the unlabelled file', async () => {
   const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'editions-'));
   const media = path.join(root, 'media'), folder = path.join(media, 'Twin Cuts (2021)'); await fs.mkdir(folder, { recursive: true });
   await fs.copyFile(f.mkv, path.join(folder, 'Twin Cuts (2021).mkv'));
   await fs.copyFile(f.mkv, path.join(folder, "Twin Cuts (2021) Director's Cut.mkv"));
-  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} } });
+  const fetchImpl = async raw => {
+    const url = new URL(raw);
+    if (url.hostname === 'image.tmdb.org') return new Response(Uint8Array.of(255, 216, 255, 217));
+    const match = { id: 123, title: 'Matched Film', release_date: '2021-01-01', poster_path: '/matched.jpg' };
+    if (url.pathname === '/3/search/movie') return Response.json({ results: [match] });
+    if (url.pathname === '/3/movie/123') return Response.json(match);
+    return new Response(null, { status: 404 });
+  };
+  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: { TMDB_API_KEY: 'test-key' }, fetchImpl } });
   let browser;
   try {
     await app.createUser('head', 'editions-test-pass', 'admin'); await library.addFolder(media);
@@ -1098,7 +1106,21 @@ test('a movie folder with several cuts is one movie with an editions picker and 
     await page.getByRole('button', { name: /^Open Twin Cuts/ }).click();
     const rows = page.locator('.edition-row');
     await expect(rows).toHaveCount(2);
-    await expect(rows.filter({ hasText: "Director's Cut" })).toHaveCount(1);
+    const theatrical = db.prepare('SELECT id, edition_group FROM active_items WHERE edition_label = ?').get('Twin Cuts (2021)');
+    const cut = db.prepare('SELECT id FROM active_items WHERE edition_label = ?').get("Director's Cut");
+    await expect(rows.first()).toHaveAttribute('data-play', theatrical.id);
+    await expect(rows.last()).toHaveAttribute('data-play', cut.id);
+    await expect(page.getByRole('button', { name: 'Play now', exact: true })).toHaveAttribute('data-play', theatrical.id);
+    await page.getByRole('button', { name: 'Find on TMDB' }).click();
+    const assigned = page.waitForRequest(request => new URL(request.url()).pathname === '/api/admin/metadata/assign');
+    await page.getByRole('button', { name: /Matched Film/ }).click();
+    expect((await assigned).postDataJSON()).toEqual({ key: theatrical.edition_group, tmdbId: 123 });
+    await expect(page.getByRole('heading', { name: 'Matched Film' })).toBeVisible();
+    await expect(page.locator('.detail-poster img')).toHaveAttribute('src', /movie-123-poster\.jpg$/);
+    await page.keyboard.press('Escape');
+    const card = page.getByRole('button', { name: /^Open Matched Film/ });
+    await expect(card.locator('img')).toHaveAttribute('src', /movie-123-poster\.jpg$/);
+    await card.click();
     await expect(page.getByRole('button', { name: /Find better quality/ })).toHaveCount(0);
     for (const [theme, width] of [['dark', 1280], ['light', 390]]) {
       await page.evaluate(name => window.matroTheme.set(name), theme);
@@ -1106,7 +1128,6 @@ test('a movie folder with several cuts is one movie with an editions picker and 
       await expect(rows.first()).toBeVisible();
     }
     await rows.filter({ hasText: "Director's Cut" }).focus();
-    const cut = db.prepare('SELECT id FROM active_items WHERE edition_label = ?').get("Director's Cut");
     const inspected = page.waitForRequest(request => new URL(request.url()).pathname === '/api/items/' + cut.id + '/info');
     await page.keyboard.press('Enter');
     await inspected;

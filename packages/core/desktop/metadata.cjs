@@ -38,7 +38,7 @@ function cleanQuery(text) {
   return value.replace(/\b(?:480p|576p|720p|1080p|2160p|4k|uhd|bluray|blu-ray|bdrip|web-?dl|webrip|hdr10?|x264|x265|h\.?26[45]|hevc|remux|proper|repack)\b.*$/i, '')
     .replace(/[._]+/g, ' ').replace(/[[\]()]/g, ' ').replace(/\s+/g, ' ').trim();
 }
-const keyFor = item => item.kind === 'show' ? item.groupId || item.group : item.id;
+const keyFor = item => item.kind === 'show' ? item.groupId || item.group : item.editionGroup || item.id;
 const MATCHER = 2;
 // Bumped when stored details gain fields; matched titles are then refreshed by their TMDB id, never searched again.
 const DETAILS = 4;
@@ -275,18 +275,32 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
       const key = keyFor(item);
       if (!titles.has(key)) {
         const year = item.year ? String(item.year) : yearOf(item.group) || (item.kind === 'movie' ? yearOf(path.basename(item.path)) : null);
-        titles.set(key, { key, kind: item.kind, query: item.year ? item.group : cleanQuery(item.group), year, seasons: new Set() });
+        titles.set(key, { key, kind: item.kind, query: item.year ? item.group : cleanQuery(item.group), year, seasons: new Set(), editionIds: [] });
       }
-      if (item.season !== null && item.season !== undefined) titles.get(key).seasons.add(item.season);
+      const job = titles.get(key);
+      if (item.editionGroup && item.kind === 'movie') job.editionIds.push(item.id);
+      if (item.season !== null && item.season !== undefined) job.seasons.add(item.season);
     }
     for (const job of titles.values()) job.seasons = [...job.seasons].sort((a, b) => a - b);
     return [...titles.values()];
+  }
+  function entryFor(job) {
+    if (entries[job.key]) return entries[job.key];
+    // When files become editions, carry forward prior matches and explicit settings.
+    const priority = entry => entry.manual ? 2 : entry.language ? 1 : 0;
+    const inherited = job.editionIds.map(id => entries[id]).filter(entry => entry?.matcher === MATCHER)
+      .sort((a, b) => priority(b) - priority(a) || b.checked - a.checked)[0];
+    if (inherited) {
+      entries[job.key] = inherited;
+      save();
+    }
+    return inherited;
   }
   async function sync(items) {
     if (!auth) return;
     await loaded;
     for (const job of titlesOf(items)) {
-      const entry = entries[job.key], fields = local[job.key];
+      const entry = entryFor(job), fields = local[job.key];
       const nfoId = fields?.tmdbId;
       if (pending.get(job.key)?.nfoId !== nfoId) pending.delete(job.key);
       if (nfoId || entry?.nfoId) {
@@ -325,7 +339,7 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     const id = tmdbId === null ? null : Number(tmdbId);
     if (id !== null && !(Number.isInteger(id) && id > 0)) throw new Error('Invalid TMDB id');
     return edit(job.key, async () => {
-      job.language = entries[job.key]?.language;
+      job.language = entryFor(job)?.language;
       const result = id === null ? null : await lookup({ ...job, tmdbId: id });
       if (id !== null && !result) throw new Error('That TMDB entry could not be loaded.');
       record(job, result, true); failed.delete(job.key);
@@ -342,7 +356,7 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
       throw badRequest('Choose a valid metadata language.');
     }
     return edit(job.key, async () => {
-      const entry = entries[job.key];
+      const entry = entryFor(job);
       if (entry?.status !== 'matched') throw badRequest('Match this movie on TMDB first.');
       const result = await movieDetails(entry.tmdbId, language);
       if (!result) throw new Error('That TMDB entry could not be loaded.');

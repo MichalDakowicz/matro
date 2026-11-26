@@ -7,7 +7,7 @@ import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
 import { randomReelStart } from '../core/client/reel-start.js';
-import { compareEpisodes, continueWatching, dayLabel, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, markedProgress, normalizeProgress, queueChange, reachedCompletion, reachedOutro, reachedPlaybackEnd, resumeTarget, seasonLabel, watchHistory } from '../core/client/watch-progress.js';
+import { compareEditions, compareEpisodes, continueWatching, dayLabel, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, markedProgress, normalizeProgress, queueChange, reachedCompletion, reachedOutro, reachedPlaybackEnd, resumeTarget, seasonLabel, watchHistory } from '../core/client/watch-progress.js';
 import { initialTracks, LANGUAGES, SUBTITLE_MODES, trackDefaults } from '../core/client/track-preferences.js';
 import { createAutoSkip } from '../core/client/auto-skip.js';
 const api = window.matro;
@@ -170,8 +170,7 @@ function rememberTracks(changed) {
   discardPrepared(); void attempt(() => savePreferences({ tracks: { [key]: patch } }));
 }
 // Title metadata comes from TMDB when configured; everything falls back to file names.
-const metaKey = item => item.kind === 'show' ? titleKey(item) : item.id;
-const listKey = item => item.editionGroup || metaKey(item);
+const metaKey = item => item.kind === 'show' ? titleKey(item) : item.editionGroup || item.id;
 const meta = item => metadata[metaKey(item)] || null;
 const displayName = item => meta(item)?.title || item.group;
 // File names carry the show name and an S01E02 code; the row already shows both, so only the episode's own name is left.
@@ -296,6 +295,7 @@ function checkpoint(now = false) {
 function groups(kind) {
   const words = tab === 'search' ? query.trim().toLowerCase() : '';
   return groupTitles(library.items.filter(i => i.kind === kind && (!folderFilter || i.root === folderFilter)))
+    .map(items => items[0].editionGroup ? items.sort(compareEditions) : items)
     .filter(items => searchText(items).includes(words));
 }
 const groupStatus = items => (items[0].editionGroup ? items.some(i => completed(i.id)) : items.every(i => completed(i.id))) ? 'done' : items.some(i => completed(i.id) || library.progress[i.id]?.position > 0) ? 'progress' : 'new';
@@ -368,7 +368,7 @@ function landingPage() {
   return `${folderFilter ? `<div class="page-head"><div><h1 class="page-title">${esc(base(folderFilter))}</h1><p class="page-sub">${esc(folderFilter)}</p></div><button class="text-button" data-action="all-folders">Show all folders</button></div>` : ''}
     ${continues.length ? `<section class="section"><div class="section-heading"><h2>Continue watching</h2><span>${continues.length} in progress</span></div><div class="cw-row">${continues.map(continueCard).join('')}</div></section>` : ''}
     ${featured.length ? reelMarkup(featured) : ''}
-    ${!folderFilter ? titleShelves(groupTitles(library.items), library.lists, listKey, meta).map(shelf => sectionGrid(shelf.name, shelf.groups, shelf.groups.length + ' titles')).join('') : ''}
+    ${!folderFilter ? titleShelves(groupTitles(library.items), library.lists, metaKey, meta).map(shelf => sectionGrid(shelf.name, shelf.groups, shelf.groups.length + ' titles')).join('') : ''}
     ${!folderFilter && metadataEnabled ? sectionGrid('Following', groups('show').filter(([item]) => library.followed?.includes(titleKey(item))), '') : ''}
     ${kinds.map(([kind, title, noun]) => { const items = groups(kind); return sectionGrid(title, items, count(items.length, noun), folderFilter ? '' : kind); }).join('')}`;
 }
@@ -718,11 +718,11 @@ function restoreFocus(element) { element?.focus({ preventScroll: true, focusVisi
 function detail(id, focus = true) {
   selected = library.items.find(i => i.id === id); if (!selected) return;
   const items = selected.kind === 'show' ? orderedEpisodes(selected)
-    : selected.editionGroup ? library.items.filter(item => item.editionGroup === selected.editionGroup) : [selected];
+    : selected.editionGroup ? library.items.filter(item => item.editionGroup === selected.editionGroup).sort(compareEditions) : [selected];
   const canFollow = selected.kind === 'show' && metadataEnabled && meta(selected)?.tmdbId && api.followShow && api.canFollowShows !== false;
   const following = canFollow && library.followed?.includes(titleKey(selected));
   const m = meta(selected), name = displayName(selected), seasons = new Set(items.map(i => i.season)).size;
-  const target = resumeTarget(items, library.progress, selected), p = library.progress[target.id];
+  const target = resumeTarget(items, library.progress, selected.editionGroup ? items[0] : selected), p = library.progress[target.id];
   const resume = p?.position > 0 && !completed(target.id) ? target : null;
   const facts = [[m?.year, m?.genres?.slice(0, 3).join(' · ')], [selected.kind === 'show' ? `${seasons} ${seasons === 1 ? 'season' : 'seasons'} · ${items.length} episodes` : m?.runtime ? `${Math.floor(m.runtime / 60) ? `${Math.floor(m.runtime / 60)}h ` : ''}${m.runtime % 60}m` : null]].flat().filter(Boolean);
   const overlay = document.createElement('div'); overlay.className = 'detail'; overlay.id = 'detail-overlay'; overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-labelledby', 'detail-title');
@@ -784,7 +784,7 @@ function editionsPanel(items) {
 }
 
 function openTitleLists() {
-  const titleId = listKey(selected);
+  const titleId = metaKey(selected);
   const dialog = document.createElement('dialog');
   dialog.className = 'match-dialog title-lists-dialog';
   dialog.setAttribute('aria-labelledby', 'title-lists-heading');
