@@ -57,6 +57,16 @@ body.in-player .offline-indicator,body.fullscreen .offline-indicator{display:non
 .web-picker{display:flex;flex-direction:column;gap:12px}.web-picker .picker{display:flex;flex-direction:column;max-height:46vh;overflow:auto}
 dialog.web-dialog{width:min(520px,calc(100vw - 32px));max-height:calc(100vh - 48px);overflow:auto}
 dialog.web-dialog .muted{margin:10px 0}
+.remote-device{display:grid;gap:12px}
+.remote-device>.pill{justify-self:start}
+.remote-device-field label{display:grid;gap:6px;color:var(--muted);font-size:13px}
+.remote-device-field input,.remote-device-field select{font:inherit;color:var(--text);background:var(--panel);border:1px solid rgb(var(--ink) / .22);border-radius:999px;min-height:44px;padding:0 14px;width:100%}
+.remote-device .pill,.remote-device-button{min-height:44px;min-width:44px}
+.player-device-button{pointer-events:auto;background:rgb(26 26 28 / .65);backdrop-filter:blur(18px);border-color:rgb(var(--ink) / .16);color:#f3f1ec;padding-inline:14px}
+.remote-device-actions{flex-wrap:wrap;gap:8px;margin:0}
+.remote-device .remote-device-actions .pill{flex:1 1 auto;white-space:nowrap}
+.remote-device [hidden]{display:none}
+.web-dialog:has(.remote-device) .icon-button{width:44px;height:44px}
 @media(max-width:720px),(pointer:coarse) and (max-height:480px){.web-back{left:12px}.web-fields{grid-template-columns:1fr}.web-who{gap:16px}}
 /* The player owns the whole window. */
 body.in-player .web-profile,body.fullscreen .web-profile{display:none}

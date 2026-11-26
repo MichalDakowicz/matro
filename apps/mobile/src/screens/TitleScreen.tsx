@@ -23,6 +23,7 @@ type Props = ArtProps & {
   onMark: (items: Item[], done: boolean) => void;
   /** Present when the server can be reached: subtitle upload for everyone, TMDB fixes for the head account when the server has TMDB. */
   online?: { admin: boolean; tmdb: boolean; notify: (text: string) => void; onMetadata: (metadata: Record<string, Metadata>) => void };
+  onDevices?: (item: Item) => void;
   onEditLists?: (change: ListChange) => Promise<void>;
   onFollow?: (groupId: string, follow: boolean) => Promise<void>;
   onSearchEpisode?: (item: Item, episode: ScheduledEpisode) => void;
@@ -31,7 +32,7 @@ type Props = ArtProps & {
 };
 type Menu = null | 'save' | 'watched' | 'metadata' | 'lists' | 'schedule' | { episode: Item };
 
-export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, onMark, online, onEditLists, onFollow, onSearchEpisode, onSave, onSaveMany, onRemoveSaved, savedIds, savingIds, smart, ...art }: Props) {
+export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, onMark, onDevices, online, onEditLists, onFollow, onSearchEpisode, onSave, onSaveMany, onRemoveSaved, savedIds, savingIds, smart, ...art }: Props) {
   const item = items[0], m = metadataFor(data, item), target = resumeItem(data, items), p = data.progress[target.id], name = nameFor(data, item);
   const insets = useSafeAreaInsets(), seasons = seasonNumbers(items);
   const [season, setSeason] = useState(seasonOf(target)), [menu, setMenu] = useState<Menu>(null), [scrolled, setScrolled] = useState(false), [picked, setPicked] = useState<{ item: Item; file: File } | null>(null);
@@ -110,6 +111,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
       {m.rating ? <View style={s.ratings}><Text style={[t.mono, { marginBottom: 6 }]}>TMDB</Text><View style={[t.row, { alignItems: 'baseline', gap: 5 }]}><Text style={s.score}>{m.rating.toFixed(1)}</Text><Text style={t.dim}>/10{m.votes ? ` · ${m.votes.toLocaleString()} votes` : ''}</Text></View></View> : null}
       {show && <View style={{ marginTop: 28 }}><View style={t.sectionHeading}><Text accessibilityRole="header" style={t.sectionTitle}>Episodes</Text><Text style={t.dim}>{items.filter(i => data.progress[i.id]?.completed).length} / {items.length} watched</Text></View><ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -18 }} contentContainerStyle={{ gap: 8, paddingHorizontal: 18, paddingBottom: 14 }}>{seasons.map(value => <Chip key={value} small label={seasonLabel(value)} selected={season === value} onPress={() => setSeason(value)} />)}</ScrollView></View>}
     </View>
+    {onDevices && <View style={{ alignSelf: 'flex-start', marginTop: 12 }}><Pill label="Play on device" icon="network" onPress={() => onDevices(target)} /></View>}
     {editions && <View style={{ marginTop: 24, gap: 8 }}>
       <Text accessibilityRole="header" style={t.sectionTitle}>Editions</Text>
       {items.map(edition => {

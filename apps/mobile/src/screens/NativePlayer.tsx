@@ -34,15 +34,44 @@ import { IconButton, Pill, ProgressBar } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
 import { colors, fonts } from '../theme';
 import type { SavedMedia } from '../lib/offline';
+import type { RemoteCommand, RemotePlayback } from '../../../../packages/core/client/remote';
 
-type Props = ArtProps & { item: Item; data: Library; initialPosition?: number; saved?: SavedMedia; offline?: boolean; queue: Item[]; onBack: () => void; onSelect: (item: Item) => void; onNext: () => void; onPreferences: (patch: Partial<Preferences>) => void; onQueue: (queue: Item[]) => void; onComplete: (item: Item) => void };
-export default function NativePlayer({ base, headers, item, data, initialPosition, saved, offline, queue, onBack, onSelect, onNext, onPreferences, onQueue, onComplete }: Props) {
+export type RemotePlayer = { playback: () => RemotePlayback | null; receive: (command: RemoteCommand) => void; pause: () => Promise<void> };
+type Props = ArtProps & { item: Item; data: Library; initialPosition?: number; saved?: SavedMedia; offline?: boolean; queue: Item[]; onBack: () => void; onSelect: (item: Item) => void; onNext: () => void; onPreferences: (patch: Partial<Preferences>) => void; onQueue: (queue: Item[]) => void; onComplete: (item: Item) => void;
+  onDevices?: () => void; registerRemote?: (player: RemotePlayer | null) => void; confirmRemoteStart?: (ok: boolean) => void };
+
+export default function NativePlayer({ base, headers, item, data, initialPosition, saved, offline, queue, onBack, onSelect, onNext, onPreferences, onQueue, onComplete, onDevices, registerRemote, confirmRemoteStart }: Props) {
   // The timer ends playback at the end of the episode or after a set time. It reads the player lazily because the player is created after it.
   const sleep = useSleepTimer(() => { if (p.playing) p.toggle(); setControls(true); });
   const [background, setBackground] = useBackgroundAudio();
   const [supportsPiP] = useState(() => Platform.OS === 'android' && isPictureInPictureSupported());
   const videoView = useRef<VideoView>(null);
   const p = usePlayback({ base, data, item, initialPosition, saved, offline, background, supportsPiP, onEnd: () => { if (!sleep.stopAtEnd()) onNext(); } });
+  const playback = useRef(p);
+  playback.current = p;
+  useEffect(() => {
+    if (!registerRemote) return;
+    registerRemote({
+      playback: () => {
+        const player = playback.current;
+        return player.info && !player.error ? { itemId: item.id, position: player.position, playing: player.playing } : null;
+      },
+      receive: command => {
+        const player = playback.current;
+        if (command.itemId !== item.id || !player.info || player.error) throw new Error('This device changed titles.');
+        if (command.action === 'seek') player.seek(command.position);
+        else player.setPlaybackPlaying(command.action === 'play');
+      },
+      pause: async () => { playback.current.setPlaybackPlaying(false); await playback.current.persist(); },
+    });
+    return () => registerRemote(null);
+  }, [item.id, registerRemote]);
+  useEffect(() => {
+    if (!confirmRemoteStart) return;
+    if (p.error) confirmRemoteStart(false);
+    else if (!p.busy && p.player.playing) confirmRemoteStart(true);
+  }, [confirmRemoteStart, p.busy, p.error, p.player, p.playing]);
+  useEffect(() => () => confirmRemoteStart?.(false), [confirmRemoteStart]);
   const [controls, setControls] = useState(true), [sheet, setSheet] = useState<'tracks' | 'queue' | 'more' | 'speed' | null>(null), [scrub, setScrub] = useState<number | null>(null);
   const tapRef = useRef(() => {});
   const bitmap = !!p.info?.embedded.some(track => track.index === p.subtitle && track.bitmap);
@@ -147,6 +176,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
       <View onLayout={({ nativeEvent: { layout } }) => setHeaderEnd(layout.y + layout.height)} style={[s.top, { top: landscape ? 8 : insets.top + 12, left: Math.max(14, insets.left), right: Math.max(14, insets.right) }]}>
         <IconButton name="back" label="Back to library" onPress={() => void leave()} />
         <View style={{ flex: 1, gap: 4 }}><Text numberOfLines={1} style={s.playerTitle}>{title}</Text><Text numberOfLines={1} style={s.playerSubtitle}>{subtitle}</Text></View>
+        {onDevices && <IconButton name="network" label="Connected devices" onPress={() => { setControls(true); onDevices(); }} />}
         {isAndroidTv ? <Pill label="Hide controls" compact onPress={() => setControls(false)} />
           : <IconButton name="fullscreen" label={landscape ? 'Exit fullscreen' : 'Fullscreen'} onPress={toggleFullscreen} />}
       </View>

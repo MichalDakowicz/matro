@@ -5,6 +5,7 @@ import { profileButton, openProfile } from './profile.js';
 import { installDesktopChrome } from './desktop.js';
 import { savedDownloads } from './saved-downloads.js';
 import { migrateLegacyScope } from './offline.js';
+import { createRemoteUi } from './remote.js';
 import './touch.js';
 
 installDesktopChrome();
@@ -18,15 +19,17 @@ const session = { user, offline, openMovieRequests };
 root.replaceChildren();
 document.body.classList.add(user.role === 'admin' ? 'role-admin' : 'role-viewer');
 
-const adapter = createAdapter(session);
+const adapter = createAdapter(session, offline ? null : createRemoteUi(user.id));
 window.matro = adapter.matro;
 if (import.meta.env.PROD && navigator.serviceWorker) void navigator.serviceWorker.register('/sw.js').catch(() => {});
 const leave = async () => {
+  adapter.matro.remote?.disable();
   adapter.offline.shutdown();
   await signOut();
 };
 const openSaved = () => savedDownloads({ ...adapter, onOpenTitle: id => document.dispatchEvent(new CustomEvent('matro:saved-title', { detail: id })) });
-profileButton(session, () => openProfile({ session, getState: adapter.state, forgetTracks: () => adapter.matro.savePreferences({ tracks: null }), signOut: leave, openSaved }));
+profileButton(session, () => openProfile({ session, getState: adapter.state, forgetTracks: () => adapter.matro.savePreferences({ tracks: null }), signOut: leave, openSaved,
+  openDevices: adapter.matro.remote ? () => document.dispatchEvent(new Event("matro:devices")) : undefined, }));
 if (offline) {
   const note = document.createElement('button');
   note.className = 'pill small offline-indicator'; note.textContent = 'Offline · Reconnect';

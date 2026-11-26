@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, BackHandler, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, BackHandler, Platform, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { accountChanged, changeProgress, changeProgressMany, inspect, library, mediaHeaders, request, ServerError, syncDismissal, updateWatchOptions, type Item, type Library, type ListChange, type TitleList, type ScheduledEpisode, type TrackDefaults } from '../lib/server';
@@ -12,9 +12,11 @@ import { titleShelves } from '../../../../packages/core/client/title-shelves.js'
 import { Pill, styles as t } from '../components/Matro';
 import { AboutSheet, AccountSheet, Corner, Dock, Grain, OfflinePill, Toast, useKeyboardOpen, useNotice, type DockTab } from '../components/Shell';
 import { plural } from '../lib/text';
-import NativePlayer from './NativePlayer';
+import NativePlayer, { type RemotePlayer } from './NativePlayer';
 import TitleScreen from './TitleScreen';
 import DownloadsScreen, { type DownloadSearch } from './DownloadsScreen';
+import { RemoteDevices } from '../components/RemoteDevices';
+import { createRemote, type RemoteCommand, type RemotePlayback, type RemoteState } from '../../../../packages/core/client/remote';
 import FoldersScreen from './FoldersScreen';
 import OfflineScreen from './OfflineScreen';
 import OfflineChoices from './OfflineChoices';
@@ -32,6 +34,7 @@ import { activeDownloads, isSaved, offlineLibrary, removeOffline, resumeInterrup
 type Props = { base: string; onSignedOut: () => void; onChangeServer: () => void };
 type Nav = { tab: string; folder: string | null };
 const friendly = (message: string) => /network request failed|failed to fetch|timed out/i.test(message) ? 'Can’t reach your server right now.' : message;
+type RemoteStart = { run: number; confirm: (ok: boolean) => void };
 export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Props) {
   const [data, setData] = useState<(Library & { catalogIds?: string[] }) | null>(null), [headers, setHeaders] = useState<Record<string, string>>({});
   const dataRef = useRef(data); dataRef.current = data;
@@ -40,12 +43,30 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const [nav, setNav] = useState<Nav>({ tab: 'home', folder: null }), [trail, setTrail] = useState<Nav[]>([]), { tab, folder } = nav;
   const { notice, show: notify, dismiss } = useNotice(), keyboard = useKeyboardOpen(), [about, setAbout] = useState(false);
   const [requestSearch, setRequestSearch] = useState<DownloadSearch | null>(null);
-  const [selected, setSelected] = useState<string | null>(null), [playing, setPlaying] = useState<{ item: Item; start?: number; queue: Item[]; saved?: SavedMedia } | null>(null);
+  const [selected, setSelected] = useState<string | null>(null), [playing, setPlaying] = useState<{ item: Item; start?: number; queue: Item[]; saved?: SavedMedia; remoteStart?: RemoteStart } | null>(null);
   const [offline, setOffline] = useState(false), playRun = useRef(0);
   const [offlineChoices, setOfflineChoices] = useState<Item[] | null>(null);
   const [refreshing, setRefreshing] = useState(false), [account, setAccount] = useState(false);
   const revision = useRef<string | undefined>(undefined), loading = useRef(false);
   const alerts = useMovieRequestAlerts(base, !offline && data?.movieRequestPushEnabled === true, data?.user.role === 'admin');
+  const [remoteSheet, setRemoteSheet] = useState<{ item?: Item } | null>(null);
+  const remoteSheetOpen = useRef(false); remoteSheetOpen.current = !!remoteSheet;
+  const [remoteState, setRemoteState] = useState<RemoteState>({ enabled: false, devices: [], error: '' });
+  const remotePlayer = useRef<RemotePlayer | null>(null), receiveRemote = useRef<(command: RemoteCommand) => Promise<void>>(async () => {});
+  const registerRemote = useCallback((player: RemotePlayer | null) => { remotePlayer.current = player; }, []);
+  const remote = useMemo(() => Platform.OS === 'android' ? createRemote({
+    post: (path, body, timeout) => request(base, path, { method: 'POST', body, accountId: dataRef.current?.user.id }, timeout),
+    playback: () => remotePlayer.current?.playback() || null,
+    receive: command => receiveRemote.current(command),
+    changed: state => { if (remoteSheetOpen.current) setRemoteState(state); },
+  }) : null, [base]);
+  useEffect(() => {
+    if (!remote) return;
+    const active = (state: string | null) => remote.setActive(!offline && state === 'active');
+    active(AppState.currentState);
+    const subscription = AppState.addEventListener('change', active);
+    return () => { subscription.remove(); remote.setActive(false); };
+  }, [offline, remote]);
   const openedAlerts = useRef(0);
   const insets = useSafeAreaInsets();
   const load = useCallback(async () => {
@@ -258,14 +279,42 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     if (offline && !saved) { setError('This title is not saved on this device.'); return; }
     setPlaying({ item, start, queue, saved });
   };
+  const playbackQueue = (item: Item, data: Library) => item.kind === 'show'
+    ? allGroups.find(items => items.some(i => i.id === item.id)) || [item]
+    : data.queue.includes(item.id) ? data.queue.flatMap(id => data.items.find(i => i.id === id) || []) : [item];
   const play = (item: Item, start?: number) => {
     if (!data) return;
-    const siblings = allGroups.find(items => items.some(i => i.id === item.id)) || [item];
-    const queue = item.kind === 'show' ? siblings : data.queue.includes(item.id) ? data.queue.flatMap(id => data.items.find(i => i.id === id) || []) : [item];
+    const queue = playbackQueue(item, data);
     void startPlayback(item, queue, start);
     if (!offline) {
       const ids = queue.map(i => i.id);
       updateQueue(ids, queueChange(data.queue, ids));
+    }
+  };
+  async function continueHere({ itemId, position }: Pick<RemotePlayback, 'itemId' | 'position'>) {
+    const current = dataRef.current, item = current?.items.find(item => item.id === itemId);
+    if (offline || !current || !item) throw new Error('That title is unavailable on this device.');
+    const queue = playbackQueue(item, current), run = ++playRun.current;
+    setSelected(null);
+    await new Promise<void>((resolve, reject) => {
+      const confirm = (ok: boolean) => {
+        clearTimeout(timer);
+        if (ok && run === playRun.current) resolve();
+        else reject(new Error('Could not start playback here.'));
+      };
+      // Leave time for command delivery and acknowledgement within the server's 60-second window.
+      const timer = setTimeout(() => confirm(false), 55_000);
+      setPlaying({ item, start: position, queue, remoteStart: { run, confirm } });
+    });
+  }
+  receiveRemote.current = async command => {
+    if (command.action === 'start') {
+      await continueHere(command);
+      setAccount(false);
+      setRemoteSheet(null);
+    } else {
+      if (!remotePlayer.current) throw new Error('No title is playing on this device.');
+      remotePlayer.current.receive(command);
     }
   };
   const saveName = (item: Item) => data && item.kind !== 'show' ? nameFor(data, item) : item.title;
@@ -328,12 +377,27 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   }, [alerts.opened, alerts.supported, playing]);
   useEffect(() => () => setSceneOverride(null), []);
   setSceneOverride(playing && data ? 'dark' : null); // the player draws over video, dark in both themes
-  if (playing && data) return <><StatusBar style="light" /><NativePlayer key={`${playing.item.id}:${playing.start ?? 'resume'}`} {...art} item={playing.item} data={data} initialPosition={playing.start} queue={playing.queue}
+  const openDevices = remote && !offline && data ? (item?: Item) => { setRemoteState(remote.state()); setRemoteSheet({ item }); } : undefined;
+  const remoteSheetItem = remoteSheet?.item;
+  const remoteDialog = remote && data && !offline ? <RemoteDevices visible={!!remoteSheet} onClose={() => setRemoteSheet(null)} remote={remote} state={remoteState}
+    continueHere={continueHere} title={id => { const item = data.items.find(item => item.id === id); return item && nameFor(data, item); }}
+    outgoing={remoteSheetItem ? {
+      label: 'Play on selected device',
+      snapshot: () => ({ itemId: remoteSheetItem.id, position: data.progress[remoteSheetItem.id]?.completed ? 0 : data.progress[remoteSheetItem.id]?.position || 0 }),
+    } : playing ? {
+      label: 'Continue on selected device',
+      snapshot: () => {
+        const player = remotePlayer.current, playback = player?.playback();
+        return player && playback ? { ...playback, pause: async () => { if (remotePlayer.current === player) await player.pause(); } } : null;
+      },
+    } : undefined} /> : null;
+  if (playing && data) return <><StatusBar style="light" /><NativePlayer key={`${playing.item.id}:${playing.start ?? 'resume'}:${playing.remoteStart?.run ?? 'local'}`} {...art} item={playing.item} data={data} initialPosition={playing.start} queue={playing.queue}
+    onDevices={openDevices ? () => openDevices() : undefined} registerRemote={remote ? registerRemote : undefined} confirmRemoteStart={playing.remoteStart?.confirm}
     saved={playing.saved} offline={offline} onQueue={changeQueue} onComplete={item => void updateProgress(item, false)} onPreferences={patch => setData(current => current && { ...current, preferences: { ...current.preferences, ...patch } })} onBack={() => { playRun.current++; setPlaying(null); void load(); }} onSelect={item => void startPlayback(item, playing.queue)} onNext={() => {
       const next = playing.queue[playing.queue.findIndex(i => i.id === playing.item.id) + 1];
       if (next && data.preferences.autoplay !== false) void startPlayback(next, playing.queue);
       else { setPlaying(null); void load(); }
-    }} /></>;
+    }} />{remoteDialog}</>;
   const admin = !offline && data?.user.role === 'admin', layout = { top: insets.top + (offline ? 44 : 0), bottom: insets.bottom };
   const list = data && tab.startsWith('list:') ? titleShelves(allGroups, data.lists, titleKey, item => metadataFor(data, item)).find(shelf => 'list:' + shelf.id === tab) : null;
   const editLists = async (body: ListChange) => {
@@ -396,7 +460,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       <Dock active={dockTab} onChange={jump} queued={data?.queue.length || 0} hidden={keyboard} />
     </View>
     {/* The title page is an overlay, so the list underneath stays mounted and keeps its scroll position. */}
-    {detail && data && <View style={s.overlay}><TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} smart={offline || savedOnly || !smartReady ? undefined : { rule: smart.rules[titleKey(detail[0])], onChange: rule => keepRule(detail, rule) }} onFollow={!offline && !savedOnly && data.metadataEnabled && data.followed && metadataFor(data, detail[0]).tmdbId ? followShow : undefined} onSearchEpisode={admin ? searchEpisode : undefined} onEditLists={!offline && !savedOnly && data.lists ? editLists : undefined} onEnqueue={enqueue} onMark={(list, done) => void markMany(list, done)} online={offline || savedOnly ? undefined : { admin, tmdb: data.metadataEnabled === true, notify, onMetadata: metadata => setData(latest => latest && { ...latest, metadata }) }} onSave={offline || savedOnly ? undefined : item => openOfflineChoices([item])} onSaveMany={offline || savedOnly ? undefined : openOfflineChoices} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} savingIds={savingIds} /></View>}
+    {detail && data && <View style={s.overlay}><TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onDevices={offline || savedOnly ? undefined : openDevices} smart={offline || savedOnly || !smartReady ? undefined : { rule: smart.rules[titleKey(detail[0])], onChange: rule => keepRule(detail, rule) }} onFollow={!offline && !savedOnly && data.metadataEnabled && data.followed && metadataFor(data, detail[0]).tmdbId ? followShow : undefined} onSearchEpisode={admin ? searchEpisode : undefined} onEditLists={!offline && !savedOnly && data.lists ? editLists : undefined} onEnqueue={enqueue} onMark={(list, done) => void markMany(list, done)} online={offline || savedOnly ? undefined : { admin, tmdb: data.metadataEnabled === true, notify, onMetadata: metadata => setData(latest => latest && { ...latest, metadata }) }} onSave={offline || savedOnly ? undefined : item => openOfflineChoices([item])} onSaveMany={offline || savedOnly ? undefined : openOfflineChoices} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} savingIds={savingIds} /></View>}
     {!offline && data && offlineChoices && <OfflineChoices base={base} items={offlineChoices} preferred={data.preferences.tracks?.[trackKey(offlineChoices[0])]} close={() => setOfflineChoices(null)}
       save={async choices => {
         await saveOfflineBatch(base, data.user, offlineChoices, saveName, { choices });
@@ -405,7 +469,8 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       }} />}
     <Grain />
     <Toast notice={notice} bottom={toastBottom} onDismiss={dismiss} />
-    <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} requests={requestsLabel} onGo={go} onRefresh={() => void load()} onAbout={() => setAbout(true)} onServer={onChangeServer} onSignOut={onSignedOut} onTrackDefaults={changeTrackDefaults} />
+    <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} requests={requestsLabel} onGo={go} onRefresh={() => void load()} onAbout={() => setAbout(true)} onServer={onChangeServer} onSignOut={onSignedOut} onTrackDefaults={changeTrackDefaults} onDevices={openDevices} />
+    {remoteDialog}
     <AboutSheet visible={about} onClose={() => setAbout(false)} files={data?.items.length || 0} />
   </View>;
 }

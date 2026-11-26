@@ -18,7 +18,7 @@ export function profileButton(session, open) {
   return button;
 }
 
-export function openProfile({ session, getState, forgetTracks, signOut, openSaved }) {
+export function openProfile({ session, getState, forgetTracks, signOut, openSaved, openDevices }) {
   const layer = h('div', { class: 'web-layer', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Profile' });
   const close = () => { layer.remove(); document.removeEventListener('keydown', onKey, true); document.body.classList.remove('web-layer-open'); };
   const onKey = e => { if (e.key === 'Escape' && !document.querySelector('dialog[open]')) { e.stopPropagation(); close(); } };
@@ -132,6 +132,7 @@ export function openProfile({ session, getState, forgetTracks, signOut, openSave
         h('ul', { class: 'scan-errors', 'data-library-scan-errors': '' }, state.scanStatus.errors.map(row => h('li', {}, row.folder + ': ' + row.error)))) : null,
       group('Playback',
         section('Dub and subtitles', forget, h('p', { class: 'muted' }, 'The player remembers which audio and subtitle language you pick for each show or film, so a dub chosen in one episode carries through the series. New titles follow the default audio and subtitle settings in About Matro and this library.')),
+        openDevices && section('Remote playback', null, h('button', { class: 'pill remote-device-button', type: 'button', onclick: () => { close(); openDevices(); } }, 'Connected devices')),
         section('Saved for offline', null, h('button', { class: 'pill', type: 'button', onclick: () => { close(); openSaved(); } }, 'View offline downloads')),
         session.offline ? null : section('Subtitles you added', null, added)),
       session.offline ? null : group('Account', section('Password', null, password)),

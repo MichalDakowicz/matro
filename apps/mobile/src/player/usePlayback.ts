@@ -187,7 +187,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
         const { audio: a, subtitle: sub } = initialTracks({ audio: details.audio, subtitles: subtitleTracks(details) }, preferences.tracks?.[trackKey(item)], preferences);
         choices.current = { ...choices.current, audio: a, subtitle: sub }; setAudio(a); setSubtitle(sub);
         await loadText(sub).catch(e => { if (mounted.current) setError(e.message); });
-        if (mounted.current && run === generation.current) await load(at.current, intent.current);
+        if (mounted.current && run === generation.current) await load(details.duration > 0 ? Math.min(at.current, Math.max(0, details.duration - .1)) : at.current, intent.current);
       } catch (e) {
         if (mounted.current && run === generation.current && !await trySavedCopy(run)) {
           setBusy(false); setError(e instanceof Error ? e.message : 'Could not read this file.');
@@ -289,7 +289,8 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     void persist().catch(() => {});
   }, [player, load, persist]);
   seekRef.current = seek;
-  const toggle = () => { const shouldPlay = replacing.current ? !intent.current : !player.playing; intent.current = shouldPlay; setPlaying(shouldPlay); moved.current = Date.now(); if (shouldPlay && !replacing.current) player.play(); else { player.pause(); void persist().catch(() => {}); } };
+  const setPlaybackPlaying = (shouldPlay: boolean) => { intent.current = shouldPlay; setPlaying(shouldPlay); moved.current = Date.now(); if (shouldPlay && !replacing.current) player.play(); else { player.pause(); void persist().catch(() => {}); } };
+  const toggle = () => setPlaybackPlaying(replacing.current ? !intent.current : !player.playing);
   const chooseAudio = (index: number) => { choices.current.audio = index; setAudio(index); remember({ audio: choice(infoRef.current?.audio.find(t => t.index === index)) }); void load(at.current); };
   const chooseSubtitle = (index: number | null) => {
     const previousBurn = infoRef.current?.embedded.find(t => t.index === choices.current.subtitle && t.bitmap)?.index ?? null;
@@ -322,5 +323,5 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     if (!offlineRef.current) void updateWatchOptions(base, dataRef.current.user, { preferences: patch }).catch(() => {});
   };
   const applyMarkers = (next: typeof markers) => { markersRef.current = next; setMarkers(next); };
-  return { player, info, diagnostics, markers, applyMarkers, settings, setPreference, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, audioDelay, subtitleSize, rate, quality, qualities: savedCopy ? [] : qualityOptions(info?.video), chooseQuality, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setAudioDelay, setSubtitleSize, setSpeed, allowPiP, autoPiP, pictureInPicture, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
+  return { player, info, diagnostics, markers, applyMarkers, settings, setPreference, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, audioDelay, subtitleSize, rate, quality, qualities: savedCopy ? [] : qualityOptions(info?.video), chooseQuality, persist, toggle, setPlaybackPlaying, seek, chooseAudio, chooseSubtitle, setDelay, setAudioDelay, setSubtitleSize, setSpeed, allowPiP, autoPiP, pictureInPicture, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
 }

@@ -114,9 +114,9 @@ function TrackDefaultsRows({ value, onChange }: { value: ReturnType<typeof track
     {value.subtitles === 'always' && languages(value.subtitleLanguage, subtitleLanguage => onChange({ ...value, subtitleLanguage }), 'Choose…')}
   </View>;
 }
-type AccountProps = { visible: boolean; onClose: () => void; data: Library | null; base: string; offline: boolean; requests?: string; onGo: (tab: string) => void; onRefresh: () => void; onAbout: () => void; onServer: () => void; onSignOut: () => void; onTrackDefaults: (value: TrackDefaults) => void };
+type AccountProps = { visible: boolean; onClose: () => void; data: Library | null; base: string; offline: boolean; requests?: string; onGo: (tab: string) => void; onRefresh: () => void; onAbout: () => void; onServer: () => void; onSignOut: () => void; onTrackDefaults: (value: TrackDefaults) => void; onDevices?: () => void };
 /** Profile sheet in three groups: Library (where things are), Server (connection) and Account (about, sign out last). */
-export function AccountSheet({ visible, onClose, data, base, offline, requests, onGo, onRefresh, onAbout, onServer, onSignOut, onTrackDefaults }: AccountProps) {
+export function AccountSheet({ visible, onClose, data, base, offline, requests, onGo, onRefresh, onAbout, onServer, onSignOut, onTrackDefaults, onDevices }: AccountProps) {
   const go = (tab: string) => { onClose(); onGo(tab); };
   const confirm = (title: string, message: string, action: string, run: () => void) => Alert.alert(title, message, [{ text: 'Cancel', style: 'cancel' }, { text: action, style: 'destructive', onPress: () => { onClose(); run(); } }], { cancelable: true });
   const admin = !offline && data?.user.role === 'admin';
@@ -135,6 +135,7 @@ export function AccountSheet({ visible, onClose, data, base, offline, requests, 
     {admin && <Row icon="arrows" label="Host downloads" detail="Find releases and add them to the server" chevron onPress={() => go('downloads')} />}
     {!offline && !!requests && <Row icon="requests" label={requests} chevron onPress={() => go('movie-requests')} />}
     <SectionLabel>Server</SectionLabel>
+    {onDevices && <Row icon="network" label="Connected devices" chevron onPress={() => { onClose(); onDevices(); }} />}
     <Row icon="refresh" label={offline ? 'Reconnect' : 'Refresh library'} onPress={() => { onClose(); onRefresh(); }} />
     <Row icon="network" label="Change server" detail={base.replace(/^https?:\/\//, '')} onPress={() => confirm('Change server?', 'Matro forgets this server address and asks for a new one. Titles saved on this device stay here.', 'Change server', onServer)} />
     <SectionLabel>Account</SectionLabel>
