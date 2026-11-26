@@ -619,9 +619,11 @@ test('the latest playback selection wins and a stale receiver cannot write into 
     await page.evaluate(() => window.releaseCheckpoint());
     await expect(page.getByRole('heading', { name: 'Gamma', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Beta', exact: true })).toHaveCount(0);
-    await expect.poll(() => page.locator('video').evaluate(video => video.currentTime)).toBeGreaterThan(.2);
-    await page.getByRole('button', { name: 'Pause', exact: true }).click();
-    await expect.poll(() => page.locator('video').evaluate(video => video.paused)).toBe(true);
+    const player = page.locator('video');
+    await expect.poll(() => player.evaluate(video => video.currentTime)).toBeGreaterThan(.2);
+    // Keep the receiver idle during the account switch even if its controls auto-hide.
+    await player.evaluate(video => video.pause());
+    await expect.poll(() => player.evaluate(video => video.paused)).toBe(true);
 
     const switched = browser.waitForEvent('window');
     await browser.evaluate(async ({ BrowserWindow }, url) => {
