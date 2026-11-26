@@ -145,7 +145,7 @@ export type Library = { lists?: TitleList[]; followed?: string[]; scanStatus?: L
 export type Track = { index: number; language: string; title: string; bitmap?: boolean; text?: boolean; codec?: string; channels?: number; default?: boolean };
 export type Info = { duration: number; directPlay: boolean; hdrToneMap?: boolean; video?: { codec: string; height: number; width: number } | null; chapters?: { start: number; title: string }[]; audio: Track[]; embedded: Track[]; uploaded: { id: number; language: string; name: string; kind?: string }[]; files?: { id: number; language: string; title: string; codec: string; forced: boolean; sdh: boolean }[] };
 export const library = async (base: string, accountId?: number): Promise<Library> => { await ensureNativeSession(base); return request(base, '/api/library', { accountId }); };
-export const inspect = (base: string, id: string, signal?: AbortSignal): Promise<Info> => request(base, `/api/items/${encodeURIComponent(id)}/info`, { signal });
+export const inspect = (base: string, id: string, signal?: AbortSignal, ms?: number): Promise<Info> => request(base, `/api/items/${encodeURIComponent(id)}/info`, { signal }, ms);
 export const writeWatchState = (base: string, accountId: number, body: { progress?: Record<string, Progress>; queueChange?: { add: string[]; remove: string[] }; preferences?: Preferences }): Promise<{ progress?: Record<string, Progress> }> =>
   request(base, '/api/state', { method: 'PUT', body, accountId });
 export const changeProgress = (base: string, accountId: number, id: string, body: { dismiss: true; dismissedAt?: number } | { completed: boolean; checkpoint?: Progress }): Promise<{ progress: Record<string, Progress> }> =>

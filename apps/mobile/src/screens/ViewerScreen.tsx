@@ -278,7 +278,8 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     let saved = await savedTitle(base, data.user, item.id).catch(() => undefined);
     // Online, the saved copy only has the first audio track and text subtitles: stream when the chosen tracks need more.
     if (saved && !offline) {
-      const full = await inspect(base, item.id).catch(() => null);
+      // A short deadline: when the server is slow to answer, the saved copy plays instead of waiting.
+      const full = await inspect(base, item.id, undefined, 4000).catch(() => null);
       if (full && !savedServes(saved.info, full, data.preferences.tracks?.[trackKey(item)], data.preferences)) saved = undefined;
     }
     if (run !== playRun.current) return;
