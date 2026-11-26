@@ -71,7 +71,9 @@ Upgrade filenames add a short hash suffix so both editions remain distinct.
 The original file is never deleted or replaced. A completed upgrade is probed and
 must really have a higher resolution before it becomes a registered edition.
 New managed movie paths are excluded from library imports until completion.
-Completed movies are added automatically; shows can be picked up with Rescan.
+Completed movies and shows are added to the library automatically: the server and
+standalone desktop rescan the library folder that holds the finished files. Rescan
+remains available for files placed there by other means.
 Rescans preserve movie editions as movies rather than treating the folder as a show.
 
 The comparison panel has Play this edition and Make favorite. It shows resolution,
@@ -113,7 +115,7 @@ and episode-first filename. For a single-episode release, its catalog episode
 number can identify an otherwise unnumbered video filename. Season packs retain
 the numbered episodes in their file list. The same subtitle/extra selection and
 metadata-first preparation rules apply. A series release cannot become a movie
-upgrade. Completed shows can be imported using Rescan.
+upgrade. Completed shows are imported automatically, as movies are.
 
 The manual magnet form is also separate: Add a movie magnet in Movies, Add a
 series magnet in Series. Shows without an IMDb release index can still use the
