@@ -10,6 +10,7 @@ import { describePlayback, savedPlayback as savedDiagnostics } from '../../../pa
 
 import { knownQuality, qualityOptions } from '../../../packages/core/client/quality.js';
 import { matchOfflineTrack } from '../../../packages/core/client/offline-rules.js';
+import { offlineStart, offlineTrackPatch } from '../../../packages/core/client/track-preferences.js';
 
 const FILE = 20000; // subtitle files found next to the video on the server get indexes from here up
 const SIDECAR = 10000; // uploaded subtitle tracks get indexes from here up, as sidecar files do on the desktop
@@ -331,10 +332,10 @@ export function createAdapter(session, remote = null) {
   async function offlineSaveOptions(ids) {
     const id = ids[0], first = await inspect(id);
     const selected = latest.items.find(item => item.id === id);
-    const preferred = latest.preferences?.tracks?.[selected?.groupId || selected?.group];
+    const key = selected?.groupId || selected?.group, start = offlineStart(first, latest.preferences?.tracks?.[key], latest.preferences);
     const bitmaps = first.subtitles.filter(track => track.bitmap);
-    const audio = h('select', { 'aria-label': 'Audio track' }, first.audio.map(track => h('option', { value: track.index, selected: track.index === (matchOfflineTrack(first.audio, preferred?.audio) || first.audio[0])?.index }, trackName(track))));
-    const burn = h('select', { 'aria-label': 'Burn bitmap subtitles into the video' }, h('option', { value: '' }, 'None'), bitmaps.map(track => h('option', { value: track.index, selected: !preferred?.off && track.index === matchOfflineTrack(bitmaps, preferred?.subtitle)?.index }, trackName(track))));
+    const audio = h('select', { 'aria-label': 'Audio track' }, first.audio.map(track => h('option', { value: track.index, selected: track.index === start.audio }, trackName(track))));
+    const burn = h('select', { 'aria-label': 'Burn bitmap subtitles into the video' }, h('option', { value: '' }, 'None'), bitmaps.map(track => h('option', { value: track.index, selected: track.index === start.burn }, trackName(track))));
     const quality = h('select', { 'aria-label': 'Size preset' }, qualityOptions(first.video).map(tier => h('option', { value: tier.id }, tier.label)));
     const text = first.subtitles.filter(track => track.text && !track.bitmap);
     const form = h('form', { onsubmit: event => {
@@ -350,6 +351,13 @@ export function createAdapter(session, remote = null) {
     const box = dialog('Save offline', form);
     const choice = await box.done;
     if (!choice) return null;
+    // Tracks picked for the save become the title's choice, so streaming it later plays the same audio and subtitles.
+    const patch = key && offlineTrackPatch(first, start, choice);
+    if (patch) {
+      latest.preferences = latest.preferences || {};
+      latest.preferences.tracks = { ...latest.preferences.tracks, [key]: { ...latest.preferences.tracks?.[key], ...patch } };
+      void updateState({ preferences: { tracks: { [key]: patch } } }).catch(() => {});
+    }
     const firstAudio = first.audio.find(track => track.index === choice.audio), firstBurn = bitmaps.find(track => track.index === choice.burn);
     return {
       async forTitle(itemId) {

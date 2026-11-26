@@ -1,5 +1,5 @@
-import type { Info, Item, Library, Metadata, Preferences, Track, TrackChoice, TrackPreference } from './server';
-import { initialTracks, savedServes as servesTracks } from './track-preferences.js';
+import type { Info, Item, Library, Metadata, Preferences, Track, TrackPreference } from './server';
+import { initialTracks, offlineStart as startTracks, offlineTrackPatch as trackPatch, savedServes as servesTracks } from './track-preferences.js';
 import { compareEditions, compareEpisodes, continueWatching, groupTitles, isCompleted, resumeTarget } from './watch-progress.js';
 export const trackKey = (item: Item) => item.groupId || item.group;
 export const titleKey = (item: Item) => item.kind === 'show' ? item.groupId || item.group : item.editionGroup || item.id;
@@ -29,19 +29,9 @@ export function subtitleTracks(info: Info): Track[] {
 export function savedServes(saved: Info, full: Info, choice?: TrackPreference, preferences?: Preferences): boolean {
   return servesTracks({ audio: saved.audio, subtitles: subtitleTracks(saved) }, { audio: full.audio, subtitles: subtitleTracks(full) }, choice, preferences);
 }
-// A save starts with the tracks the player would open: that audio, and the subtitle burned in only when it is a bitmap.
-export function offlineStart(info: Info, choice?: TrackPreference, preferences?: Preferences) {
-  const { audio, subtitle } = initialTracks({ audio: info.audio, subtitles: subtitleTracks(info) }, choice, preferences);
-  return { audio, burn: info.embedded.some(track => track.index === subtitle && track.bitmap) ? subtitle : null };
-}
-// The per-title choice to remember when a save leaves that start, so streaming opens with the same tracks.
-export function offlineTrackPatch(info: Info, start: { audio: number | null; burn: number | null }, picked: { audio?: number | null; burn?: number | null }) {
-  const pick = (track?: Track): TrackChoice | null => track ? { language: track.language, title: track.title, codec: track.codec, channels: track.channels } : null;
-  const patch: TrackPreference = {};
-  if ((picked.audio ?? null) !== start.audio) patch.audio = pick(info.audio.find(track => track.index === picked.audio));
-  if ((picked.burn ?? null) !== start.burn) Object.assign(patch, picked.burn == null ? { off: true } : { subtitle: pick(info.embedded.find(track => track.index === picked.burn)), off: false });
-  return Object.keys(patch).length ? patch : null;
-}
+const tracksOf = (info: Info) => ({ audio: info.audio, subtitles: subtitleTracks(info) });
+export const offlineStart = (info: Info, choice?: TrackPreference, preferences?: Preferences): { audio: number | null; burn: number | null } => startTracks(tracksOf(info), choice, preferences);
+export const offlineTrackPatch = (info: Info, start: { audio: number | null; burn: number | null }, picked: { audio?: number | null; burn?: number | null }): TrackPreference | null => trackPatch(tracksOf(info), start, picked);
 export { initialTracks, matchTrack } from './track-preferences.js';
 export function languageName(value: string) {
   if (!value || value === 'und') return 'Unknown language';

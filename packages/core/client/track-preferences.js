@@ -45,6 +45,19 @@ export function savedServes(saved, full, choice, preferences) {
   const { audio, subtitle } = initialTracks(full, choice, preferences);
   return audio === (saved.audio[0]?.index ?? null) && (subtitle === null || saved.subtitles.some(t => t.index === subtitle));
 }
+// A save starts with the tracks the player would open: that audio, and the subtitle burned in only when it is a bitmap.
+export function offlineStart(details, choice, preferences) {
+  const { audio, subtitle } = initialTracks(details, choice, preferences);
+  return { audio, burn: details.subtitles.some(t => t.index === subtitle && t.bitmap) ? subtitle : null };
+}
+// The per-title choice to remember when a save leaves that start, so streaming opens with the same tracks.
+export function offlineTrackPatch(details, start, picked) {
+  const pick = track => track ? { language: track.language, title: track.title, codec: track.codec, channels: track.channels } : null;
+  const patch = {};
+  if ((picked.audio ?? null) !== start.audio) patch.audio = pick(details.audio.find(t => t.index === picked.audio));
+  if ((picked.burn ?? null) !== start.burn) Object.assign(patch, picked.burn == null ? { off: true } : { subtitle: pick(details.subtitles.find(t => t.index === picked.burn)), off: false });
+  return Object.keys(patch).length ? patch : null;
+}
 // details: { audio, subtitles }. choice: this title's saved choice (undefined if none).
 export function initialTracks({ audio, subtitles }, choice, preferences) {
   const defaults = trackDefaults(preferences);
