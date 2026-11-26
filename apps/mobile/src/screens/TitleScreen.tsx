@@ -23,6 +23,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
   const item = items[0], m = metadataFor(data, item), target = resumeItem(data, items), p = data.progress[target.id], name = nameFor(data, item);
   const insets = useSafeAreaInsets(), seasons = seasonNumbers(items);
   const [season, setSeason] = useState(seasonOf(target)), [menu, setMenu] = useState<Menu>(null), [scrolled, setScrolled] = useState(false);
+  const editions = item.editionGroup && items.length > 1;
   const resume = p?.position > 0 && !p.completed, show = item.kind === 'show';
   const done = (list: Item[]) => list.length > 0 && list.every(i => data.progress[i.id]?.completed);
   const inSeason = items.filter(i => seasonOf(i) === season);
@@ -47,9 +48,9 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
         {resume && <View style={s.circleAction}><IconButton name="restart" label="Play from start" size={50} onPress={() => onPlay(target, 0)} /></View>}
       </View>
       <View style={[t.row, { marginTop: 10, flexWrap: 'wrap' }]}>
-        <Pill label="Add to queue" icon="plus" style={s.action} onPress={() => onEnqueue(items)} />
+        <Pill label="Add to queue" icon="plus" style={s.action} onPress={() => onEnqueue(show ? items : [target])} />
         {show ? <Pill label="Mark watched" icon="check" style={s.action} onPress={() => setMenu('watched')} />
-          : <Pill label={done(items) ? 'Mark unwatched' : 'Mark watched'} icon="check" style={s.action} onPress={() => onMark(items, !done(items))} />}
+          : <Pill label={done([target]) ? 'Mark unwatched' : 'Mark watched'} icon="check" style={s.action} onPress={() => onMark([target], !done([target]))} />}
         {onSave && (show ? onSaveMany && <Pill label="Save offline" icon="download" style={s.action} onPress={() => setMenu('save')} />
           : <Pill label={saveLabel(target.id)} icon={state(target.id) === 'saved' ? 'check' : 'download'} style={s.action} disabled={state(target.id) !== 'idle'} onPress={() => onSave(target)} />)}
         {onRemoveSaved && <Pill label="Remove from this device" icon="trash" style={s.action} onPress={() => onRemoveSaved(items)} />}
@@ -57,6 +58,16 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
       {m.rating ? <View style={s.ratings}><Text style={[t.mono, { marginBottom: 6 }]}>TMDB</Text><View style={[t.row, { alignItems: 'baseline', gap: 5 }]}><Text style={s.score}>{m.rating.toFixed(1)}</Text><Text style={t.dim}>/10{m.votes ? ` · ${m.votes.toLocaleString()} votes` : ''}</Text></View></View> : null}
       {show && <View style={{ marginTop: 28 }}><View style={t.sectionHeading}><Text accessibilityRole="header" style={t.sectionTitle}>Episodes</Text><Text style={t.dim}>{items.filter(i => data.progress[i.id]?.completed).length} / {items.length} watched</Text></View><ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -18 }} contentContainerStyle={{ gap: 8, paddingHorizontal: 18, paddingBottom: 14 }}>{seasons.map(value => <Chip key={value} small label={seasonLabel(value)} selected={season === value} onPress={() => setSeason(value)} />)}</ScrollView></View>}
     </View>
+    {editions && <View style={{ marginTop: 24, gap: 8 }}>
+      <Text accessibilityRole="header" style={t.sectionTitle}>Editions</Text>
+      {items.map(edition => {
+        const progress = data.progress[edition.id], bytes = edition.size;
+        const size = bytes ? bytes >= 1e9 ? (bytes / 1e9).toFixed(1) + ' GB' : Math.ceil(bytes / 1e6) + ' MB' : null;
+        const position = progress?.position > 0 && !progress.completed ? 'Resume at ' + formatTime(progress.position) : null;
+        const label = [edition.editionLabel || edition.title, edition.format, size, position].filter(Boolean).join(' · ');
+        return <Pill key={edition.id} label={label} icon="play" onPress={() => onPlay(edition)} />;
+      })}
+    </View>}
   </View>;
   const footer = <View style={{ gap: 28, marginTop: 28 }}>
     {!!m.cast?.length && <View><Text style={[t.sectionTitle, { marginBottom: 18 }]}>Cast</Text><View style={s.castGrid}>{m.cast.map(person => <View key={person.name} style={s.castMember}><MediaArt {...art} path={person.photo} title={person.name} style={{ width: '100%', aspectRatio: 2 / 3, borderRadius: radius.poster }} /><Text numberOfLines={2} style={[t.text, { fontSize: 12.5, fontFamily: fonts.medium, marginTop: 8 }]}>{person.name}</Text><Text numberOfLines={2} style={[t.dim, { fontSize: 11, marginTop: 3 }]}>{person.role}</Text></View>)}</View></View>}

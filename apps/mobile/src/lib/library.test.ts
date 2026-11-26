@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { seasonLabel, seasonNumbers } from '../../../../packages/core/client/watch-progress.js';
-import { continueItems, groupLibrary, matchTrack, metadataFor, resumeItem, savedServes, trackKey } from '../../../../packages/core/client/library.ts';
+import { continueItems, groupLibrary, matchTrack, metadataFor, resumeItem, savedServes, statusOf, trackKey } from '../../../../packages/core/client/library.ts';
 import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
 import { randomReelStart } from '../../../../packages/core/client/reel-start.js';
 import type { Item, Library } from '../../../../packages/core/client/server.ts';
@@ -25,6 +25,17 @@ test('native shelves use the same show grouping, movie editions and metadata key
   const groups = groupLibrary(data.items);
   assert.equal(groups.length, 3); assert.deepEqual(groups[0].map(i => i.id), ['one', 'two']);
   assert.equal(metadataFor(data, second).title, 'The show'); assert.equal(trackKey(movie), trackKey(edition));
+
+  const cuts = [{ ...movie, editionGroup: 'cuts' }, { ...edition, groupId: 'encode', editionGroup: 'cuts' }];
+  const catalog = blank(cuts);
+  const [group] = groupLibrary(catalog.items);
+  assert.deepEqual(group.map(item => item.id), ['movie-a', 'movie-b']);
+  catalog.progress['movie-b'] = { position: 30, duration: 90, updated: 1 };
+  assert.equal(resumeItem(catalog, group).id, 'movie-b');
+  assert.equal(statusOf(catalog, group), 'progress');
+  catalog.progress['movie-b'].completed = true;
+  assert.equal(statusOf(catalog, group), 'done');
+  assert.equal(catalog.progress['movie-a'], undefined);
 });
 test('continue watching advances a completed episode and preserves a dismissed show', () => {
   const one = episode('one', 1), two = episode('two', 2), data = blank([one, two]);

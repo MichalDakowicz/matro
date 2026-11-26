@@ -150,7 +150,7 @@ export const unregisterMovieRequestDevice = (base: string): Promise<unknown> =>
 export const testMovieRequestAlert = (base: string): Promise<unknown> =>
   request(base, movieRequestDevicePath + '/test', { method: 'POST' });
 
-export type Item = { id: string; groupId: string; title: string; group: string; kind: string; season: number | null; episode: number | null; format: string; root?: string; path?: string; added?: number };
+export type Item = { id: string; groupId: string; title: string; group: string; kind: string; season: number | null; episode: number | null; format: string; root?: string; path?: string; added?: number; editionGroup?: string; editionLabel?: string; size?: number };
 export type Progress = { position: number; duration: number; completed?: boolean; hidden?: boolean; updated: number };
 export type Metadata = { title?: string; poster?: string; backdrop?: string; overview?: string; tagline?: string; year?: string | number; genres?: string[]; runtime?: number; rating?: number; votes?: number; people?: string[]; peopleLabel?: string; cast?: { name: string; role?: string; photo?: string }[]; episodes?: Record<string, Record<string, { name?: string; overview?: string; still?: string; runtime?: number }>> };
 export type TrackChoice = { language: string; title: string; codec?: string; channels?: number };

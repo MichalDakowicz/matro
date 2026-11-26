@@ -393,7 +393,7 @@ export function createAdapter(session) {
       };
     },
     hiddenTabs: session.user.role === 'admin' && !session.offline ? [] : ['folders', 'downloads'],
-    canCompareEditions: session.user.role === 'admin' && !session.offline,
+    canCompareEditions: false,
     canEditMetadata: session.user.role === 'admin' && !session.offline,
     downloadSeriesSearch: value => download('series-search', value), downloadSeriesReleases: value => download('series-releases', value),
     downloadSeriesSource: async () => { say('Release information is provided by EZTV.'); },

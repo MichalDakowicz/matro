@@ -888,6 +888,49 @@ test('on a phone the show page keeps every action labelled and reachable, with m
   }
 });
 
+test('a movie folder with several cuts is one movie with an editions picker and no upgrade action', async () => {
+  const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'editions-'));
+  const media = path.join(root, 'media'), folder = path.join(media, 'Twin Cuts (2021)'); await fs.mkdir(folder, { recursive: true });
+  await fs.copyFile(f.mkv, path.join(folder, 'Twin Cuts (2021).mkv'));
+  await fs.copyFile(f.mkv, path.join(folder, "Twin Cuts (2021) Director's Cut.mkv"));
+  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} } });
+  let browser;
+  try {
+    await app.createUser('head', 'editions-test-pass', 'admin'); await library.addFolder(media);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: `http://127.0.0.1:${server.address().port}` };
+    delete env.ELECTRON_RUN_AS_NODE;
+    browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
+    const page = await browser.firstWindow();
+    await browser.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].show(); });
+    await page.getByRole('textbox', { name: 'Username', exact: true }).fill('head');
+    await page.getByLabel('Password', { exact: true }).fill('editions-test-pass');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.locator('.dock [data-tab="movie"]').click();
+    await expect(page.getByRole('button', { name: /^Open Twin Cuts/ })).toHaveCount(1);
+    await page.getByRole('button', { name: /^Open Twin Cuts/ }).click();
+    const rows = page.locator('.edition-row');
+    await expect(rows).toHaveCount(2);
+    await expect(rows.filter({ hasText: "Director's Cut" })).toHaveCount(1);
+    await expect(page.getByRole('button', { name: /Find better quality/ })).toHaveCount(0);
+    for (const [theme, width] of [['dark', 1280], ['light', 390]]) {
+      await page.evaluate(name => window.matroTheme.set(name), theme);
+      await page.setViewportSize({ width, height: 800 });
+      await expect(rows.first()).toBeVisible();
+    }
+    await rows.filter({ hasText: "Director's Cut" }).focus();
+    const cut = db.prepare('SELECT id FROM active_items WHERE edition_label = ?').get("Director's Cut");
+    const inspected = page.waitForRequest(request => new URL(request.url()).pathname === '/api/items/' + cut.id + '/info');
+    await page.keyboard.press('Enter');
+    await inspected;
+    await expect(page.locator('video')).toBeVisible();
+  } finally {
+    await browser?.close();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  }
+});
+
 test('the head account turns on OpenSubtitles search and a viewer saves a result as a track', async () => {
   const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'web-subtitle-search-'));
   const media = path.join(root, 'media'); await fs.mkdir(media);

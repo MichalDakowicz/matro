@@ -272,16 +272,11 @@ function checkpoint(now = false) {
   clearTimeout(saveTimer); saveTimer = null; void attempt(save); lastSave = Date.now();
 }
 function groups(kind) {
-  const map = new Map();
-  for (const item of library.items.filter(i => i.kind === kind && (!folderFilter || i.root === folderFilter))) {
-    const key = kind === 'show' ? titleKey(item) : item.id;
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(item);
-  }
   const words = tab === 'search' ? query.trim().toLowerCase() : '';
-  return [...map.values()].filter(items => searchText(items).includes(words));
+  return groupTitles(library.items.filter(i => i.kind === kind && (!folderFilter || i.root === folderFilter)))
+    .filter(items => searchText(items).includes(words));
 }
-const groupStatus = items => items.every(i => completed(i.id)) ? 'done' : items.some(i => completed(i.id) || library.progress[i.id]?.position > 0) ? 'progress' : 'new';
+const groupStatus = items => (items[0].editionGroup ? items.some(i => completed(i.id)) : items.every(i => completed(i.id))) ? 'done' : items.some(i => completed(i.id) || library.progress[i.id]?.position > 0) ? 'progress' : 'new';
 // A prelude is stored as episode 0 of the first season but is always labelled as the prelude.
 const code = item => item.prelude ? 'Prelude' : `S${item.season} E${item.episode}`;
 const itemMeta = item => item.kind === 'show' ? (item.prelude ? `${seasonLabel(item.season)} · Prelude` : `${seasonLabel(item.season)} · Episode ${item.episode}`) : item.kind === 'audio' ? `${item.format} · Audio` : `${item.format} · Movie`;
@@ -667,7 +662,8 @@ const openTitlePage = site => { const m = selected && meta(selected); if (m) voi
 function restoreFocus(element) { element?.focus({ preventScroll: true, focusVisible: false }); }
 function detail(id, focus = true) {
   selected = library.items.find(i => i.id === id); if (!selected) return;
-  const items = selected.kind === 'show' ? orderedEpisodes(selected) : [selected];
+  const items = selected.kind === 'show' ? orderedEpisodes(selected)
+    : selected.editionGroup ? library.items.filter(item => item.editionGroup === selected.editionGroup) : [selected];
   const m = meta(selected), name = displayName(selected), seasons = new Set(items.map(i => i.season)).size;
   const target = resumeTarget(items, library.progress, selected), p = library.progress[target.id];
   const resume = p?.position > 0 && !completed(target.id) ? target : null;
@@ -680,9 +676,10 @@ function detail(id, focus = true) {
       <p class="detail-sub">${[...facts, selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie', selected.format].map(esc).join(' <span aria-hidden="true">·</span> ')}</p>
       ${m?.overview ? `<p class="detail-overview">${esc(m.overview)}</p>` : ''}
       <div class="detail-actions">${selected.kind === 'movie' && api.canCompareEditions !== false ? `<button class="pill" data-upgrade="${selected.id}">Find better quality / compare editions</button>` : ''}<button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
-      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}${offlineActions(items, target)}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
+      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}${offlineActions(items, target)}<button class="pill" data-enqueue="${target.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${target.id}">${icon('check')}${completed(target.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
       ${m?.rating ? `<div class="ratings"><div><p class="rating-label">TMDB</p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}</div>
-    <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
+    <div class="detail-panels">${selected.kind === 'show' && items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
+      ${selected.editionGroup && items.length > 1 ? editionsPanel(items) : ''}
       ${castPanel(m)}${productionPanel(m)}${filePanel(selected, m)}</div></div>`;
   $('#title-links').hidden = !m?.tmdbId; $('#imdb-link').hidden = !m?.imdbId;
   document.querySelectorAll('.detail').forEach(old => old.remove()); root.append(overlay); applyStyles(overlay);
@@ -715,6 +712,16 @@ function productionPanel(m) {
     people('Music', m.music, 1), people('Cinematography', m.cinematography, 1), money(m.budget) ? ['Budget', money(m.budget), money(m.revenue) ? `${money(m.revenue)} box office` : ''] : null,
     m.countries?.length ? ['Made in', m.countries.join(', '), ''] : null].filter(Boolean);
   return facts.length ? `<section class="panel flat" aria-labelledby="production-h"><div class="panel-head"><h3 id="production-h">Production</h3></div><div class="facts">${facts.map(([label, value, sub]) => `<div><p>${esc(label)}</p><strong>${esc(value)}</strong>${sub ? `<small>${esc(sub)}</small>` : ''}</div>`).join('')}</div></section>` : '';
+}
+function editionsPanel(items) {
+  return `<section class="panel flat" aria-labelledby="editions-title"><div class="panel-head"><h3 id="editions-title">Editions</h3></div>
+    ${items.map(item => {
+      const size = item.size >= 1e9 ? (item.size / 1e9).toFixed(1) + ' GB' : Math.ceil(item.size / 1e6) + ' MB';
+      const p = library.progress[item.id], label = item.editionLabel || item.title;
+      return `<button class="match-row edition-row" data-play="${item.id}">
+        ${icon('play')}<span class="min"><strong>${esc(label)}</strong><small>${esc([item.format, size, p?.position > 0 && !completed(item.id) ? 'Resume at ' + fmt(p.position) : ''].filter(Boolean).join(' · '))}</small></span>
+      </button>`;
+    }).join('')}</section>`;
 }
 // Episodes: one season at a time behind season tabs, each episode a card with its TMDB still, summary and progress.
 let detailSeason = null;
