@@ -33,7 +33,7 @@ export function FeaturedShelf({ data, groups, onDetail, ...art }: ArtProps & { d
   if (!groups.length) return null;
   return <View style={t.section}>
     <Text style={[t.sectionTitle, { marginBottom: 16 }]}>Featured from your library</Text>
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.shelf} contentContainerStyle={s.shelfContent}>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -18 }} contentContainerStyle={{ paddingHorizontal: 18, gap: 18 }}>
       {groups.map(items => <PosterCard key={items[0].id} {...art} data={data} items={items} width={156} onPress={() => onDetail(items[0])} />)}
     </ScrollView>
   </View>;

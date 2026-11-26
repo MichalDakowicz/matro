@@ -3,6 +3,7 @@ import { Modal, Platform, ScrollView, StyleSheet, Text, View } from 'react-nativ
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Field } from '../ui';
 import { colors } from '../theme';
+import { isAndroidTv } from './TvFocus';
 import { IconButton, Pill, styles as t } from './Matro';
 import type { RemoteController, RemotePlayback, RemoteState } from '../../../../packages/core/client/remote';
 
@@ -59,7 +60,7 @@ export function RemoteDevices({ visible, onClose, remote, state, outgoing, conti
       <View style={s.panel}>
         <View style={t.sectionHeading}>
           <Text style={t.sectionTitle}>Connected devices</Text>
-          <IconButton name="close" label="Close connected devices" onPress={onClose} />
+          <IconButton name="close" preferredFocus={isAndroidTv} label="Close connected devices" onPress={onClose} />
         </View>
         <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
           <Text style={t.muted}>Devices signed in to this Matro server can control playback here while remote playback is enabled.</Text>

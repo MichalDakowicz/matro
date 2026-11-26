@@ -47,7 +47,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   useEffect(() => {
     if (offline) return;
     let active = true;
-    const poll = async () => { try { const update = await request(base, '/api/segments'); if (active) { markersRef.current = update.markers[item.id] || []; setMarkers(markerRef.current); } } catch { /* Keep the last known markers offline. */ } };
+    const poll = async () => { try { const update = await request(base, '/api/segments'); if (active) { markersRef.current = update.markers[item.id] || []; setMarkers(markersRef.current); } } catch { /* Keep the last known markers offline. */ } };
     void poll();
     if (item.kind === 'show') void request(base, `/api/items/${item.id}/segments`, { method: 'POST', body: {}, accountId: dataRef.current.user.id }, 600000).catch(() => {});
     const timer = setInterval(poll, 5000);
@@ -64,7 +64,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     const hidden = waitingForPlayback
       ? (previous?.hidden || isContinueDismissed(items.filter(i => i.kind === 'show' && titleKey(i) === titleKey(item)), progress) || undefined)
       : false;
-    const reachedEnd = !waitingForPlayback && reachedCompletion(position, duration, markerRef.current);
+    const reachedEnd = !waitingForPlayback && reachedCompletion(position, duration, markersRef.current);
     let entry: Progress = { ...previous, position, duration, hidden, completed: (!rewatching.current && !!previous?.completed) || reachedEnd, updated: Date.now() };
     if (savedEntry.current?.position === entry.position && savedEntry.current.duration === entry.duration && savedEntry.current.completed === entry.completed && savedEntry.current.hidden === hidden) entry = savedEntry.current;
     if (confirmedEntry.current === entry) return;

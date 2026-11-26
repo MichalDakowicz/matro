@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { FocusPressable as Pressable } from '../components/TvFocus';
 import { styles as t } from '../components/Matro';
 import { colors, fonts, themed } from '../theme';
 import { chrome } from './playerTheme';

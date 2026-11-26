@@ -218,6 +218,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
 }
 const s = StyleSheet.create({
   fill: { flex: 1, backgroundColor: chrome.video }, topFade: { position: 'absolute', top: 0, left: 0, right: 0 }, top: { position: 'absolute', flexDirection: 'row', alignItems: 'center', gap: 8 }, playerTitle: { color: colors.text, fontFamily: fonts.medium, fontSize: 15, lineHeight: 21 }, playerSubtitle: { color: colors.dim, fontFamily: fonts.regular, fontSize: 12 },
+  showControls: { position: 'absolute', alignSelf: 'center', zIndex: 2 },
   tvSeek: { flexDirection: "row", alignItems: "center", gap: 12 },
   bottomFade: { position: 'absolute', bottom: 0, left: 0, right: 0 }, controls: { position: 'absolute' }, center: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
   fitIndicator: { position: 'absolute', alignSelf: 'center', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: chrome.glass, borderWidth: 1, borderColor: chrome.glassLine }, indicatorLabel: { color: colors.text, fontFamily: fonts.regular, fontSize: 14 },
