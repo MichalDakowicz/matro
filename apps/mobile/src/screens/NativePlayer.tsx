@@ -12,6 +12,7 @@ import { episodeName, formatTime, languageName, metadataFor, nameFor } from '../
 import { usePlayback } from '../player/usePlayback';
 import { SubtitlePositionControls, useSubtitlePosition } from '../player/SubtitlePositionControls';
 import { subtitleOffset } from '../player/subtitlePosition';
+import { usePinchToFill } from '../player/usePinchToFill';
 import { Icon, IconButton, MediaArt, Pill, SkipIcon, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
 import { colors, fonts } from '../theme';
@@ -21,6 +22,8 @@ type Props = ArtProps & { item: Item; data: Library; initialPosition?: number; s
 export default function NativePlayer({ base, headers, item, data, initialPosition, saved, offline, queue, onBack, onSelect, onNext }: Props) {
   const p = usePlayback({ base, data, item, initialPosition, saved, offline, onEnd: onNext });
   const [controls, setControls] = useState(true), [sheet, setSheet] = useState<'tracks' | 'queue' | null>(null), [scrub, setScrub] = useState<number | null>(null);
+  const bitmap = !!p.info?.embedded.some(track => track.index === p.subtitle && track.bitmap);
+  const { fit, indicator, stageTouches } = usePinchToFill(!!p.info?.video, bitmap, () => setControls(visible => !visible));
   const insets = useSafeAreaInsets(), { width, height } = useWindowDimensions(), landscape = width > height, opacity = useRef(new Animated.Value(1)).current;
   const dragging = useRef(false);
   const [subtitlePosition, setSubtitlePosition] = useSubtitlePosition();
@@ -66,9 +69,11 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
   useEffect(() => { if (!p.playing || p.busy || p.error) setControls(true); }, [p.playing, p.busy, p.error]);
   const select = async (next: Item) => { setSheet(null); await p.persist().catch(() => {}); p.player.pause(); onSelect(next); };
   const skip = (delta: number) => { setControls(true); p.seek(p.position + delta); };
+  const videoAspect = p.info?.video?.width && p.info.video.height ? p.info.video.width / p.info.video.height : 16 / 9;
+  const pictureHeight = fit === 'cover' ? height : Math.min(height, width / videoAspect);
   const skipBottom = controls ? (landscape ? 140 : 290 + insets.bottom) : insets.bottom + 24;
   const captionTop = Math.max(insets.top + 12, controls ? headerEnd + 8 : 0);
-  const captionBottom = Math.max(insets.bottom + 16, controls && controlsTop !== null ? height - controlsTop + 8 : 0, segment ? skipBottom + 58 : 0);
+  const captionBottom = Math.max((height - pictureHeight) / 2 + pictureHeight * .06, insets.bottom + 16, controls && controlsTop !== null ? height - controlsTop + 8 : 0, segment ? skipBottom + 58 : 0);
   const captionLeft = insets.left + 12, captionRight = insets.right + 12;
   const captionWidth = Math.max(0, width - captionLeft - captionRight), captionHeight = Math.max(0, height - captionTop - captionBottom);
   const captionLineHeight = Math.min(27 * p.subtitleSize, Math.max(16, captionHeight / 2));
@@ -88,8 +93,8 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
     <IconButton name="fullscreen" label={landscape ? 'Exit fullscreen' : 'Fullscreen'} onPress={toggleFullscreen} />
   </View>;
   return <View style={s.fill}>
-    <VideoView player={p.player} nativeControls={false} contentFit="contain" fullscreenOptions={{ enable: false }} style={StyleSheet.absoluteFill} />
-    <Pressable style={StyleSheet.absoluteFill} onPress={() => setControls(!controls)} accessibilityLabel="Show or hide playback controls" />
+    <VideoView player={p.player} nativeControls={false} contentFit={fit} fullscreenOptions={{ enable: false }} style={StyleSheet.absoluteFill} />
+    <Pressable style={StyleSheet.absoluteFill} {...stageTouches} accessibilityLabel="Show or hide playback controls" />
     {p.caption && captionHeight >= captionLineHeight + 4 && <View pointerEvents="none" style={[s.captionArea, { top: captionTop, bottom: captionBottom, left: captionLeft, right: captionRight }]}>
       <Text onLayout={({ nativeEvent: { layout } }) => setCaptionSize({ width: layout.width, height: layout.height })}
         numberOfLines={Math.floor((captionHeight - 4) / captionLineHeight)} style={[s.caption, {
@@ -115,6 +120,9 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
         <View style={[s.controlRows, landscape && { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>{transport}{utilities}</View>
       </View>
     </Animated.View>
+    {indicator ? <View pointerEvents="none" style={[s.fitIndicator, { top: landscape ? 62 : insets.top + 68 }]}>
+      <Text accessibilityLiveRegion="polite" style={t.text}>{indicator}</Text>
+    </View> : null}
     {segment && <View style={{ position: 'absolute', right: Math.max(18, insets.right), bottom: skipBottom }}><Pill label={`Skip ${segment.type}`} onPress={() => { setControls(true); p.seek(segment.end); }} /></View>}
     <Modal visible={!!sheet} transparent animationType="slide" supportedOrientations={['portrait', 'landscape']} presentationStyle="overFullScreen" onRequestClose={() => setSheet(null)}>
       <Pressable style={s.scrim} onPress={() => setSheet(null)} accessibilityLabel="Close player panel" />
@@ -144,6 +152,7 @@ const s = StyleSheet.create({
   fill: { flex: 1, backgroundColor: '#000' }, topFade: { position: 'absolute', top: 0, left: 0, right: 0 }, top: { position: 'absolute', flexDirection: 'row', alignItems: 'center', gap: 8 }, playerTitle: { color: colors.text, fontFamily: fonts.medium, fontSize: 15, lineHeight: 21 }, playerSubtitle: { color: colors.dim, fontFamily: fonts.regular, fontSize: 12 },
   bottomFade: { position: 'absolute', bottom: 0, left: 0, right: 0 }, controls: { position: 'absolute' }, bufferTrack: { position: 'absolute', left: 0, right: 0, height: 3, backgroundColor: '#ffffff18' }, time: { fontSize: 12, fontFamily: fonts.mono, color: colors.muted, fontVariant: ['tabular-nums'], marginTop: 1 },
   controlRows: { gap: 4, marginTop: 4 }, transport: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 }, utilities: { flexDirection: 'row', width: '100%', justifyContent: 'space-between', alignItems: 'center' }, speed: { minWidth: 46, height: 44, justifyContent: 'center', alignItems: 'center' },
+  fitIndicator: { position: 'absolute', alignSelf: 'center', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: colors.inputFill, borderWidth: 1, borderColor: colors.hairline },
   message: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28, gap: 12 }, captionArea: { position: 'absolute', overflow: 'hidden' }, caption: { position: 'absolute', top: 0, left: 0, color: colors.primary, fontFamily: fonts.medium, backgroundColor: colors.inputFill, textAlign: 'center', includeFontPadding: false, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 3, textShadowColor: colors.ground, textShadowRadius: 3 },
   scrim: { ...StyleSheet.absoluteFill, backgroundColor: '#0005' }, sheet: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#121214', borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderColor: colors.hairline, paddingHorizontal: 18, paddingTop: 12 }, panelLabel: { fontSize: 14, color: colors.text, fontFamily: fonts.semibold, marginBottom: 10 }, track: { minHeight: 52, borderRadius: 9, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 4 }, selectedTrack: { backgroundColor: '#ffffff0e' }, setting: { borderTopWidth: 1, borderTopColor: colors.hairline, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 6 }, queueRow: { flexDirection: 'row', gap: 12, alignItems: 'center', padding: 8, borderRadius: 10, marginBottom: 5 }
 });
