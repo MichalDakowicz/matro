@@ -8,6 +8,15 @@ export function compareEpisodes(a, b) {
     || a.title.localeCompare(b.title, undefined, { numeric: true }) || a.id.localeCompare(b.id);
 }
 
+/** Season 0 is Specials; an item with no season counts as season 1. @param {Item} item */
+export const seasonOf = item => item.season ?? 1;
+
+/** @param {number} season */
+export const seasonLabel = season => season === 0 ? 'Specials' : `Season ${season}`;
+
+/** @param {Item[]} items */
+export const seasonNumbers = items => [...new Set(items.map(seasonOf))].sort((a, b) => a - b);
+
 /** @param {Item[]} items */
 export function groupTitles(items) {
   /** @type {Map<string, Item[]>} */

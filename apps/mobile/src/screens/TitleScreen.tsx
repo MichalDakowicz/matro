@@ -3,6 +3,7 @@ import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-n
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { Item, Library } from '../lib/server';
+import { seasonLabel, seasonNumbers, seasonOf } from '../../../../packages/core/client/watch-progress.js';
 import { episodeName, formatTime, metadataFor, nameFor, resumeItem } from '../../../../packages/core/client/library';
 import { cleanEpisodeName, plural, runtimeText } from '../lib/text';
 import { Chip, Icon, IconButton, MediaArt, Pill, ProgressBar, Row, Sheet, styles as t } from '../components/Matro';
@@ -20,13 +21,13 @@ type Menu = null | 'save' | 'watched' | { episode: Item };
 
 export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, onMark, onSave, onSaveMany, onRemoveSaved, savedIds, savingIds, ...art }: Props) {
   const item = items[0], m = metadataFor(data, item), target = resumeItem(data, items), p = data.progress[target.id], name = nameFor(data, item);
-  const insets = useSafeAreaInsets(), seasons = [...new Set(items.map(i => i.season || 1))];
-  const [season, setSeason] = useState(target.season || seasons[0]), [menu, setMenu] = useState<Menu>(null), [scrolled, setScrolled] = useState(false);
+  const insets = useSafeAreaInsets(), seasons = seasonNumbers(items);
+  const [season, setSeason] = useState(seasonOf(target)), [menu, setMenu] = useState<Menu>(null), [scrolled, setScrolled] = useState(false);
   const resume = p?.position > 0 && !p.completed, show = item.kind === 'show';
   const done = (list: Item[]) => list.length > 0 && list.every(i => data.progress[i.id]?.completed);
-  const inSeason = items.filter(i => (i.season || 1) === season);
+  const inSeason = items.filter(i => seasonOf(i) === season);
   // From the episode Play would start now to the end of its season.
-  const rest = items.filter(i => (i.season || 1) === (target.season || 1) && (i.episode || 0) >= (target.episode || 0));
+  const rest = items.filter(i => seasonOf(i) === seasonOf(target) && (i.episode || 0) >= (target.episode || 0));
   const facts = [m.year, m.genres?.slice(0, 3).join(' · '), show ? `${plural(seasons.length, 'season')} · ${plural(items.length, 'episode')}` : m.runtime ? runtimeText(m.runtime) : '', item.format].filter(Boolean).join(' · ');
   const state = (id: string) => savedIds?.has(id) ? 'saved' : savingIds?.has(id) ? 'saving' : 'idle';
   const saveLabel = (id: string) => ({ saved: 'Saved offline', saving: 'Saving…', idle: 'Save offline' })[state(id)];
@@ -54,7 +55,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
         {onRemoveSaved && <Pill label="Remove from this device" icon="trash" style={s.action} onPress={() => onRemoveSaved(items)} />}
       </View>
       {m.rating ? <View style={s.ratings}><Text style={[t.mono, { marginBottom: 6 }]}>TMDB</Text><View style={[t.row, { alignItems: 'baseline', gap: 5 }]}><Text style={s.score}>{m.rating.toFixed(1)}</Text><Text style={t.dim}>/10{m.votes ? ` · ${m.votes.toLocaleString()} votes` : ''}</Text></View></View> : null}
-      {show && <View style={{ marginTop: 28 }}><View style={t.sectionHeading}><Text accessibilityRole="header" style={t.sectionTitle}>Episodes</Text><Text style={t.dim}>{items.filter(i => data.progress[i.id]?.completed).length} / {items.length} watched</Text></View><ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -18 }} contentContainerStyle={{ gap: 8, paddingHorizontal: 18, paddingBottom: 14 }}>{seasons.map(value => <Chip key={value} small label={`Season ${value}`} selected={season === value} onPress={() => setSeason(value)} />)}</ScrollView></View>}
+      {show && <View style={{ marginTop: 28 }}><View style={t.sectionHeading}><Text accessibilityRole="header" style={t.sectionTitle}>Episodes</Text><Text style={t.dim}>{items.filter(i => data.progress[i.id]?.completed).length} / {items.length} watched</Text></View><ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -18 }} contentContainerStyle={{ gap: 8, paddingHorizontal: 18, paddingBottom: 14 }}>{seasons.map(value => <Chip key={value} small label={seasonLabel(value)} selected={season === value} onPress={() => setSeason(value)} />)}</ScrollView></View>}
     </View>
   </View>;
   const footer = <View style={{ gap: 28, marginTop: 28 }}>
@@ -78,12 +79,12 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
     {scrolled && <TopFade />}
     <View style={[s.back, { top: insets.top + 12 }]}><IconButton name="back" label="Close details" onPress={onBack} /></View>
     <Sheet visible={menu === 'watched'} onClose={() => setMenu(null)} title="Mark as watched">
-      <Row icon="check" label={done(inSeason) ? `Season ${season} as unwatched` : `Season ${season}`} detail={plural(inSeason.length, 'episode')} onPress={() => close(() => onMark(inSeason, !done(inSeason)))} />
+      <Row icon="check" label={done(inSeason) ? `${seasonLabel(season)} as unwatched` : seasonLabel(season)} detail={plural(inSeason.length, 'episode')} onPress={() => close(() => onMark(inSeason, !done(inSeason)))} />
       <Row icon="check" label={done(items) ? 'Whole show as unwatched' : 'Whole show'} detail={plural(items.length, 'episode')} last onPress={() => close(() => onMark(items, !done(items)))} />
     </Sheet>
     <Sheet visible={menu === 'save'} onClose={() => setMenu(null)} title="Save offline">
-      <Row icon="download" label={`Season ${season}`} detail={`${plural(inSeason.length, 'episode')} · saved two at a time`} last={rest.length <= 1} onPress={() => close(() => onSaveMany?.(inSeason))} />
-      {rest.length > 1 && <Row icon="download" label={`From S${target.season || 1} E${target.episode} to season end`} detail={plural(rest.length, 'episode')} last onPress={() => close(() => onSaveMany?.(rest))} />}
+      <Row icon="download" label={seasonLabel(season)} detail={`${plural(inSeason.length, 'episode')} · saved two at a time`} last={rest.length <= 1} onPress={() => close(() => onSaveMany?.(inSeason))} />
+      {rest.length > 1 && <Row icon="download" label={`From S${seasonOf(target)} E${target.episode} to season end`} detail={plural(rest.length, 'episode')} last onPress={() => close(() => onSaveMany?.(rest))} />}
     </Sheet>
     <Sheet visible={!!episode} onClose={() => setMenu(null)} title={episode ? `${episode.episode}. ${episodeTitle(episode)}` : 'Episode'}>
       {episode && <>

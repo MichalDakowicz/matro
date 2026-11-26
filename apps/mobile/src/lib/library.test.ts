@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { seasonLabel, seasonNumbers } from '../../../../packages/core/client/watch-progress.js';
 import { continueItems, groupLibrary, matchTrack, metadataFor, resumeItem, savedServes, trackKey } from '../../../../packages/core/client/library.ts';
 import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
 import { randomReelStart } from '../../../../packages/core/client/reel-start.js';
@@ -85,4 +86,11 @@ test('a saved copy serves online playback only when its single audio track and t
   assert.equal(savedServes(saved, full, { audio: { language: 'jpn', title: '' }, subtitle: { language: 'eng', title: '' } }), true);
   assert.equal(savedServes(saved, full, { audio: { language: 'eng', title: '' } }), false);
   assert.equal(savedServes(saved, { ...full, embedded: [full.embedded[1]] }, { subtitle: { language: 'eng', title: '' } }), false);
+});
+
+test('Season 0 stays its own season called Specials, and a missing season counts as season 1', () => {
+  const special = { ...episode('special', 1), season: 0 }, unnumbered = { ...episode('plain', 1), season: undefined as unknown as number };
+  assert.deepEqual(seasonNumbers([episode('two', 2), unnumbered, special]), [0, 1]);
+  assert.equal(seasonLabel(0), 'Specials');
+  assert.equal(seasonLabel(2), 'Season 2');
 });

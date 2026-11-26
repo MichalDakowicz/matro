@@ -52,8 +52,9 @@ The Vite web app imports the browser UI from `packages/browser-ui` directly. Its
 
 Playback uses the same disk-backed preparation and encoder selection as desktop. Compatible files play directly, H.264 can remux, and other streams use a tested hardware encoder or bounded software fallback. Set `MATRO_VIDEO_ENCODER`, `MATRO_PLAYBACK_CACHE_GB`, `MATRO_MAX_TRANSCODES` or custom `MATRO_FFMPEG` / `MATRO_FFPROBE` paths on the host. Native apps authenticate media with bearer sessions; web apps retain HttpOnly session cookies. A disconnected media response is discarded safely.
 
-Desktop-only features are hidden: SSH sources, preludes and
-intro/outro skip detection.
+Desktop-only features are hidden: SSH sources and preludes. Intro/outro skip
+detection also runs on the server in the background; the web player shows the
+resulting skip buttons.
 
 ## What viewers get
 

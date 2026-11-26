@@ -62,7 +62,7 @@ function register(app) {
 
   // Fixing a wrong TMDB match from the title page (the desktop's "Fix match").
   router.add('GET', '/api/admin/metadata/search', { auth: 'admin' }, async ctx => {
-    const year = /^d{4}$/.test(ctx.query.get('year') || '') ? ctx.query.get('year') : null;
+    const year = /^\d{4}$/.test(ctx.query.get('year') || '') ? ctx.query.get('year') : null;
     try { return { results: await app.tmdb.search(ctx.query.get('kind'), ctx.query.get('query'), year) }; } catch (error) { throw new HttpError(502, error.message); }
   });
   router.add('POST', '/api/admin/metadata/assign', { auth: 'admin' }, async ctx => {
