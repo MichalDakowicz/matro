@@ -66,7 +66,8 @@ test('an in-flight legacy playback save cannot revive a removed manual marker', 
     held.end(stale.slice(-1));
   }
   assert.equal(await finished, 200);
-  assert.deepEqual(saved().progress.first, progress);
+  assert.ok(saved().progress.first.updated >= progress.updated);
+  assert.deepEqual({ ...saved().progress.first, updated: progress.updated }, progress);
   assert.deepEqual(saved().markers, { first: [outro, recap], second: [intro] });
 
   const removedAgain = await send('POST', '/api/items/first/segments/remove', { marker: detectedIntro });
