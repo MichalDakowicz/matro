@@ -10,7 +10,7 @@ import { holdService, offlineNotice } from './offline-notifications';
 
 import {
   CHUNK, DOWNLOAD_SLOTS, PREFETCH_PIECES, RETRY_DELAY_MS, RetryableDownloadError, chunkRange,
-  fetchPiece, isTextCaption, offlinePath, optionalCaption, prepareDownload, retrying,
+  fetchPiece, isTextCaption, keptAudio, offlinePath, optionalCaption, prepareDownload, retrying, withChoice,
 } from '../../../../packages/core/client/offline-rules.js';
 const recordKey = (scope: string, id: string) => prefix(scope) + id;
 const decode = <T>(raw: string | null): T | null => {
@@ -19,8 +19,10 @@ const decode = <T>(raw: string | null): T | null => {
 const read = async <T>(key: string) => decode<T>(await AsyncStorage.getItem(key));
 
 type Media = { uri: string; version: string; info: Info; text: Record<string, string> };
+export type OfflineChoice = { audio: number | null; burn: number | null; quality: string };
 type RecordState = {
   id: string; title: string; size: number; have: number; complete: boolean; paused?: boolean;
+  choice?: OfflineChoice;
   state?: 'queued' | 'preparing' | 'downloading'; prepared?: number; progressAt?: number; error?: string; retryAt?: number;
   /** Saves started together share a batch, so the whole group can be paused, resumed or cancelled. */
   batch?: string; batchLabel?: string;
@@ -115,7 +117,7 @@ export function retryInterrupted(base: string, user: MatroUser) {
 }
 
 export type Batch = { id: string; label: string };
-export function saveOfflineBatch(base: string, user: MatroUser, items: Item[], nameOf: (item: Item) => string, batch?: Batch) {
+export function saveOfflineBatch(base: string, user: MatroUser, items: Item[], nameOf: (item: Item) => string, { batch, choices }: { batch?: Batch; choices?: ReadonlyMap<string, OfflineChoice> } = {}) {
   const scope = account(base, user);
   const batchInfo = batch ?? (items.length > 1 ? { id: `b${Date.now().toString(36)}`, label: items[0].group } : undefined);
   const smart = isSmartBatch(batchInfo?.id), release = holdService();
@@ -127,6 +129,7 @@ export function saveOfflineBatch(base: string, user: MatroUser, items: Item[], n
       if (jobs.has(key) || previous && (smart || isSaved(previous))) continue;
       const record: OfflineRecord = {
         have: 0, size: 0, ...previous, id: item.id, title: nameOf(item), complete: false,
+        choice: choices?.get(item.id) ?? previous?.choice,
         state: 'queued', paused: false, error: undefined, retryAt: undefined, prepared: undefined, progressAt: undefined,
         batch: batchInfo?.id ?? previous?.batch, batchLabel: batchInfo?.label ?? previous?.batchLabel,
       };
@@ -197,7 +200,7 @@ function startDownload(base: string, scope: string, record: OfflineRecord) {
     record.progressAt ??= Date.now();
     await persist();
     notice.preparing(job.prepared);
-    const preparation = await prepareDownload(signal, () => request(base, route, { signal }), async (progress, advancedAt) => {
+    const preparation = await prepareDownload(signal, () => request(base, withChoice(route, record.choice), { signal }), async (progress, advancedAt) => {
       if (progress !== undefined && (progress !== record.prepared || advancedAt !== record.progressAt)) {
         record.prepared = progress;
         record.progressAt = advancedAt;
@@ -238,7 +241,7 @@ function startDownload(base: string, scope: string, record: OfflineRecord) {
     }
     if (signal.aborted) return;
     Object.assign(record, {
-      uri: file.uri, size, have, version, info: { ...info, embedded: captions, uploaded: uploads, files: [], audio: info.audio.slice(0, 1) }, text,
+      uri: file.uri, size, have, version, info: { ...info, embedded: captions, uploaded: uploads, files: [], audio: keptAudio(info.audio, record.choice) }, text,
       error: undefined, retryAt: undefined,
     });
     // Save the path before writing so a kill or disk error leaves a removable partial file.
@@ -248,7 +251,7 @@ function startDownload(base: string, scope: string, record: OfflineRecord) {
     notice.progress(have, size); changed();
 
     const requestPiece = (start: number) => {
-      const piece = fetchPiece(send, route, preparation, chunkRange(size, start / CHUNK), signal);
+      const piece = fetchPiece(send, route, preparation, chunkRange(size, start / CHUNK), signal, record.choice);
       void piece.catch(() => {}); // A prefetched piece may fail before its turn to be written.
       return piece;
     };

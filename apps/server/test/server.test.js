@@ -505,6 +505,10 @@ test('offline media preparation is authenticated and serves versioned, seekable 
   const direct = (await call('sam', 'GET', movie)).data;
   assert.equal(direct.state, 'ready');
   assert.equal(direct.file, undefined);
+  const movieInfo = (await call('sam', 'GET', movie.replace('/offline', '/info'))).data;
+  const defaultAudio = movieInfo.audio.find(track => track.default) ?? movieInfo.audio[0];
+  const original = (await call('sam', 'GET', movie + '?quality=original&audio=' + defaultAudio.index)).data;
+  assert.deepEqual(original, direct);
   assert.equal((await call('sam', 'GET', movie + '/file?version=old')).status, 409);
   const headers = { cookie: jar.sam, range: 'bytes=0-31' };
   const first = await fetch(base + movie + '/file?version=' + direct.version, { headers });
@@ -524,6 +528,20 @@ test('offline media preparation is authenticated and serves versioned, seekable 
   const second = await fetch(base + episode + '/file?audio=' + audio + '&version=' + ready.version, { headers });
   assert.equal(second.status, 206);
   assert.match(Buffer.from(await second.arrayBuffer()).toString('latin1'), /ftyp/);
+  assert.equal((await call('sam', 'GET', episode + '?burn=' + info.embedded[0].index)).status, 400);
+  assert.equal((await call('sam', 'GET', episode + '?quality=bogus')).status, 400);
+  let small;
+  for (let i = 0; i < 100; i++) {
+    small = (await call('sam', 'GET', episode + '?audio=' + audio + '&quality=480p')).data;
+    if (small.state === 'ready') break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(small.state, 'ready');
+  assert.notEqual(small.version, ready.version);
+  assert.equal((await call('sam', 'GET', episode + '/file?audio=' + audio + '&version=' + small.version)).status, 409);
+  const sized = await fetch(base + episode + '/file?audio=' + audio + '&quality=480p&version=' + small.version, { headers });
+  assert.equal(sized.status, 206);
+  await sized.arrayBuffer();
 });
 
 test('subtitle files next to the video are listed and served as WebVTT', async () => {

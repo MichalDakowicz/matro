@@ -9,7 +9,7 @@ function createStreams({ dataDir = config.dataDir } = {}) {
   };
   // A download releases its reader between range requests. Keep the same
   // prepared generation available across those gaps and short disconnects.
-  transcode.offline = (file, info, audio) => cache.get({ file, input: file, info, offset: 0, audio, burn: null, delay: 0 }, null, { pinMs: 600000 });
+  transcode.offline = (file, info, { audio, burn, quality, copyAudio }) => cache.get({ file, input: file, info, offset: 0, audio, burn, delay: 0, quality, copyAudio }, null, { pinMs: 600000 });
   transcode.close = () => cache.close();
   transcode.supportsToneMap = () => supportsToneMap(config.ffmpeg);
   transcode.stats = () => cache.stats();

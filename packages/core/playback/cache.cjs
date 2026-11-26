@@ -84,6 +84,7 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
     if (outputChannels(options.info, options.audio, options.channels) === 6) identity.push('aac-5.1');
     if (toneMap) identity.push('hdr-sdr');
     if (options.audioDelay) identity.push(options.audioDelay);
+    if (options.copyAudio) identity.push('copy-audio');
     const key = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
     while (entries.has(key)) {
       const existing = entries.get(key);

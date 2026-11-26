@@ -17,6 +17,7 @@ import TitleScreen from './TitleScreen';
 import DownloadsScreen, { type DownloadSearch } from './DownloadsScreen';
 import FoldersScreen from './FoldersScreen';
 import OfflineScreen from './OfflineScreen';
+import OfflineChoices from './OfflineChoices';
 import MovieRequestsScreen from './MovieRequestsScreen';
 import HistoryScreen from './HistoryScreen';
 import QueueScreen from './QueueScreen';
@@ -41,6 +42,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const [requestSearch, setRequestSearch] = useState<DownloadSearch | null>(null);
   const [selected, setSelected] = useState<string | null>(null), [playing, setPlaying] = useState<{ item: Item; start?: number; queue: Item[]; saved?: SavedMedia } | null>(null);
   const [offline, setOffline] = useState(false), playRun = useRef(0);
+  const [offlineChoices, setOfflineChoices] = useState<Item[] | null>(null);
   const [refreshing, setRefreshing] = useState(false), [account, setAccount] = useState(false);
   const revision = useRef<string | undefined>(undefined), loading = useRef(false);
   const alerts = useMovieRequestAlerts(base, !offline && data?.movieRequestPushEnabled === true, data?.user.role === 'admin');
@@ -64,7 +66,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     }
     finally { loading.current = false; setRefreshing(false); }
   }, [base, onSignedOut]);
-  useEffect(() => { revision.current = undefined; void load(); }, [base]);
+  useEffect(() => { revision.current = undefined; void load(); }, [load]);
   useEffect(() => {
     let closed = false, checking = false;
     const check = async () => {
@@ -120,8 +122,11 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const continues = useMemo(() => data ? continueItems(data, allGroups) : [], [data, allGroups]);
   // Titles opened from the Saved tab show only the episodes that are on this device.
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set()), [savingIds, setSavingIds] = useState<Set<string>>(new Set()), [savedOnly, setSavedOnly] = useState(false);
+  const offlineUser = data?.user;
   useEffect(() => {
-    if (!data) return;
+    setSavedIds(new Set());
+    setOfflineChoices(null);
+    if (!offlineUser) return;
     let run = 0;
     const refresh = () => {
       const current = ++run;
@@ -259,25 +264,23 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   };
   const saveName = (item: Item) => data && item.kind !== 'show' ? nameFor(data, item) : item.title;
   useEffect(() => {
-    if (!data || offline) return;
-    const resume = () => void resumeInterrupted(base, data.user).catch(() => {});
+    if (!offlineUser || offline) return;
+    const resume = () => void resumeInterrupted(base, offlineUser).catch(() => {});
     resume();
     const subscription = AppState.addEventListener('change', state => { if (state === 'active') resume(); });
     return () => subscription.remove();
-  }, [base, offline, data?.user.id, data?.items]);
+  }, [base, offline, offlineUser]);
   const savedLink = { label: 'View', run: () => push('offline') };
-  const save = (item: Item) => {
+  const resumeSave = (item: Item) => {
     if (!data) return;
     if (offline) return notify('Reconnect to save titles for offline.');
     void saveOffline(base, data.user, item, saveName(item)).catch(error => notify(`Couldn’t save “${saveName(item)}”. ${friendly(error.message)}`));
     notify(`Saving “${saveName(item)}”. Follow it under Saved.`, savedLink);
   };
-  const saveMany = (list: Item[]) => {
-    if (!data || !list.length) return;
-    if (offline) return notify('Reconnect to save titles for offline.');
-    void saveOfflineBatch(base, data.user, list, saveName).catch(error => notify(`Couldn’t save everything. ${friendly(error.message)}`));
-    notify(`Saving ${plural(list.length, 'episode')}, two at a time. Follow them under Saved.`, savedLink);
-  };
+  const openOfflineChoices = (list: Item[]) => {
+    const pending = list.filter(item => !savedIds.has(item.id));
+    if (pending.length) setOfflineChoices(pending);
+    else Alert.alert('Already saved', 'These titles are saved on this device.');
   // Marks a season, a whole show or earlier episodes in one request (or one local change when offline).
   const markMany = async (list: Item[], done: boolean) => {
     const current = dataRef.current, todo = list.filter(item => !!current?.progress[item.id]?.completed !== done);
@@ -362,7 +365,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const screen = !data ? <View style={[s.center, { padding: 24 }]}>{refreshing ? <ActivityIndicator color={colors.text} /> : <><Text style={t.heading}>Your library</Text><Text style={[t.muted, { marginVertical: 16 }]}>{error || 'Could not load your library.'}</Text><Pill label="Try again" onPress={() => void load()} /></>}</View>
     : tab === 'offline' ? <View style={{ flex: 1, paddingTop: offline ? 44 : 0 }}><OfflineScreen {...art} data={data} offline={offline} smart={{ settings: smart, capped, onCap: capBytes => changeSmart({ ...smart, capBytes }), onStop: key => { const rules = { ...smart.rules }; delete rules[key]; changeSmart({ ...smart, rules }); } }}
       onOpenTitle={items => { setSavedOnly(true); setSelected(titleKey(items[0])); }}
-      onResume={id => { const item = data.items.find(item => item.id === id); if (item) save(item); }}
+      onResume={id => { const item = data.items.find(item => item.id === id); if (item) resumeSave(item); }}
       onRemoved={() => { if (offline) void load(); }} /></View>
     : tab === 'movie-requests' && !offline && data.movieRequestsEnabled ? top(<MovieRequestsScreen key={alerts.opened} base={base} admin={data.user.role === 'admin'} alerts={alerts} onSearch={request => { push('downloads'); setRequestSearch(request); }} />)
     : tab === 'history' ? <HistoryScreen {...art} data={data} layout={layout} onOpen={item => open(allGroups.find(items => items.some(i => i.id === item.id)) || [item])} />
@@ -386,7 +389,13 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       <Dock active={dockTab} onChange={jump} queued={data?.queue.length || 0} hidden={keyboard} />
     </View>
     {/* The title page is an overlay, so the list underneath stays mounted and keeps its scroll position. */}
-    {detail && data && <View style={s.overlay}><TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} smart={offline || savedOnly || !smartReady ? undefined : { rule: smart.rules[titleKey(detail[0])], onChange: rule => keepRule(detail, rule) }} onFollow={!offline && !savedOnly && data.metadataEnabled && data.followed && metadataFor(data, detail[0]).tmdbId ? followShow : undefined} onSearchEpisode={admin ? searchEpisode : undefined} onEditLists={!offline && !savedOnly && data.lists ? editLists : undefined} onEnqueue={enqueue} onMark={(list, done) => void markMany(list, done)} online={offline || savedOnly ? undefined : { admin, tmdb: data.metadataEnabled === true, notify, onMetadata: metadata => setData(latest => latest && { ...latest, metadata }) }} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} savingIds={savingIds} /></View>}
+    {detail && data && <View style={s.overlay}><TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} smart={offline || savedOnly || !smartReady ? undefined : { rule: smart.rules[titleKey(detail[0])], onChange: rule => keepRule(detail, rule) }} onFollow={!offline && !savedOnly && data.metadataEnabled && data.followed && metadataFor(data, detail[0]).tmdbId ? followShow : undefined} onSearchEpisode={admin ? searchEpisode : undefined} onEditLists={!offline && !savedOnly && data.lists ? editLists : undefined} onEnqueue={enqueue} onMark={(list, done) => void markMany(list, done)} online={offline || savedOnly ? undefined : { admin, tmdb: data.metadataEnabled === true, notify, onMetadata: metadata => setData(latest => latest && { ...latest, metadata }) }} onSave={offline || savedOnly ? undefined : item => openOfflineChoices([item])} onSaveMany={offline || savedOnly ? undefined : openOfflineChoices} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} savingIds={savingIds} /></View>}
+    {!offline && data && offlineChoices && <OfflineChoices base={base} items={offlineChoices} preferred={data.preferences.tracks?.[trackKey(offlineChoices[0])]} close={() => setOfflineChoices(null)}
+      save={async choices => {
+        await saveOfflineBatch(base, data.user, offlineChoices, saveName, { choices });
+        setOfflineChoices(null);
+        notify(`Saving ${plural(offlineChoices.length, 'title')}. Follow progress under Saved.`, savedLink);
+      }} />}
     <Grain />
     <Toast notice={notice} bottom={toastBottom} onDismiss={dismiss} />
     <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} requests={requestsLabel} onGo={go} onRefresh={() => void load()} onAbout={() => setAbout(true)} onServer={onChangeServer} onSignOut={onSignedOut} onTrackDefaults={changeTrackDefaults} />

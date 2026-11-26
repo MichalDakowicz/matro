@@ -52,11 +52,11 @@ export function createStore(backend) {
   function enqueue(items) {
     return backend.transaction('readwrite', async tx => {
       const records = [], queuedAt = Date.now();
-      for (const [index, { id, title }] of items.entries()) {
+      for (const [index, { id, title, choice }] of items.entries()) {
         const key = metaKey(id), previous = await tx.get(key);
         if (previous?.complete) continue;
         const record = previous?.requestId && resumable(previous) && !previous.error ? previous
-          : { ...previous, id, title, state: 'queued', error: null, requestId: newRequestId(), queuedAt, order: index };
+          : { ...previous, id, title, choice: choice ?? previous?.choice, state: 'queued', error: null, requestId: newRequestId(), queuedAt, order: index };
         if (record !== previous) await tx.set(key, record);
         records.push(record);
       }

@@ -34,7 +34,7 @@ export function reconcileSmart(base: string, data: Library, settings: SmartSetti
     for (const group of groupLibrary(plan.save)) {
       if (!active()) return { capped: 0 };
       const batch = { id: `smart:${titleKey(group[0])}`, label: `Keeping ${group[0].group} ready` };
-      await saveOfflineBatch(base, data.user, group, item => item.title, batch);
+      await saveOfflineBatch(base, data.user, group, item => item.title, { batch });
     }
     return { capped: plan.capped };
   }).finally(() => { if (running.get(scope) === pending) running.delete(scope); });

@@ -32,7 +32,7 @@ export default function OfflineScreen({ data, offline, smart, onResume, onOpenTi
     refresh();
     const unsubscribe = watchOffline(refresh);
     return () => { run++; unsubscribe(); };
-  }, [base, user.id, user.username]);
+  }, [base, user.accountKey, user.id, user.username]);
   const free = (() => { try { return Paths.availableDiskSpace; } catch { return 0; } })();
   const active = new Map(jobs.map(job => [job.id, job])), stored = new Map(records.map(record => [record.id, record]));
   const { done, saved, unavailable, bytes } = useMemo(() => {

@@ -44,7 +44,6 @@ function harness(t: any, directPlay = false, savedAtOpen = false, markers: { typ
     '../../../../packages/core/client/subtitles': { parseVtt },
     './diskBuffer': { downloadPlayback: (_: any, __: any, ready: any) => { const job = { ready, cancelled: false }; downloads.push(job); return () => { job.cancelled = true; }; } },
     '../lib/storage': { recoveryScope: () => 'test', progressRecovery: { write: async () => {} }, loadQuality: async () => 'original', saveQuality: async () => {} },
-    '../../../../packages/core/client/quality.js': { qualityOptions: () => [] },
     '../lib/offline': { savedTitle: async () => available ? localCopy : undefined },
   };
   const context = { exports: {} as any, require: (name: string) => { assert.ok(modules[name], name); return modules[name]; },

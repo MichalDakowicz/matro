@@ -1,4 +1,4 @@
-import { DOWNLOAD_SLOTS, RetryableDownloadError, fetchPiece, isTextCaption, offlinePath, optionalCaption, prepareDownload, retrying } from '../../../packages/core/client/offline-rules.js';
+import { DOWNLOAD_SLOTS, RetryableDownloadError, fetchPiece, isTextCaption, keptAudio, offlinePath, optionalCaption, prepareDownload, retrying, withChoice } from '../../../packages/core/client/offline-rules.js';
 import { createStore, newRequestId, resumable } from './offline-store.js';
 import { ApiError, api } from './http.js';
 import { copyRecoveryScope, copyStoredScope, scopeRange } from '../../../packages/browser-ui/recovery.js';
@@ -112,7 +112,7 @@ export function createOffline(user, { inspect, subtitlePath, sendSubtitle } = {}
   let running = 0, stopped = false;
 
   async function runJob(job) {
-    const { item, controller: { signal } } = job, { id, requestId } = item;
+    const { item, controller: { signal } } = job, { id, requestId, choice } = item;
     const current = await updateJob(item, record => ({ ...record, state: 'preparing', error: null }));
     if (!current) {
       if ((await store.meta(id))?.complete) return;
@@ -123,7 +123,7 @@ export function createOffline(user, { inspect, subtitlePath, sendSubtitle } = {}
     const root = offlinePath(id);
     try {
       let info = await retrying(signal, () => inspect(id, { signal, deadline: true }));
-      const status = await prepareDownload(signal, () => api('GET', root, undefined, { signal, deadline: true }), progress => {
+      const status = await prepareDownload(signal, () => api('GET', withChoice(root, choice), undefined, { signal, deadline: true }), progress => {
         job.prepared = progress ?? null; emit();
       }, { stallWithoutProgress: false });
       job.prepared = null;
@@ -134,9 +134,10 @@ export function createOffline(user, { inspect, subtitlePath, sendSubtitle } = {}
         const caption = await optionalCaption(requestSignal => send(subtitlePath(id, track.index), {}, requestSignal), signal);
         if (caption !== undefined) { texts[track.index] = caption; tracks.push(track); }
       }
-      info = { ...info, audio: info.audio.slice(0, 1), subtitles: tracks };
+      const burnedSubtitle = info.subtitles.find(track => track.index === choice?.burn);
+      info = { ...info, audio: keptAudio(info.audio, choice), subtitles: tracks, burnedSubtitle, offlineQuality: choice?.quality || 'original', qualities: [] };
       let first = true;
-      const fetchRange = async (start, end) => new Blob([await fetchPiece(send, root, status, { start, end }, signal)]);
+      const fetchRange = async (start, end) => new Blob([await fetchPiece(send, root, status, { start, end }, signal, choice)]);
       await store.download({ id, ...status, info, subtitles: texts, title: item.title, requestId, fetchRange, signal,
         onProgress(have, size) {
           if (first) { first = false; job.started = Date.now(); job.initial = have; }

@@ -18,6 +18,10 @@ async function until(fn) { for (let i = 0; i < 500; i++) { if (fn()) return; awa
 test('compatible H.264 is remuxed; precise seeks and bitmap subtitles require encoding with bounded CPU threads', () => {
   const options = { input: 'movie.mkv', info: { video: { codec: 'h264', pixelFormat: 'yuv420p' } } };
   assert.ok(argumentsFor(options).includes('copy'));
+  const offline = argumentsFor({ ...options, audio: 2, copyAudio: true });
+  assert.equal(offline[offline.indexOf('-c:v') + 1], 'copy');
+  assert.equal(offline[offline.indexOf('-c:a') + 1], 'copy');
+  assert.ok(offline.includes('0:2'));
   assert.ok(argumentsFor({ ...options, offset: 20 }).includes('libx264'));
   assert.ok(argumentsFor({ ...options, burn: 2 }).includes('-filter_complex'));
   assert.equal(argumentsFor({ ...options, offset: 20 }).filter(x => x === '-threads').length, 2);

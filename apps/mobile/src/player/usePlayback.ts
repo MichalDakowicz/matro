@@ -11,8 +11,6 @@ import { qualityOptions } from '../../../../packages/core/client/quality.js';
 import { savedTitle, type SavedMedia } from '../lib/offline';
 import { describePlayback, savedPlayback } from '../../../../packages/core/client/playback-info.js';
 
-// Embedded subtitle streams plus the ones people uploaded (their indexes start at 10000).
-
 export function usePlayback({ base, data, item, initialPosition, saved, offline = false, onEnd }: { base: string; data: Library; item: Item; initialPosition?: number; saved?: SavedMedia; offline?: boolean; onEnd: () => void }) {
   const initial = initialPosition ?? (data.progress[item.id]?.completed ? 0 : data.progress[item.id]?.position || 0);
   const pref = data.preferences.tracks?.[trackKey(item)];

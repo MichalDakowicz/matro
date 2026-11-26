@@ -82,7 +82,7 @@ function setup(entries = new Map<string, string>(), files = new Map<string, numb
   };
   const load = <T>(code: string) => {
     const context = { exports: {}, require: (name: string) => { assert.ok(modules[name], name); return modules[name]; },
-      setTimeout, clearTimeout, AbortController, Date, Error, Uint8Array,
+      setTimeout, clearTimeout, AbortController, URLSearchParams, Date, Error, Uint8Array,
     };
     vm.runInNewContext(code, context);
     return context.exports as T;
@@ -132,12 +132,12 @@ test('smart cleanup keeps manual saves and does not stop an active smart downloa
   const [manual, smart, active] = items('manual', 'smart', 'active');
   const batch = { id: 'smart:show', label: 'Show' };
   await offline.saveOffline(base, user, manual, manual.title);
-  await offline.saveOfflineBatch(base, user, [smart], nameOf, batch);
+  await offline.saveOfflineBatch(base, user, [smart], nameOf, { batch });
   await until(async () => (await records()).filter(record => record.complete).length === 2 && !fixture.holds);
   fixture.request = (_, { signal } = {}) => new Promise((_, reject) => {
     signal!.addEventListener('abort', () => reject(new Error('Cancelled.')));
   });
-  await offline.saveOfflineBatch(base, user, [active], nameOf, batch);
+  await offline.saveOfflineBatch(base, user, [active], nameOf, { batch });
   await offline.removeOffline(base, user, manual.id, { smartOnly: true });
   await offline.removeOffline(base, user, active.id, { smartOnly: true });
   await offline.removeOffline(base, user, smart.id, { smartOnly: true });
@@ -145,6 +145,30 @@ test('smart cleanup keeps manual saves and does not stop an active smart downloa
   assert.equal(offline.activeDownloads(base, user)[0]?.id, active.id);
   assert.equal(await offline.savedTitle(base, user, smart.id), undefined);
   await offline.removeOffline(base, user, active.id);
+});
+
+test('the chosen offline variant survives a pause and is used for preparation and media ranges', async () => {
+  const { fixture, offline, records } = setup();
+  const [item] = items('one');
+  const choice = { audio: 2, burn: 3, quality: '480p' };
+  let attempt = 0;
+  fixture.request = async (route, { signal } = {}) => {
+    const query = new URL(route, base).searchParams;
+    assert.deepEqual(Object.fromEntries(query), { audio: '2', burn: '3', quality: '480p' });
+    if (attempt++ === 0) await new Promise((_, reject) => signal!.addEventListener('abort', () => reject(new Error('Cancelled.'))));
+    return prepared;
+  };
+  fixture.fetch = async url => {
+    const query = new URL(url).searchParams;
+    assert.deepEqual(Object.fromEntries(query), { audio: '2', burn: '3', quality: '480p', version: prepared.version });
+    return media();
+  };
+  await offline.saveOfflineBatch(base, user, [item], nameOf, { choices: new Map([[item.id, choice]]) });
+  await until(() => attempt === 1);
+  await offline.pauseOffline(base, user, item.id);
+  assert.equal(JSON.stringify((await records())[0].choice), JSON.stringify(choice));
+  await offline.saveOffline(base, user, item, item.title);
+  await until(async () => (await records()).some(record => record.complete));
 });
 
 test('a stalled caption and a 502 or stalled range retry before completing', async t => {
