@@ -16,7 +16,7 @@ export function profileButton(session, open) {
   return button;
 }
 
-export function openProfile({ session, getState, save, signOut, openSaved }) {
+export function openProfile({ session, getState, forgetTracks, signOut, openSaved }) {
   const layer = h('div', { class: 'web-layer', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Profile' });
   const close = () => { layer.remove(); document.removeEventListener('keydown', onKey, true); document.body.classList.remove('web-layer-open'); };
   const onKey = e => { if (e.key === 'Escape' && !document.querySelector('dialog[open]')) { e.stopPropagation(); close(); } };
@@ -30,7 +30,7 @@ export function openProfile({ session, getState, save, signOut, openSaved }) {
   const stats = h('div', { class: 'web-stats' }, [[done, 'Watched'], [going, 'In progress'], [state?.items.length ?? 0, 'In the library'], [remembered, 'Remembered dub / subtitle choices']].map(([n, l]) => h('div', {}, h('strong', {}, String(n)), h('span', {}, l))));
   const forget = h('button', { class: 'pill small', type: 'button', disabled: !remembered, onclick: async () => {
     if (!confirm('Forget the dub and subtitle choices Matro remembered for each show and film?')) return;
-    delete state.preferences.tracks; await save(); forget.disabled = true; say('Forgot remembered tracks. They will be picked up again as you watch.');
+    await forgetTracks(); delete state.preferences.tracks; forget.disabled = true; say('Forgot remembered tracks. They will be picked up again as you watch.');
   } }, 'Forget them');
 
   const added = h('div', { class: 'sources' });

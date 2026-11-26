@@ -17,8 +17,11 @@ export function candidates(input: string): string[] {
 
 export class ServerError extends Error {
   status?: number;
-  constructor(message: string, status?: number) { super(message); this.status = status; }
+  code?: string;
+  constructor(message: string, status?: number, code?: string) { super(message); this.status = status; this.code = code; }
 }
+/** A 401, or the server saying the signed-in account differs from the one this client opened. Other 409s are ordinary refusals. */
+export const accountChanged = (error: unknown) => error instanceof ServerError && (error.status === 401 || error.status === 409 && error.code === 'account-changed');
 
 let tokenStorage: { get: (base: string) => Promise<string | null>; set: (base: string, token: string | null) => Promise<void> } | null = null;
 export function configureTokenStorage(storage: NonNullable<typeof tokenStorage>) { tokenStorage = storage; }
@@ -63,10 +66,11 @@ export async function fetchWithDeadline<R, T>(
   }
 }
 
-export async function request(base: string, path: string, init: { method?: string; body?: unknown; signal?: AbortSignal } = {}, ms = 15000) {
+export async function request(base: string, path: string, init: { method?: string; body?: unknown; signal?: AbortSignal; accountId?: number } = {}, ms = 15000) {
   const headers = {
     'x-matro': '1',
     'x-matro-client': 'native',
+    ...(init.accountId === undefined ? {} : { 'x-matro-account': String(init.accountId) }),
     ...await mediaHeaders(base),
     ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
   };
@@ -82,7 +86,7 @@ export async function request(base: string, path: string, init: { method?: strin
       if (!res.ok) throw new ServerError(`Server answered ${res.status}.`, res.status);
       throw error;
     });
-    if (!res.ok) throw new ServerError(json?.error ?? `Server answered ${res.status}.`, res.status);
+    if (!res.ok) throw new ServerError(json?.error ?? `Server answered ${res.status}.`, res.status, json?.code);
     return json;
   }, { signal: init.signal, requestMs: ms, bodyMs: ms });
   if (json?.token) await tokenStorage?.set(base, json.token);
@@ -155,11 +159,12 @@ export type ScannerStatus = { ready: number; total: number; message: string; com
 export type Library = { markers?: Record<string, Segment[]>; scanner?: ScannerStatus; user: MatroUser; items: Item[]; folders?: string[]; progress: Record<string, Progress>; queue: string[]; preferences: Preferences; metadata: Record<string, Metadata>; catalogRevision?: string; movieRequestsEnabled?: boolean; movieRequestPushEnabled?: boolean };
 export type Track = { index: number; language: string; title: string; bitmap?: boolean; text?: boolean; codec?: string; channels?: number; default?: boolean };
 export type Info = { duration: number; directPlay: boolean; video?: { codec: string; height: number; width: number } | null; chapters?: { start: number; title: string }[]; audio: Track[]; embedded: Track[]; uploaded: { id: number; language: string; name: string }[] };
-export const library = async (base: string): Promise<Library> => { await ensureNativeSession(base); return request(base, '/api/library'); };
+export const library = async (base: string, accountId?: number): Promise<Library> => { await ensureNativeSession(base); return request(base, '/api/library', { accountId }); };
 export const inspect = (base: string, id: string, signal?: AbortSignal): Promise<Info> => request(base, `/api/items/${encodeURIComponent(id)}/info`, { signal });
-export const saveProgress = (base: string, id: string, entry: Progress) => request(base, '/api/state', { method: 'PUT', body: { progress: { [id]: entry } } });
-export const changeProgress = (base: string, id: string, body: { dismiss: true } | { completed: boolean; checkpoint?: Progress }): Promise<{ progress: Record<string, Progress> }> =>
-  request(base, `/api/items/${encodeURIComponent(id)}/progress`, { method: 'PATCH', body });
+export const writeWatchState = (base: string, accountId: number, body: { progress?: Record<string, Progress>; queueChange?: { add: string[]; remove: string[] }; preferences?: Preferences }): Promise<{ progress?: Record<string, Progress> }> =>
+  request(base, '/api/state', { method: 'PUT', body, accountId });
+export const changeProgress = (base: string, accountId: number, id: string, body: { dismiss: true; dismissedAt?: number } | { completed: boolean; checkpoint?: Progress }): Promise<{ progress: Record<string, Progress> }> =>
+  request(base, `/api/items/${encodeURIComponent(id)}/progress`, { method: 'PATCH', body, accountId });
 export function playbackPath(id: string, info: Info, position: number, audio: number | null, burn: number | null, delay = 0, session?: string) {
   const root = `/api/items/${encodeURIComponent(id)}`;
   const q = new URLSearchParams();

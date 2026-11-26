@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 import { useVideoPlayer } from 'expo-video';
-import { inspect, mediaHeaders, playbackPath, playbackState, request, saveProgress, stopPlayback, type Info, type Item, type Library, type Preferences, type Progress, type Track } from '../lib/server';
+import { inspect, mediaHeaders, playbackPath, playbackState, request, saveProgress, stopPlayback, updateWatchOptions, type Info, type Item, type Library, type Progress, type Track, type TrackPreference } from '../lib/server';
 import { matchTrack, titleKey, trackKey } from '../../../../packages/core/client/library';
 import { isContinueDismissed } from '../../../../packages/core/client/watch-progress.js';
 import { parseVtt, type Cue } from '../../../../packages/core/client/subtitles';
@@ -16,7 +16,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   const [savedCopy, setSavedCopy] = useState(saved);
   const [audio, setAudio] = useState<number | null>(null), [subtitle, setSubtitle] = useState<number | null>(null), [delay, setDelayValue] = useState(pref?.delay || 0), [subtitleSize, setSubtitleSizeValue] = useState(pref?.size || 1), [rate, setRate] = useState(1);
   const [session] = useState(() => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
-  const choices = useRef({ audio, subtitle, delay, size: subtitleSize }), prefs = useRef<Preferences>(data.preferences), dataRef = useRef(data), infoRef = useRef<Info | null>(null), endRef = useRef(onEnd);
+  const choices = useRef({ audio, subtitle, delay, size: subtitleSize }), prefChanges = useRef<TrackPreference>({}), dataRef = useRef(data), infoRef = useRef<Info | null>(null), endRef = useRef(onEnd);
   const sourceReady = useRef(false), advanced = useRef(false), sampledPlayback = useRef(false), playbackStart = useRef<number | null>(null);
   const pendingStart = useRef<{ time: number; since: number } | null>(null);
   const replacement = useRef<Promise<void>>(Promise.resolve()), localSource = useRef(false);
@@ -38,13 +38,13 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     let active = true;
     const poll = async () => { try { const update = await request(base, '/api/segments'); if (active) setMarkers(update.markers[item.id] || []); } catch { /* Keep the last known markers offline. */ } };
     void poll();
-    if (item.kind === 'show') void request(base, `/api/items/${item.id}/segments`, { method: 'POST', body: {} }, 600000).catch(() => {});
+    if (item.kind === 'show') void request(base, `/api/items/${item.id}/segments`, { method: 'POST', body: {}, accountId: dataRef.current.user.id }, 600000).catch(() => {});
     const timer = setInterval(poll, 5000);
     return () => { active = false; clearInterval(timer); };
   }, [base, item.id, item.kind, offline]);
-  const savedEntry = useRef<Progress | null>(null);
+  const savedEntry = useRef<Progress | null>(null), confirmedEntry = useRef<Progress | null>(null);
   const persist = useCallback(async (sync = true) => {
-    const { items, progress } = dataRef.current;
+    const { items, progress, user } = dataRef.current;
     const duration = infoRef.current?.duration || 0, previous = progress[item.id];
     if (!duration || (!at.current && !previous?.position)) return;
     const waitingForPlayback = item.kind === 'show' && !sampledPlayback.current;
@@ -54,12 +54,13 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       ? (previous?.hidden || isContinueDismissed(items.filter(i => i.kind === 'show' && titleKey(i) === titleKey(item)), progress) || undefined)
       : false;
     const reachedEnd = !waitingForPlayback && at.current >= duration - Math.min(10, duration * .05);
-    const entry = { ...previous, position, duration, hidden, completed: (!rewatching.current && !!previous?.completed) || reachedEnd, updated: Date.now() };
-    if (savedEntry.current?.position === entry.position && savedEntry.current.duration === entry.duration && savedEntry.current.completed === entry.completed && savedEntry.current.hidden === hidden) entry.updated = savedEntry.current.updated;
+    let entry: Progress = { ...previous, position, duration, hidden, completed: (!rewatching.current && !!previous?.completed) || reachedEnd, updated: Date.now() };
+    if (savedEntry.current?.position === entry.position && savedEntry.current.duration === entry.duration && savedEntry.current.completed === entry.completed && savedEntry.current.hidden === hidden) entry = savedEntry.current;
+    if (confirmedEntry.current === entry) return;
     savedEntry.current = entry;
-    try { await progressRecovery.write(recoveryScope(base, dataRef.current.user), item.id, entry); }
+    try { await progressRecovery.write(recoveryScope(base, user), item.id, entry); }
     catch { if (mounted.current) setError('Could not save playback recovery on this device. Check available storage.'); }
-    if (sync && !offlineRef.current) await saveProgress(base, item.id, entry);
+    if (sync && !offlineRef.current && (await saveProgress(base, item.id, entry, user))?.[item.id]) confirmedEntry.current = entry;
   }, [base, item]);
   // A download may have finished after playback was opened.
   const trySavedCopy = useCallback(async (run: number) => {
@@ -70,14 +71,21 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     setSavedCopy(copy);
     return true;
   }, [base, item.id, savedCopy]);
-  const remember = useCallback(() => {
-    const details = infoRef.current; if (!details) return;
-    const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true }))];
-    const choice = (track?: Track) => track ? { language: track.language, title: track.title, codec: track.codec, channels: track.channels } : null;
-    prefs.current = { ...prefs.current, tracks: { ...prefs.current.tracks, [trackKey(item)]: { audio: choice(details.audio.find(t => t.index === choices.current.audio)), subtitle: choice(tracks.find(t => t.index === choices.current.subtitle)), off: choices.current.subtitle === null, delay: choices.current.delay, size: choices.current.size } } };
+  const flushPreferences = useCallback(() => {
+    prefTimer.current = null;
+    const changes = prefChanges.current;
+    prefChanges.current = {};
+    if (!offline && Object.keys(changes).length) void updateWatchOptions(base, dataRef.current.user, { preferences: { tracks: { [trackKey(item)]: changes } } }).catch(() => {});
+  }, [base, item, offline]);
+  const remember = (patch: TrackPreference) => {
+    const preferences = dataRef.current.preferences, key = trackKey(item);
+    preferences.tracks = { ...preferences.tracks, [key]: { ...preferences.tracks?.[key], ...patch } };
+    if (offline) return;
+    Object.assign(prefChanges.current, patch);
     if (prefTimer.current) clearTimeout(prefTimer.current);
-    prefTimer.current = setTimeout(() => { void request(base, '/api/state', { method: 'PUT', body: { preferences: prefs.current } }).catch(() => {}); }, 400);
-  }, [base, item.id]);
+    prefTimer.current = setTimeout(flushPreferences, 400);
+  };
+  const choice = (track?: Track) => track ? { language: track.language, title: track.title, codec: track.codec, channels: track.channels } : null;
   const loadText = useCallback(async (index: number | null) => {
     const run = ++subtitleRun.current; cues.current = []; setCaption('');
     if (index === null || infoRef.current?.embedded.find(t => t.index === index)?.bitmap) return;
@@ -151,7 +159,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
         const details = savedCopy?.info || await inspect(base, item.id); if (!mounted.current || run !== generation.current) return;
         infoRef.current = details; setInfo(details);
         const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true }))];
-        const choice = prefs.current.tracks?.[trackKey(item)];
+        const choice = dataRef.current.preferences.tracks?.[trackKey(item)];
         const a = matchTrack(details.audio, choice?.audio)?.index ?? details.audio.find(t => t.default)?.index ?? details.audio[0]?.index ?? null;
         const sub = choice?.off ? null : matchTrack(tracks, choice?.subtitle)?.index ?? null;
         choices.current = { ...choices.current, audio: a, subtitle: sub }; setAudio(a); setSubtitle(sub);
@@ -167,10 +175,10 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       mounted.current = false; generation.current++; subtitleRun.current++;
       cancelDownload.current?.(); cancelDownload.current = null; disk.current = null;
       if (bitmapTimer.current) clearTimeout(bitmapTimer.current);
-      if (prefTimer.current) { clearTimeout(prefTimer.current); void request(base, '/api/state', { method: 'PUT', body: { preferences: prefs.current } }).catch(() => {}); }
+      if (prefTimer.current) { clearTimeout(prefTimer.current); flushPreferences(); }
       void persist().catch(() => {});
     };
-  }, [base, item.id, load, loadText, persist, savedCopy, trySavedCopy]);
+  }, [base, item.id, load, loadText, persist, flushPreferences, savedCopy, trySavedCopy]);
   const reportsActivity = !offline && !savedCopy;
   useEffect(() => {
     if (reportsActivity) return () => { void stopPlayback(base, session).catch(() => {}); };
@@ -249,19 +257,21 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     void persist().catch(() => {});
   }, [player, load, persist]);
   const toggle = () => { const shouldPlay = replacing.current ? !intent.current : !player.playing; intent.current = shouldPlay; setPlaying(shouldPlay); moved.current = Date.now(); if (shouldPlay && !replacing.current) player.play(); else { player.pause(); void persist().catch(() => {}); } };
-  const chooseAudio = (index: number) => { choices.current.audio = index; setAudio(index); remember(); void load(at.current); };
+  const chooseAudio = (index: number) => { choices.current.audio = index; setAudio(index); remember({ audio: choice(infoRef.current?.audio.find(t => t.index === index)) }); void load(at.current); };
   const chooseSubtitle = (index: number | null) => {
     const previousBurn = infoRef.current?.embedded.find(t => t.index === choices.current.subtitle && t.bitmap)?.index ?? null;
-    choices.current.subtitle = index; setSubtitle(index); remember();
+    choices.current.subtitle = index; setSubtitle(index);
+    const sidecar = infoRef.current?.uploaded.find(t => 10000 + t.id === index);
+    remember({ subtitle: sidecar ? { title: sidecar.name, language: sidecar.language } : choice(infoRef.current?.embedded.find(t => t.index === index)), off: index === null });
     const nextBurn = infoRef.current?.embedded.find(t => t.index === index && t.bitmap)?.index ?? null;
     void loadText(index).catch(e => setError(e.message));
     if (previousBurn !== nextBurn) void load(at.current);
   };
   const setDelay = (value: number) => {
-    const next = Math.max(-60, Math.min(60, Math.round(value * 10) / 10)); choices.current.delay = next; setDelayValue(next); remember();
+    const next = Math.max(-60, Math.min(60, Math.round(value * 10) / 10)); choices.current.delay = next; setDelayValue(next); remember({ delay: next });
     if (infoRef.current?.embedded.find(t => t.index === choices.current.subtitle)?.bitmap) { if (bitmapTimer.current) clearTimeout(bitmapTimer.current); bitmapTimer.current = setTimeout(() => void load(at.current), 400); }
   };
-  const setSubtitleSize = (value: number) => { choices.current.size = value; setSubtitleSizeValue(value); remember(); };
+  const setSubtitleSize = (value: number) => { choices.current.size = value; setSubtitleSizeValue(value); remember({ size: value }); };
   const changeSpeed = () => { const values = [.75, 1, 1.25, 1.5, 2], next = values[(values.indexOf(rateRef.current) + 1) % values.length]; rateRef.current = next; player.playbackRate = next; setRate(next); };
   return { player, info, markers, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, subtitleSize, rate, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setSubtitleSize, changeSpeed, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
 }

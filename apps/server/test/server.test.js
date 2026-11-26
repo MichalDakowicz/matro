@@ -389,9 +389,11 @@ test('dismissing a show from an older client preserves current playback and othe
     [movie]: { position: 20, duration: 100, completed: false, updated: 400 } };
   const put = body => call('eve', 'PUT', '/api/state', body);
   assert.equal((await put({ progress: older, queue: [movie, first], preferences: { autoplay: false } })).status, 200);
+  const movieProgress = (await catalog('eve')).progress[movie];
   const advanced = { [first]: { position: 100, duration: 100, completed: true, updated: 500 },
     [second]: { position: 35, duration: 100, completed: false, updated: 510 } };
-  assert.equal((await put({ progress: advanced })).status, 200);
+  const saved = await put({ progress: advanced });
+  assert.equal(saved.status, 200);
 
   const route = `/api/items/${second}/progress`;
   assert.equal((await call(null, 'PATCH', route, { dismiss: true })).status, 401);
@@ -399,45 +401,100 @@ test('dismissing a show from an older client preserves current playback and othe
   const otherBefore = await catalog('sam');
   const dismissed = await call('eve', 'PATCH', route, { dismiss: true });
   assert.equal(dismissed.status, 200);
-  const hidden = { [first]: { ...advanced[first], hidden: true }, [second]: { ...advanced[second], hidden: true } };
+  const hidden = Object.fromEntries(Object.entries(saved.data.progress).map(([id, entry]) => [id, { ...entry, hidden: true }]));
   assert.deepEqual(dismissed.data.progress, hidden);
 
   // A late full save from either client cannot undo the dismissal.
   await put({ progress: older });
   await put({ progress: advanced });
   const after = await catalog('eve');
-  assert.deepEqual(after.progress, { ...hidden, [movie]: older[movie] });
+  assert.deepEqual(after.progress, { ...hidden, [movie]: movieProgress });
   assert.deepEqual(after.queue, [movie, first]);
-  assert.deepEqual(after.preferences, { autoplay: false });
+  assert.deepEqual(after.preferences, { autoplay: false, volume: 0.72 });
   assert.deepEqual((await catalog('sam')).progress, otherBefore.progress);
 
   const pausedSeek = { ...advanced[second], position: 37, updated: 515 };
-  await put({ progress: { [second]: pausedSeek } });
-  assert.deepEqual((await catalog('eve')).progress[second], { ...pausedSeek, hidden: true });
+  const paused = (await put({ progress: { [second]: pausedSeek } })).data.progress[second];
+  assert.deepEqual({ ...paused, updated: 515 }, { ...pausedSeek, hidden: true });
+  assert.deepEqual((await catalog('eve')).progress[second], paused);
 
   const resumed = { ...advanced[second], position: 40, hidden: false, updated: 520 };
-  await put({ progress: { [second]: resumed } });
-  assert.deepEqual((await catalog('eve')).progress[second], resumed);
+  const resumedProgress = (await put({ progress: { [second]: resumed } })).data.progress[second];
+  assert.deepEqual({ ...resumedProgress, updated: 520 }, resumed);
+  assert.deepEqual((await catalog('eve')).progress[second], resumedProgress);
 
   assert.equal((await call('eve', 'PATCH', route, { dismiss: true })).status, 200);
   const staleToggle = await call('eve', 'PATCH', `/api/items/${first}/progress`, { completed: false, checkpoint: older[first] });
   assert.equal(staleToggle.status, 200);
-  assert.deepEqual({ ...staleToggle.data.progress[first], updated: 500 }, { ...hidden[first], completed: false });
+  assert.deepEqual({ ...staleToggle.data.progress[first], updated: hidden[first].updated }, { ...hidden[first], completed: false });
   const recovered = { position: 55, duration: 100, hidden: false, updated: 530 };
   const newerToggle = await call('eve', 'PATCH', route, { completed: true, checkpoint: recovered });
   assert.equal(newerToggle.status, 200);
   assert.deepEqual({ ...newerToggle.data.progress[second], updated: 530 }, { ...recovered, completed: true, hidden: true });
-  assert.deepEqual((await catalog('eve')).progress, { ...staleToggle.data.progress, ...newerToggle.data.progress, [movie]: older[movie] });
+  assert.deepEqual((await catalog('eve')).progress, { ...staleToggle.data.progress, ...newerToggle.data.progress, [movie]: movieProgress });
 
   // A stale client can seek in an episode with no existing progress row.
   assert.equal((await join('seek-viewer', 'seek-viewer', 'viewer-pass-3')).status, 200);
   const saveFirst = await call('seek-viewer', 'PUT', '/api/state', { progress: { [first]: advanced[first] } });
   assert.equal(saveFirst.status, 200);
   const dismissFirst = await call('seek-viewer', 'PATCH', `/api/items/${first}/progress`, { dismiss: true });
-  assert.deepEqual(dismissFirst.data.progress, { [first]: hidden[first] });
+  assert.deepEqual(dismissFirst.data.progress, { [first]: { ...saveFirst.data.progress[first], hidden: true } });
   const saveSeek = await call('seek-viewer', 'PUT', '/api/state', { progress: { [second]: pausedSeek, [movie]: older[movie] } });
   assert.equal(saveSeek.status, 200);
-  assert.deepEqual((await catalog('seek-viewer')).progress, { [first]: hidden[first], [second]: { ...pausedSeek, hidden: true }, [movie]: older[movie] });
+  assert.equal(saveSeek.data.progress[second].hidden, true);
+  assert.deepEqual((await catalog('seek-viewer')).progress, { ...dismissFirst.data.progress, ...saveSeek.data.progress });
+});
+
+test('watch state uses account-bound operations and ignores invalid or stale checkpoints', async () => {
+  assert.equal((await join('state-viewer', 'state-viewer', 'viewer-pass-4')).status, 200);
+  const { user, groups } = await catalog('state-viewer');
+  const [first, second] = groups[1];
+  const movie = groups[0][0].id;
+  const headers = { 'x-matro-account': String(user.id) };
+  const put = body => call('state-viewer', 'PUT', '/api/state', body, headers);
+  const mismatch = await call('eve', 'PUT', '/api/state', { queue: [] }, headers);
+  assert.equal(mismatch.status, 409);
+  assert.equal(mismatch.data.code, 'account-changed');
+  assert.equal((await call('eve', 'PATCH', `/api/items/${first.id}/progress`, { dismiss: true }, headers)).status, 409);
+  assert.equal((await call('eve', 'GET', '/api/library', undefined, headers)).status, 409);
+
+  await put({ queueChange: { add: [movie, first.id], remove: [] }, preferences: { autoplay: false, tracks: { show: { off: true }, other: { delay: 1 } } } });
+  await put({ queueChange: { add: [second.id], remove: [first.id] }, preferences: { tracks: { show: { delay: 2 } } } });
+  await call('state-viewer', 'PUT', '/api/state', { progress: {}, queue: [first.id], preferences: { volume: .2 } });
+  const options = await catalog('state-viewer');
+  assert.deepEqual(options.queue, [movie, second.id]);
+  assert.deepEqual(options.preferences, { autoplay: false, volume: .2, tracks: { show: { off: true, delay: 2 }, other: { delay: 1 } } });
+  const { queueChange } = await import('../../../packages/core/client/watch-progress.js');
+  await put({ queueChange: queueChange(options.queue, [second.id, movie]) });
+  assert.deepEqual((await catalog('state-viewer')).queue, [second.id, movie]);
+
+  const before = Date.now();
+  const future = await put({ progress: { [first.id]: { position: 10, duration: 100, updated: 1e20 } } });
+  assert.ok(future.data.progress[first.id].updated >= before && future.data.progress[first.id].updated <= Date.now());
+  await put({ progress: { [first.id]: null, [second.id]: { position: '15', duration: 100, updated: Date.now() } } });
+  await call('state-viewer', 'PUT', '/api/state', `{"progress":{"${first.id}":{"position":1e400,"duration":100,"updated":1e400}}}`, { ...headers, 'content-type': 'application/json' });
+  const cutoff = Date.now();
+  assert.deepEqual((await catalog('state-viewer')).progress, future.data.progress);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const current = await put({ progress: { [first.id]: { position: 15, duration: 100, updated: cutoff }, [second.id]: { position: 25, duration: 100, updated: cutoff + 1 } } });
+  assert.equal(current.data.progress[first.id].position, 15);
+  const dismissal = await call('state-viewer', 'PATCH', `/api/items/${first.id}/progress`, { dismiss: true, dismissedAt: cutoff }, headers);
+  assert.equal(dismissal.data.progress[first.id].hidden, true);
+  assert.equal(dismissal.data.progress[second.id], undefined);
+  assert.equal((await catalog('state-viewer')).progress[second.id].position, 25);
+});
+
+test('an older client echoing server times cannot overwrite a slow-clock phone', async () => {
+  assert.equal((await join('slow-viewer', 'slow-viewer', 'viewer-pass-5')).status, 200);
+  const { user, groups } = await catalog('slow-viewer');
+  const id = groups[0][0].id, headers = { 'x-matro-account': String(user.id) };
+  const slow = Date.now() - 3600e3;
+  await call('slow-viewer', 'PUT', '/api/state', { progress: { [id]: { position: 100, duration: 1000, updated: slow } } }, headers);
+  const loaded = (await catalog('slow-viewer')).progress[id];
+  await call('slow-viewer', 'PUT', '/api/state', { progress: { [id]: { position: 500, duration: 1000, updated: slow + 60e3 } } }, headers);
+  // No account header: this is the old client, sending everything it loaded earlier.
+  await call('slow-viewer', 'PUT', '/api/state', { progress: { [id]: loaded } });
+  assert.equal((await catalog('slow-viewer')).progress[id].position, 500);
 });
 
 test('head account upload lands in the library; logout and password reset end sessions', async () => {

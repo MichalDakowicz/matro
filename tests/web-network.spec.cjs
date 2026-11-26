@@ -38,21 +38,21 @@ test('overlapping large progress saves work on a slow connection', async () => {
     const results = await page.evaluate(async () => {
       const { createAdapter } = await import('/adapter.js');
       const { matro } = createAdapter({ user: { id: 1, username: 'viewer', role: 'viewer' } });
-      const state = { progress: {}, queue: [], markers: { episode: [{ type: 'intro', start: 30, end: 90, source: 'manual' }, { type: 'outro', start: 300, end: 330, source: 'automatic' }] }, preferences: { padding: 'x'.repeat(42000) } };
+      const state = { progress: { ['x'.repeat(42000)]: { position: 1, duration: 20, updated: 1 } }, queue: ['stale'], markers: { episode: [{ type: 'intro', start: 30, end: 90, source: 'manual' }] }, preferences: { autoplay: false } };
       const baseline = await Promise.allSettled([1, 2, 3].map(() => fetch('/api/state', { method: 'PUT', body: JSON.stringify(state), keepalive: true })));
       const normal = await Promise.all([matro.save(state), matro.save(state), matro.save(state)].map(p => p.then(() => 'saved', e => e.message)));
       const options = [], originalFetch = window.fetch;
       window.fetch = (url, init) => { options.push(init.keepalive); return originalFetch(url, init); };
       try {
-        await matro.save({ ...state, preferences: {} }, { keepalive: true });
-        await matro.save({ ...state, preferences: { padding: '€'.repeat(22000) } }, { keepalive: true });
+        await matro.save(state, { keepalive: true });
+        await matro.save({ ...state, progress: { ['€'.repeat(22000)]: { position: 1, duration: 20, updated: 1 } } }, { keepalive: true });
       } finally { window.fetch = originalFetch; }
       return { baseline: baseline.map(r => r.status), normal, options };
     });
     expect(results.baseline).toContain('rejected');
     expect(results.normal).toEqual(['saved', 'saved', 'saved']);
     expect(results.options).toEqual([true, false]);
-    expect(requests.slice(-5).every(body => !Object.hasOwn(body, 'markers'))).toBe(true);
+    expect(requests.slice(-5).every(body => Object.keys(body).join() === 'progress')).toBe(true);
   });
 });
 

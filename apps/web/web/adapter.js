@@ -1,6 +1,6 @@
 // window.matro for the browser: the desktop renderer calls this object where Electron would call its main process.
 // Everything here turns those calls into requests to the server.
-import { get, post, put, patch, del, api } from './http.js';
+import { get, post, del, api } from './http.js';
 import { h, say, dialog, languageSelect } from './dom.js';
 import { accountScope, createOffline, networkLost } from './offline.js';
 import { toVtt } from './offline-store.js';
@@ -17,6 +17,15 @@ const artwork = value => typeof value === 'string' ? (value.startsWith('artwork/
 export function createAdapter(session) {
   const noop = () => () => {};
   const watchers = new Set();
+  const accountId = session.user.id;
+  const stateRequest = (method, url, body, options) => api(method, url, body, { ...options, accountId });
+  let updates = Promise.resolve();
+  const updateState = body => {
+    if (session.offline) return Promise.resolve();
+    const update = updates.catch(() => {}).then(() => stateRequest('PUT', '/api/state', body));
+    updates = update;
+    return update;
+  };
   const scope = accountScope(session.user), offline = createOffline(session.user, { inspect: inspectRemote, subtitles: fetchSubtitles, sendSubtitle });
   function checkAccount(data) {
     if (accountScope(data.user) === scope) return;
@@ -27,7 +36,7 @@ export function createAdapter(session) {
   const playbackState = value => {
     if (session.offline) return;
     const state = typeof value === 'object' ? value : { playing: !!value };
-    return api('POST', '/api/playback/state', { ...state, session: playerSession }, { keepalive: !state.playing }).catch(() => {});
+    return stateRequest('POST', '/api/playback/state', { ...state, session: playerSession }, { keepalive: !state.playing }).catch(() => {});
   };
   let polling = 0;
   const unsupported = what => () => Promise.reject(new Error(`${what} is a desktop feature.`));
@@ -43,7 +52,7 @@ export function createAdapter(session) {
   async function load() {
     if (session.offline) return latest = await offline.library();
     let data;
-    try { data = await get('/api/library'); }
+    try { data = await stateRequest('GET', '/api/library'); }
     catch (error) {
       if (!networkLost(error)) throw error;
       latest = await offline.library();
@@ -51,8 +60,8 @@ export function createAdapter(session) {
       return latest;
     }
     checkAccount(data);
-    if (await offline.sync(body => put('/api/state', body)).catch(() => false)) {
-      data = await get('/api/library').catch(() => data);
+    if (await offline.sync(body => stateRequest('PUT', '/api/state', body)).catch(() => false)) {
+      data = await stateRequest('GET', '/api/library');
       checkAccount(data);
     }
     if (offlineSync) await offlineSync.catch(() => {});
@@ -74,9 +83,9 @@ export function createAdapter(session) {
       if (session.offline || closed || checking || document.hidden || !before?.catalogRevision) return;
       checking = true;
       try {
-        const { catalogRevision } = await get('/api/library/revision');
+        const { catalogRevision } = await stateRequest('GET', '/api/library/revision');
         if (closed || latest !== before || catalogRevision === before.catalogRevision) return;
-        const data = await get('/api/library');
+        const data = await stateRequest('GET', '/api/library');
         if (closed || latest !== before) return;
         checkAccount(data);
         data.metadata = artwork(data.metadata);
@@ -125,7 +134,7 @@ export function createAdapter(session) {
   }
   const track = u => ({ index: SIDECAR + u.id, language: u.language, title: `${u.name}${KIND[u.kind] || ''}`, codec: 'vtt', text: true, bitmap: false, sidecar: true, uploaded: true, uploadId: u.id, addedBy: u.addedBy });
   function sendSubtitle({ id, query, body }) {
-    return api('POST', `/api/items/${id}/subtitles?${query}`, body);
+    return stateRequest('POST', `/api/items/${id}/subtitles?${query}`, body);
   }
 
   // Subtitle files any signed-in person can add to a title, with the name and language everyone will see.
@@ -272,7 +281,7 @@ export function createAdapter(session) {
 
   async function changeProgress(id, change, localProgress = {}) {
     if (!session.offline) {
-      try { return (await patch(`/api/items/${encodeURIComponent(id)}/progress`, change)).progress; }
+      try { return (await stateRequest('PATCH', `/api/items/${encodeURIComponent(id)}/progress`, change)).progress; }
       catch (error) { if (!networkLost(error)) throw error; }
     }
     const cached = await offline.cachedProgress(), progress = { ...cached.progress, ...localProgress };
@@ -297,27 +306,29 @@ export function createAdapter(session) {
     get offlineSaveMany() { return session.offline ? null : saveOffline; },
     dismissContinue: (id, progress) => changeProgress(id, { dismiss: true }, progress),
     setCompleted: (id, completed, checkpoint) => changeProgress(id, { completed, checkpoint }),
-    save: (state, { keepalive = false } = {}) => {
-      const body = { progress: state.progress, queue: state.queue, preferences: state.preferences };
+    savePreferences: preferences => updateState({ preferences }),
+    changeQueue: queueChange => updateState({ queueChange }),
+    save: ({ progress }, { keepalive = false } = {}) => {
+      const body = { progress };
       // Keepalive has a small shared in-flight byte quota. Reserve it for exit;
       // ordinary overlapping checkpoints must not consume that quota.
-      if (session.offline) return offline.queue({ progress: body.progress });
-      return put('/api/state', body, { keepalive: keepalive && new Blob([JSON.stringify(body)]).size < 60000 }).catch(error => {
+      if (session.offline) return offline.queue(body);
+      return stateRequest('PUT', '/api/state', body, { keepalive: keepalive && new Blob([JSON.stringify(body)]).size < 60000 }).catch(error => {
         if (!networkLost(error)) throw error;
-        return offline.queue({ progress: body.progress });
+        return offline.queue(body);
       });
     },
     stop: async (keepUrl, { background = false } = {}) => {
       offline.release(keepUrl);
       if (session.offline) return;
-      const stop = post('/api/playback/stop', { session: playerSession, keepPreload: !!keepUrl && new URL(keepUrl, location.origin).searchParams.get('preload') === '1' });
+      const stop = stateRequest('POST', '/api/playback/stop', { session: playerSession, keepPreload: !!keepUrl && new URL(keepUrl, location.origin).searchParams.get('preload') === '1' });
       if (background) void stop.catch(() => {});
       else await stop.catch(error => { if (!networkLost(error)) throw error; });
     }, playbackState, playbackHeartbeat: playbackState,
     preview: async ({ id, time, hover }) => `/api/items/${id}/frame?t=${Math.max(0, Number(time) || 0)}&w=${hover ? 320 : 480}`,
-    segments: async ({ id, force }) => (await post(`/api/items/${id}/segments`, { force })).markers,
-    saveMarkers: async edits => (await post('/api/segments/manual', edits)).markers,
-    removeMarker: async ({ id, marker }) => (await post(`/api/items/${id}/segments/remove`, { marker })).markers,
+    segments: async ({ id, force }) => (await stateRequest('POST', `/api/items/${id}/segments`, { force })).markers,
+    saveMarkers: async edits => (await stateRequest('POST', '/api/segments/manual', edits)).markers,
+    removeMarker: async ({ id, marker }) => (await stateRequest('POST', `/api/items/${id}/segments/remove`, { marker })).markers,
     scannerStatus: async () => (await get('/api/segments')).scanner,
     rescan: async () => {
       if (session.user.role !== 'admin') return load();

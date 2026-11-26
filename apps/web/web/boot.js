@@ -26,7 +26,7 @@ const leave = async () => {
   await signOut();
 };
 const openSaved = () => savedDownloads({ ...adapter, onOpenTitle: id => document.dispatchEvent(new CustomEvent('matro:saved-title', { detail: id })) });
-profileButton(session, () => openProfile({ session, getState: adapter.state, save: () => adapter.matro.save(adapter.state()), signOut: leave, openSaved }));
+profileButton(session, () => openProfile({ session, getState: adapter.state, forgetTracks: () => adapter.matro.savePreferences({ tracks: null }), signOut: leave, openSaved }));
 if (offline) {
   const note = document.createElement('button');
   note.className = 'pill small offline-indicator'; note.textContent = 'Offline · Reconnect';

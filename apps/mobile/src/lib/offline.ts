@@ -2,8 +2,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Directory, File, Paths } from 'expo-file-system';
 import { fetch } from 'expo/fetch';
 import { fetchWithDeadline, inspect, mediaHeaders, request, ServerError, type Info, type Item, type Library, type MatroUser } from './server';
-import { progressRecovery, recoveryScope } from './storage';
-import { activeOfflineAccountKey as active, offlineAccount as account, offlineLibraryKey as libraryKey, offlineMediaPrefix as prefix } from './offline-storage';
+import { cachedLibrary, progressRecovery, recoveryScope } from './storage';
+export { forgetOfflineAccount } from './storage';
+import { offlineAccount as account, offlineMediaPrefix as prefix } from './offline-storage';
 import { holdService, offlineNotice } from './offline-notifications';
 
 const PIECE = 8 * 1024 * 1024;
@@ -64,13 +65,6 @@ function scopedJobs(scope: string) {
 }
 export const activeDownloads = (base: string, user: MatroUser) => scopedJobs(account(base, user));
 
-export async function rememberLibrary(base: string, data: Library) {
-  const scope = account(base, data.user);
-  await AsyncStorage.setItem(libraryKey(scope), JSON.stringify(data));
-  await AsyncStorage.setItem(active(base), scope);
-}
-export const forgetOfflineAccount = (base: string) => AsyncStorage.removeItem(active(base));
-
 async function recordsFor(scope: string): Promise<OfflineRecord[]> {
   const keys = (await AsyncStorage.getAllKeys()).filter(key => key.startsWith(prefix(scope)));
   if (!keys.length) return [];
@@ -90,12 +84,11 @@ export async function savedTitle(base: string, user: MatroUser, id: string) {
   return record && isSaved(record) ? record : undefined;
 }
 export async function offlineLibrary(base: string): Promise<(Library & { catalogIds: string[] }) | null> {
-  const scope = await AsyncStorage.getItem(active(base));
-  const data = scope ? await read<Library>(libraryKey(scope)) : null;
-  if (!data || scope !== account(base, data.user)) return null;
+  const data = await cachedLibrary(base);
+  if (!data) return null;
   const ids = new Set((await savedTitles(base, data.user)).filter(isSaved).map(entry => entry.id));
   const items = data.items.filter(item => ids.has(item.id));
-  const progress = await progressRecovery.restore(recoveryScope(base, data.user), data.progress, items.map(item => item.id));
+  const { progress } = await progressRecovery.snapshot(recoveryScope(base, data.user), data.items, data.progress);
   return { ...data, items, progress, folders: [], queue: data.queue.filter(id => ids.has(id)), catalogIds: data.items.map(item => item.id) };
 }
 
