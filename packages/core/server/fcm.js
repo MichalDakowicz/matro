@@ -38,7 +38,7 @@ function createFcm(env = process.env, fetch = globalThis.fetch) {
     cached = { token: result.access_token, expires: now + result.expires_in };
     return cached.token;
   }
-  return async ({ token, id, title, year, requester }, { test = false } = {}) => {
+  return async ({ token, id, title, year, requester, outcome }, { test = false } = {}) => {
     const access = cached?.expires > Date.now() / 1000 + 60 ? cached.token : await (refresh ??= authorize().finally(() => { refresh = null; }));
     const response = await fetch(endpoint, {
       method: 'POST', signal: AbortSignal.timeout(8000), redirect: 'error',
@@ -47,7 +47,8 @@ function createFcm(env = process.env, fetch = globalThis.fetch) {
         token,
         notification: {
           title: test ? 'Example Movie (2024)' : year ? `${title} (${year})` : title,
-          body: test ? 'Requested by Demo Viewer · Test alert' : `Requested by ${requester || 'a removed account'}`,
+          body: test ? 'Requested by Demo Viewer · Test alert' : outcome === 'ready' ? 'Ready to watch in your library'
+            : outcome === 'declined' ? 'Your request was declined' : `Requested by ${requester || 'a removed account'}`,
         },
         data: { kind: 'matro.movie-request', registration: id },
         android: { priority: 'high', ttl: test ? '60s' : '3600s', notification: { channel_id: 'movie-requests', sound: 'default' } },
