@@ -130,7 +130,7 @@ export function openProfile({ session, getState, forgetTracks, signOut, openSave
       !session.offline && state?.scanStatus ? section('Library scan', null, h('p', { class: 'muted', role: 'status', 'data-library-scan-status': '' }, scanMessage(state.scanStatus)),
         h('ul', { class: 'scan-errors', 'data-library-scan-errors': '' }, state.scanStatus.errors.map(row => h('li', {}, row.folder + ': ' + row.error)))) : null,
       group('Playback',
-        section('Dub and subtitles', forget, h('p', { class: 'muted' }, 'The player remembers which audio and subtitle language you pick for each show or film, so a dub chosen in one episode carries through the series.')),
+        section('Dub and subtitles', forget, h('p', { class: 'muted' }, 'The player remembers which audio and subtitle language you pick for each show or film, so a dub chosen in one episode carries through the series. New titles follow the default audio and subtitle settings in About Matro and this library.')),
         section('Saved for offline', null, h('button', { class: 'pill', type: 'button', onclick: () => { close(); openSaved(); } }, 'View offline downloads')),
         session.offline ? null : section('Subtitles you added', null, added)),
       session.offline ? null : group('Account', section('Password', null, password)),

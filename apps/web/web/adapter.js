@@ -138,11 +138,11 @@ export function createAdapter(session) {
   async function inspectRemote(id, { signal } = {}) {
     const info = await api('GET', `/api/items/${id}/info`, undefined, { signal });
     const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay, hdrDirectMime: info.hdrDirectMime, hdrToneMap: info.hdrToneMap, qualities: qualityOptions(info.video),
-      subtitles: [...info.embedded.map(({ forced: _f, ...t }) => t), ...info.uploaded.map(u => track(u)), ...(info.files || []).map(f => ({ index: FILE + f.id, language: f.language, title: f.title, codec: f.codec, text: true, bitmap: false, sidecar: true }))] };
+      subtitles: [...info.embedded, ...info.uploaded.map(u => track(u)), ...(info.files || []).map(f => ({ index: FILE + f.id, language: f.language, title: f.title, codec: f.codec, text: true, bitmap: false, sidecar: true, forced: f.forced, sdh: f.sdh }))] };
     details.set(id, result);
     return result;
   }
-  const track = u => ({ index: SIDECAR + u.id, language: u.language, title: `${u.name}${KIND[u.kind] || ''}`, codec: 'vtt', text: true, bitmap: false, sidecar: true, uploaded: true, uploadId: u.id, addedBy: u.addedBy });
+  const track = u => ({ index: SIDECAR + u.id, language: u.language, title: `${u.name}${KIND[u.kind] || ''}`, codec: 'vtt', text: true, bitmap: false, sidecar: true, uploaded: true, uploadId: u.id, addedBy: u.addedBy, forced: u.kind === 'forced', sdh: u.kind === 'sdh' });
   function sendSubtitle({ id, query, body }) {
     return stateRequest('POST', `/api/items/${id}/subtitles?${query}`, body);
   }

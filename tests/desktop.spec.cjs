@@ -947,6 +947,31 @@ test('audio delay is independent of the subtitle delay, reloads the stream and i
     await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
     const tracks = Object.values((await page.evaluate(() => window.matro.load())).preferences.tracks);
     expect(tracks.map(t => t.audioDelay)).toEqual([.1]);
-    expect(tracks.map(t => t.delay)).toEqual([0]);
+    expect(tracks.map(t => t.delay ?? 0)).toEqual([0]);
+  } finally { await app.close(); }
+});
+
+test('default audio language and subtitle mode apply to a title with no remembered choice', async () => {
+  const f = await fixtures(), folder = path.join(f.dir, `defaults-${Date.now()}`); await fs.mkdir(folder);
+  const video = path.join(folder, 'Northbound.S01E03.The.Long.Thaw.mkv'); await fs.copyFile(f.mkv, video);
+  const profile = path.join(folder, 'profile'); await fs.mkdir(profile);
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items: [describe(video)], folders: [], queue: [], progress: {}, preferences: { autoplay: false, volume: .3, motion: 'off' } }));
+  const launch = launchOptions(profile); let app = await electron.launch(launch), page = await app.firstWindow();
+  try {
+    await page.getByRole('button', { name: 'About Matro and this library' }).click();
+    await page.getByLabel('Preferred audio language').selectOption('pl');
+    await page.getByRole('button', { name: 'Always', exact: true }).click();
+    await page.getByLabel('Preferred subtitle language').selectOption('en');
+    await expect.poll(async () => (await page.evaluate(() => window.matro.load())).preferences.trackDefaults).toEqual({ audio: 'pl', subtitles: 'always', subtitleLanguage: 'en' });
+    await app.close(); app = await electron.launch(launch); page = await app.firstWindow();
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: 'Play now', exact: true }).click();
+    await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.1);
+    await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
+    await expect(page.locator('[data-audio="2"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('[data-subtitle="3"]')).toHaveAttribute('aria-pressed', 'true');
+    // Choosing the other dub for this show is remembered and beats the default next time.
+    await page.locator('[data-audio="1"]').click();
+    await expect(page.locator('[data-audio="1"]')).toHaveAttribute('aria-pressed', 'true');
   } finally { await app.close(); }
 });

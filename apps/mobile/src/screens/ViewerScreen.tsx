@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, BackHandler, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { accountChanged, changeProgress, inspect, library, mediaHeaders, request, ServerError, syncDismissal, updateWatchOptions, type Item, type Library, type MovieRequest } from '../lib/server';
+import { accountChanged, changeProgress, inspect, library, mediaHeaders, request, ServerError, syncDismissal, updateWatchOptions, type Item, type Library, type MovieRequest, type TrackDefaults } from '../lib/server';
 import { progressRecovery, recoveryScope, rememberProgress } from '../lib/storage';
 import { continueItems, groupLibrary, metadataFor, nameFor, savedServes, titleKey, trackKey } from '../../../../packages/core/client/library';
 import { normalizeProgress, queueChange } from '../../../../packages/core/client/watch-progress.js';
@@ -134,6 +134,12 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const found = allGroups.find(items => titleKey(items[0]) === selected);
   const detail = savedOnly ? found?.filter(item => savedIds.has(item.id)) : found;
   const art = { base, headers };
+  const changeTrackDefaults = async (trackDefaults: TrackDefaults) => {
+    if (!data || offline) return;
+    setData(latest => latest?.user.id === data.user.id ? { ...latest, preferences: { ...latest.preferences, trackDefaults } } : latest);
+    try { await updateWatchOptions(base, data.user, { preferences: { trackDefaults } }); }
+    catch (error) { if (accountChanged(error)) onSignedOut(); else setError('Could not save this setting. Check the connection.'); }
+  };
   const updateProgress = async (item: Item, dismiss: boolean) => {
     if (!data) return;
     const checkpoint = data.progress[item.id], scope = recoveryScope(base, data.user);
@@ -191,7 +197,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     // Online, the saved copy only has the first audio track and text subtitles: stream when the chosen tracks need more.
     if (saved && !offline) {
       const full = await inspect(base, item.id).catch(() => null);
-      if (full && !savedServes(saved.info, full, data.preferences.tracks?.[trackKey(item)])) saved = undefined;
+      if (full && !savedServes(saved.info, full, data.preferences.tracks?.[trackKey(item)], data.preferences)) saved = undefined;
     }
     if (run !== playRun.current) return;
     if (offline && !saved) { setError('This title is not saved on this device.'); return; }
@@ -304,7 +310,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     {detail && data && <View style={s.overlay}><TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onEnqueue={enqueue} onMark={(list, done) => void markMany(list, done)} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} savingIds={savingIds} /></View>}
     <Grain />
     <Toast notice={notice} bottom={toastBottom} onDismiss={dismiss} />
-    <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} requests={requestsLabel} onGo={go} onRefresh={() => void load()} onAbout={() => setAbout(true)} onServer={onChangeServer} onSignOut={onSignedOut} />
+    <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} requests={requestsLabel} onGo={go} onRefresh={() => void load()} onAbout={() => setAbout(true)} onServer={onChangeServer} onSignOut={onSignedOut} onTrackDefaults={changeTrackDefaults} />
     <AboutSheet visible={about} onClose={() => setAbout(false)} files={data?.items.length || 0} />
   </View>;
 }

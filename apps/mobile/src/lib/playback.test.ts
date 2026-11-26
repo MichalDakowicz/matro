@@ -37,7 +37,7 @@ function harness(t: any, directPlay = false, savedAtOpen = false) {
     'expo-video': { useVideoPlayer: () => player },
     '../lib/server': { inspect: async () => { inspections++; return info; }, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: {} }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry),
       playbackState: async (_: string, session: string, playing: boolean) => activity.push({ session, playing }), stopPlayback: async () => {}, updateWatchOptions: async () => {} },
-    '../../../../packages/core/client/library': { trackKey: () => 'movie', matchTrack: () => undefined },
+    '../../../../packages/core/client/library': { trackKey: () => 'movie', subtitleTracks: () => [], initialTracks: (details: any) => ({ audio: details.audio[0]?.index ?? null, subtitle: null }) },
     '../../../../packages/core/client/watch-progress.js': { isContinueDismissed },
     '../../../../packages/core/client/quality.js': require('../../../../packages/core/client/quality.js'),
     '../../../../packages/core/client/playback-info.js': require('../../../../packages/core/client/playback-info.js'),

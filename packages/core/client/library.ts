@@ -1,4 +1,5 @@
-import type { Info, Item, Library, Metadata, Track, TrackChoice, TrackPreference } from './server';
+import type { Info, Item, Library, Metadata, Preferences, Track, TrackPreference } from './server';
+import { initialTracks } from './track-preferences.js';
 import { compareEpisodes, continueWatching, groupTitles, isCompleted, resumeTarget } from './watch-progress.js';
 export const trackKey = (item: Item) => item.groupId || item.group;
 export const titleKey = (item: Item) => item.kind === 'show' ? item.groupId || item.group : item.editionGroup || item.id;
@@ -17,18 +18,19 @@ export function groupLibrary(items: Item[]) {
 export const resumeItem = (data: Library, items: Item[]) => resumeTarget(items, data.progress);
 export const statusOf = (data: Library, items: Item[]) => (items[0].editionGroup ? items.some(i => isCompleted(data.progress[i.id])) : items.every(i => isCompleted(data.progress[i.id]))) ? 'done' : items.some(i => data.progress[i.id]?.position > 0 || isCompleted(data.progress[i.id])) ? 'progress' : 'new';
 export const continueItems = (data: Library, groups: Item[][]) => continueWatching(groups, data.progress);
-export function matchTrack(tracks: Track[], choice?: TrackChoice | null) {
-  if (!choice) return null;
-  const score = (track: Track) => Number(track.title === choice.title) * 4 + Number(track.channels === choice.channels) * 2 + Number(track.codec === choice.codec);
-  return tracks.filter(t => t.language === choice.language).sort((a, b) => score(b) - score(a))[0] || null;
+export function subtitleTracks(info: Info): Track[] {
+  return [
+    ...info.embedded,
+    ...info.uploaded.map(track => ({ index: 10000 + track.id, language: track.language, title: track.name, codec: 'vtt', text: true, forced: track.kind === 'forced', sdh: track.kind === 'sdh' })),
+    ...(info.files || []).map(track => ({ ...track, index: 20000 + track.id, text: true })),
+  ];
 }
-// A saved copy keeps the first audio track and the text subtitles only, so stream whenever the chosen tracks need more.
-export function savedServes(saved: Info & { text?: Record<string, string> }, full: Info, choice?: TrackPreference) {
-  const audio = matchTrack(full.audio, choice?.audio)?.index ?? full.audio.find(t => t.default)?.index ?? full.audio[0]?.index ?? null;
-  if (audio !== (saved.audio[0]?.index ?? null)) return false;
-  const subtitle = choice?.off ? null : matchTrack([...full.embedded, ...full.uploaded.map(t => ({ index: 10000 + t.id, language: t.language, title: t.name } as Track)), ...(full.files || []).map(t => ({ ...t, index: 20000 + t.id }))], choice?.subtitle)?.index ?? null;
-  return subtitle === null || saved.embedded.some(t => t.index === subtitle) || saved.uploaded.some(t => 10000 + t.id === subtitle) || !!saved.files?.some(t => 20000 + t.id === subtitle);
+
+export function savedServes(saved: Info, full: Info, choice?: TrackPreference, preferences?: Preferences) {
+  const { audio, subtitle } = initialTracks({ audio: full.audio, subtitles: subtitleTracks(full) }, choice, preferences);
+  return audio === (saved.audio[0]?.index ?? null) && (subtitle === null || subtitleTracks(saved).some(track => track.index === subtitle));
 }
+export { initialTracks, matchTrack } from './track-preferences.js';
 export function languageName(value: string) {
   if (!value || value === 'und') return 'Unknown language';
   const aliases: Record<string, string> = { eng: 'en', pol: 'pl', jpn: 'ja', spa: 'es', fre: 'fr', fra: 'fr', ger: 'de', deu: 'de', ita: 'it', rus: 'ru', por: 'pt', chi: 'zh', zho: 'zh', kor: 'ko' };

@@ -4,7 +4,9 @@ import { scanMessage } from '../../../../packages/core/client/scan-status.js';
 import { ThemeRow } from './ThemeRow';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import type { Library } from '../lib/server';
+import { LANGUAGES, trackDefaults } from '../../../../packages/core/client/track-preferences.js';
+import { languageName } from '../../../../packages/core/client/library';
+import type { Library, TrackDefaults } from '../lib/server';
 import { colors, dock as dockSize, fonts, radius, themed } from '../theme';
 import { Brand, Icon, IconButton, Row, SectionLabel, Sheet, styles as t, type Glyph } from './Matro';
 import { useReduceMotion } from './Motion';
@@ -98,9 +100,22 @@ export function Toast({ notice, bottom, onDismiss }: { notice: Notice | null; bo
   </View>;
 }
 
-type AccountProps = { visible: boolean; onClose: () => void; data: Library | null; base: string; offline: boolean; requests?: string; onGo: (tab: string) => void; onRefresh: () => void; onAbout: () => void; onServer: () => void; onSignOut: () => void };
+const modes = [['off', 'Off'], ['forced', 'Forced only'], ['always', 'Always']] as const;
+// Where a title nothing was chosen for starts. Choices made for a show in the player still win.
+function TrackDefaultsRows({ value, onChange }: { value: ReturnType<typeof trackDefaults>; onChange: (value: TrackDefaults) => void }) {
+  const languages = (selected: string, pick: (code: string) => void, blank: string) => <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+    {[['', blank], ...LANGUAGES.map(code => [code, languageName(code)])].map(([code, label]) => <Pill key={code} compact primary={selected === code} selected={selected === code} label={label} onPress={() => pick(code)} />)}
+  </ScrollView>;
+  return <View style={{ gap: 8, marginBottom: 18 }}>
+    <Text style={t.dim}>Dub and subtitles for new titles</Text>
+    {languages(value.audio, audio => onChange({ ...value, audio }), 'Original audio')}
+    <View style={[t.row, { gap: 8 }]}>{modes.map(([mode, label]) => <Pill key={mode} compact primary={value.subtitles === mode} selected={value.subtitles === mode} label={label} onPress={() => onChange({ ...value, subtitles: mode })} />)}</View>
+    {value.subtitles === 'always' && languages(value.subtitleLanguage, subtitleLanguage => onChange({ ...value, subtitleLanguage }), 'Choose…')}
+  </View>;
+}
+type AccountProps = { visible: boolean; onClose: () => void; data: Library | null; base: string; offline: boolean; requests?: string; onGo: (tab: string) => void; onRefresh: () => void; onAbout: () => void; onServer: () => void; onSignOut: () => void; onTrackDefaults: (value: TrackDefaults) => void };
 /** Profile sheet in three groups: Library (where things are), Server (connection) and Account (about, sign out last). */
-export function AccountSheet({ visible, onClose, data, base, offline, requests, onGo, onRefresh, onAbout, onServer, onSignOut }: AccountProps) {
+export function AccountSheet({ visible, onClose, data, base, offline, requests, onGo, onRefresh, onAbout, onServer, onSignOut, onTrackDefaults }: AccountProps) {
   const go = (tab: string) => { onClose(); onGo(tab); };
   const confirm = (title: string, message: string, action: string, run: () => void) => Alert.alert(title, message, [{ text: 'Cancel', style: 'cancel' }, { text: action, style: 'destructive', onPress: () => { onClose(); run(); } }], { cancelable: true });
   const admin = !offline && data?.user.role === 'admin';
@@ -112,6 +127,7 @@ export function AccountSheet({ visible, onClose, data, base, offline, requests, 
       <View><Text style={s.stat}>{Object.values(data?.progress || {}).filter(p => p.completed).length}</Text><Text style={t.dim}>Watched</Text></View>
     </View>
     {!offline && data?.scanStatus && <Text accessibilityLiveRegion="polite" style={[t.muted, { marginTop: 8 }]}>{scanMessage(data.scanStatus)}</Text>}
+    {data && !offline && <TrackDefaultsRows value={trackDefaults(data.preferences)} onChange={onTrackDefaults} />}
     <SectionLabel>Library</SectionLabel>
     {data && <Row icon="download" label="Saved for offline" chevron onPress={() => go('offline')} />}
     {admin && <Row icon="folder" label="Folders" chevron onPress={() => go('folders')} />}

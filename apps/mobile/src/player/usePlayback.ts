@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 import { useVideoPlayer } from 'expo-video';
 import { inspect, mediaHeaders, playbackPath, playbackState, request, saveProgress, stopPlayback, updateWatchOptions, type Info, type Item, type Library, type Progress, type Track, type TrackPreference } from '../lib/server';
-import { matchTrack, titleKey, trackKey } from '../../../../packages/core/client/library';
+import { initialTracks, subtitleTracks, titleKey, trackKey } from '../../../../packages/core/client/library';
 import { isContinueDismissed } from '../../../../packages/core/client/watch-progress.js';
 import { parseVtt, type Cue } from '../../../../packages/core/client/subtitles';
 import { downloadPlayback } from './diskBuffer';
@@ -10,6 +10,8 @@ import { loadQuality, progressRecovery, recoveryScope, saveQuality } from '../li
 import { qualityOptions } from '../../../../packages/core/client/quality.js';
 import { savedTitle, type SavedMedia } from '../lib/offline';
 import { describePlayback, savedPlayback } from '../../../../packages/core/client/playback-info.js';
+
+// Embedded subtitle streams plus the ones people uploaded (their indexes start at 10000).
 
 export function usePlayback({ base, data, item, initialPosition, saved, offline = false, onEnd }: { base: string; data: Library; item: Item; initialPosition?: number; saved?: SavedMedia; offline?: boolean; onEnd: () => void }) {
   const initial = initialPosition ?? (data.progress[item.id]?.completed ? 0 : data.progress[item.id]?.position || 0);
@@ -168,10 +170,8 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
         const savedQuality = await loadQuality(); if (!mounted.current || run !== generation.current) return;
         choices.current.quality = savedQuality; setQualityValue(savedQuality);
         infoRef.current = details; setInfo(details);
-        const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true })), ...(details.files || []).map(t => ({ index: 20000 + t.id, title: t.title, language: t.language, text: true }))];
-        const choice = dataRef.current.preferences.tracks?.[trackKey(item)];
-        const a = matchTrack(details.audio, choice?.audio)?.index ?? details.audio.find(t => t.default)?.index ?? details.audio[0]?.index ?? null;
-        const sub = choice?.off ? null : matchTrack(tracks, choice?.subtitle)?.index ?? null;
+        const preferences = dataRef.current.preferences;
+        const { audio: a, subtitle: sub } = initialTracks({ audio: details.audio, subtitles: subtitleTracks(details) }, preferences.tracks?.[trackKey(item)], preferences);
         choices.current = { ...choices.current, audio: a, subtitle: sub }; setAudio(a); setSubtitle(sub);
         await loadText(sub).catch(e => { if (mounted.current) setError(e.message); });
         if (mounted.current && run === generation.current) await load(at.current, intent.current);
