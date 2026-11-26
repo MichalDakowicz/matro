@@ -1,9 +1,11 @@
-import { memo, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Animated, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { Item, Library } from '../lib/server';
 import { episodeName, formatTime, metadataFor, nameFor, resumeItem, statusOf } from '../../../../packages/core/client/library';
+import { randomReelStart } from '../../../../packages/core/client/reel-start';
 import { colors, fonts } from '../theme';
 import { Brand, Icon, IconButton, MediaArt, Pill, ProgressBar, styles as t, type Glyph } from './Matro';
 export type ArtProps = { base: string; headers: Record<string, string> };
@@ -20,8 +22,32 @@ export const PosterCard = memo(function PosterCard({ data, items, width, onPress
   </Pressable>;
 });
 
-export function FeaturedReel({ data, groups, onPlay, onDetail, ...art }: ArtProps & { data: Library; groups: Item[][]; onPlay: (item: Item) => void; onDetail: (item: Item) => void }) {
-  const { width } = useWindowDimensions(), reelScale = Math.max(.62, Math.min(1.1, (width - 1) / 1040)) * 1.08, posterWidth = 340 * reelScale, stride = posterWidth * .74065, start = groups.length > 1 ? groups.length : 0;
+type ReelProps = ArtProps & { data: Library; groups: Item[][]; onPlay: (item: Item) => void; onDetail: (item: Item) => void };
+
+export function FeaturedReel(props: ReelProps) {
+  const [startTitle, setStartTitle] = useState<string | null>(null);
+  const key = `matro.reelStart:${props.base}:${props.data.user.id}`;
+  const identity = ([item]: Item[]) => item.kind === 'show' ? item.groupId || item.group : item.id;
+  const [titles] = useState(() => props.groups.map(identity));
+  useEffect(() => {
+    if (!titles.length) return;
+    let active = true;
+    void AsyncStorage.getItem(key).catch(() => null).then(previous => {
+      if (!active) return;
+      const title = titles[randomReelStart(titles, previous)];
+      setStartTitle(title);
+      void AsyncStorage.setItem(key, title).catch(() => {});
+    });
+    return () => { active = false; };
+  }, [key, titles]);
+  if (startTitle === null) return null;
+  const index = props.groups.findIndex(group => identity(group) === startTitle);
+  const start = props.groups.length > 1 ? props.groups.length + Math.max(0, index) : 0;
+  return <ReelStrip {...props} start={start} />;
+}
+
+function ReelStrip({ data, groups, onPlay, onDetail, start, ...art }: ReelProps & { start: number }) {
+  const { width } = useWindowDimensions(), reelScale = Math.max(.62, Math.min(1.1, (width - 1) / 1040)) * 1.08, posterWidth = 340 * reelScale, stride = posterWidth * .74065;
   const scroll = useRef(new Animated.Value(start * stride)).current, list = useRef<FlatList<Item[]>>(null), activeRef = useRef(start);
   const [active, setActive] = useState(start);
   const slots = useMemo(() => groups.length > 1 ? [...groups, ...groups, ...groups] : groups, [groups]);
@@ -70,9 +96,9 @@ export function Corner({ username, onHome, onProfile, onHelp }: { username?: str
   const insets = useSafeAreaInsets();
   return <View pointerEvents="box-none" style={[s.corner, { top: insets.top + 12 }]}><Pressable onPress={onHelp} accessibilityLabel="About Matro and this library" style={s.help}><Text style={[t.text, { fontSize: 15 }]}>?</Text></Pressable><View style={t.row}><Pressable onPress={onHome} accessibilityRole="button" accessibilityLabel="Matro, back to landing" style={{ width: 44, height: 44, justifyContent: 'center', alignItems: 'center' }}><Brand /></Pressable><Pressable onPress={onProfile} accessibilityRole="button" accessibilityLabel="Your profile" style={s.avatar}><Text style={[t.text, { fontSize: 14, fontFamily: fonts.medium }]}>{(username || 'M').slice(0, 1).toUpperCase()}</Text></Pressable></View></View>;
 }
-export function Dock({ tab, onChange, audio, requests }: { tab: string; onChange: (tab: string) => void; audio: boolean; requests?: string }) {
+export function Dock({ tab, onChange, requests }: { tab: string; onChange: (tab: string) => void; requests?: string }) {
   const insets = useSafeAreaInsets();
-  const items: { id: string; label: string; icon: Glyph }[] = [{ id: 'movie', label: 'Movies', icon: 'movies' }, { id: 'show', label: 'Shows', icon: 'shows' }, ...(audio ? [{ id: 'audio', label: 'Music', icon: 'music' as Glyph }] : []), { id: 'offline', label: 'Saved for offline', icon: 'download' }, { id: 'search', label: 'Search', icon: 'search' }];
+  const items: { id: string; label: string; icon: Glyph }[] = [{ id: 'movie', label: 'Movies', icon: 'movies' }, { id: 'show', label: 'Shows', icon: 'shows' }, { id: 'offline', label: 'Saved for offline', icon: 'download' }, { id: 'search', label: 'Search', icon: 'search' }];
   if (requests) items.push({ id: 'movie-requests', label: requests, icon: 'requests' });
   return <View style={[s.dockWrap, { bottom: insets.bottom + 14 }]}><View style={s.dock}>{items.map(item => <Pressable key={item.id} onPress={() => onChange(tab === item.id ? 'home' : item.id)} accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.id }} style={({ pressed }) => [s.dockItem, tab === item.id && { backgroundColor: '#ffffff1f' }, pressed && { opacity: .65 }]}><Icon name={item.icon} color={tab === item.id ? colors.text : '#bebab3'} /></Pressable>)}</View></View>;
 }

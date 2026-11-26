@@ -43,7 +43,7 @@ test('higher resolution download preserves original, filters files, compares edi
   try {
     app = await electron.launch({ args: [path.resolve('.')], env }); const page = await app.firstWindow(), errors = []; page.on('pageerror', error => errors.push(error.message));
     await page.evaluate(async ({ base, movies, root }) => window.matro.downloadConfigure({ target: 'local', url: base, username: 'u', password: 'fixture', seeding: 'no', storage: { movieRoot: movies, showRoot: root + '/Shows', movieFolders: 'title', showFolders: 'season', naming: 'clean', subtitles: true } }), { base, movies, root });
-    await page.getByRole('button', { name: 'Open Film (2020)', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Open Film', exact: true }).first().click();
     await page.getByRole('button', { name: 'Find better quality / compare editions', exact: true }).click();
     await expect(page.locator('.edition-card')).toHaveCount(1);
     await page.locator('.download-movie').click();

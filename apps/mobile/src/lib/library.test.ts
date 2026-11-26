@@ -1,10 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { continueItems, groupLibrary, matchTrack, metadataFor, resumeItem, trackKey } from '../../../../packages/core/client/library.ts';
+import { continueItems, groupLibrary, matchTrack, metadataFor, resumeItem, savedServes, trackKey } from '../../../../packages/core/client/library.ts';
 import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
+import { randomReelStart } from '../../../../packages/core/client/reel-start.js';
 import type { Item, Library } from '../../../../packages/core/client/server.ts';
 const episode = (id: string, number: number): Item => ({ id, title: id, groupId: 'show', group: 'Show', kind: 'show', season: 1, episode: number, format: 'MKV' });
 const blank = (items: Item[]): Library => ({ user: { id: 1, username: 'viewer', role: 'viewer' }, items, progress: {}, queue: [], preferences: {}, metadata: {} });
+
+test('featured reel picks from every title except its previous start', () => {
+  const titles = ['one', 'two', 'three'];
+  assert.equal(randomReelStart([], null), 0);
+  assert.equal(randomReelStart(['one'], 'one'), 0);
+  assert.equal(randomReelStart(titles, 'removed', () => .99), 2);
+  assert.equal(randomReelStart(titles, 'two', () => 0), 0);
+  assert.equal(randomReelStart(titles, 'two', () => .99), 2);
+  assert.equal(randomReelStart(['one', 'two'], 'one'), 1);
+  assert.equal(randomReelStart(['two', 'one'], 'one'), 0);
+});
 
 test('native shelves use the same show grouping, movie editions and metadata keys as the web', () => {
   const first = episode('one', 1), second = episode('two', 2), movie = { ...first, id: 'movie-a', kind: 'movie', groupId: 'film' }, edition = { ...movie, id: 'movie-b' };
@@ -63,4 +75,14 @@ test('track preferences follow language/title across episode stream-index change
 test('native subtitle parsing retains timing and line breaks without rendering HTML', () => {
   const cues = parseVtt('WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.500\n<i>Hello</i>\nworld\n\n00:03.000 --> 00:04.000\nNext');
   assert.deepEqual(cues, [{ start: 1, end: 2.5, text: 'Hello\nworld' }, { start: 3, end: 4, text: 'Next' }]);
+});
+
+test('a saved copy serves online playback only when its single audio track and text subtitles cover the choice', () => {
+  const track = (index: number, language: string, extra = {}) => ({ index, language, title: '', ...extra });
+  const full = { duration: 5, directPlay: true, audio: [track(1, 'jpn'), track(2, 'eng')], embedded: [track(3, 'eng', { text: true }), track(4, 'eng', { bitmap: true })], uploaded: [] };
+  const saved = { ...full, audio: [full.audio[0]], embedded: [full.embedded[0]] };
+  assert.equal(savedServes(saved, full), true);
+  assert.equal(savedServes(saved, full, { audio: { language: 'jpn', title: '' }, subtitle: { language: 'eng', title: '' } }), true);
+  assert.equal(savedServes(saved, full, { audio: { language: 'eng', title: '' } }), false);
+  assert.equal(savedServes(saved, { ...full, embedded: [full.embedded[1]] }, { subtitle: { language: 'eng', title: '' } }), false);
 });
