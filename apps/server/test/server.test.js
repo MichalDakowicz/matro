@@ -39,8 +39,10 @@ async function catalog(who) {
 
 // A stand-in for api.themoviedb.org and image.tmdb.org, so metadata is exercised with no network or key.
 const json = body => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+const movieSearchYears = [];
 async function fakeTmdb(url) {
   const u = new URL(url);
+  if (u.pathname === '/3/search/movie') movieSearchYears.push(u.searchParams.get('year'));
   if (u.hostname === 'image.tmdb.org') return new Response(Buffer.from([0xff, 0xd8, 0xff, 0xd9]), { status: 200 });
   const route = u.pathname.replace('/3', '');
   if (route === '/search/movie') return json({ results: [{ id: 1, title: 'Heat', release_date: '1995-12-15', overview: 'A crew and a cop.', poster_path: '/p.jpg' }, { id: 9, title: 'Heat Wave', release_date: '2001-01-01', poster_path: '/q.jpg' }] });
@@ -60,6 +62,12 @@ test.before(async () => {
   fs.writeFileSync(srt, '1\n00:00:00,500 --> 00:00:02,000\nHello there\n');
   for (const n of [1, 2]) make(path.join(mediaDir, 'Show', `Show.S01E0${n}.mkv`), ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=4', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=4', '-i', srt,
     '-map', '0:v', '-map', '1:a', '-map', '2:a', '-map', '3:s', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-c:s', 'srt', '-metadata:s:a:0', 'language=eng', '-metadata:s:a:1', 'language=jpn', '-metadata:s:s:0', 'language=eng', '-shortest']);
+  // Subtitle files beside a video, as a download or the owner leaves them: language and flags come from the name.
+  const heat = path.join(mediaDir, 'Heat (1995)');
+  fs.writeFileSync(path.join(heat, 'Heat.1995.en.srt'), '1\n00:00:00,500 --> 00:00:02,000\nSidecar line\n');
+  fs.writeFileSync(path.join(heat, 'Heat.1995.pl.forced.srt'), '1\n00:00:01,000 --> 00:00:02,000\nTylko obce\n');
+  fs.writeFileSync(path.join(heat, 'Heat.1995.broken.srt'), 'not a subtitle');
+  fs.writeFileSync(path.join(heat, 'Other.en.srt'), '1\n00:00:00,500 --> 00:00:02,000\nNot ours\n');
   const created = createApp({ dataDir, tmdb: { fetchImpl: fakeTmdb, env: { TMDB_API_KEY: 'test-key' } } }), { server, library, db } = created;
   app = created.app;
   database = db;
@@ -166,6 +174,11 @@ test('TMDB metadata is matched on the server and artwork is served to signed-in 
   assert.equal((await call('sam', 'GET', '/api/admin/metadata/search?kind=movie&query=Heat')).status, 403);
   const found = (await call('admin', 'GET', '/api/admin/metadata/search?kind=movie&query=Heat')).data.results;
   assert.deepEqual(found.map(r => r.id), [1, 9]);
+  // Only a four-digit year narrows the search; anything else is dropped.
+  movieSearchYears.length = 0;
+  await call('admin', 'GET', '/api/admin/metadata/search?kind=movie&query=Heat&year=1995');
+  await call('admin', 'GET', '/api/admin/metadata/search?kind=movie&query=Heat&year=abcd');
+  assert.deepEqual(movieSearchYears, ['1995', null]);
   assert.equal((await call('sam', 'POST', '/api/admin/metadata/assign', { key: film.id, tmdbId: 9 })).status, 403);
   assert.equal((await call('admin', 'POST', '/api/admin/metadata/assign', { key: 'nope', tmdbId: 1 })).status, 404);
   const language = { key: film.id, language: 'pl-PL' };
@@ -234,9 +247,52 @@ test('track info, direct play ranges, transcode and embedded subtitles', async (
   assert.equal(frame.headers.get('content-type'), 'image/jpeg');
   const jpeg = Buffer.from(await frame.arrayBuffer());
   assert.ok(jpeg.length > 500 && jpeg[0] === 0xff && jpeg[1] === 0xd8);
+  const nearbyWidth = await fetch(`${base}/api/items/${ep.id}/frame?t=1&w=230`, { headers: { cookie: jar.sam } });
+  assert.deepEqual(Buffer.from(await nearbyWidth.arrayBuffer()), jpeg);
+  assert.deepEqual(fs.readdirSync(path.join(dataDir, 'cache', 'frames')).map(name => name.match(/-\d+-1\.jpg$/)?.[0]), ['-160-1.jpg']);
   const vtt = await call('sam', 'GET', `/api/items/${ep.id}/subtitles/e${epInfo.embedded[0].index}`);
   assert.match(vtt.data, /^WEBVTT/);
   assert.match(vtt.data, /Hello there/);
+  assert.equal(fs.readdirSync(path.join(dataDir, 'cache', 'subs')).length, 1);
+});
+
+test('an offline range still reads its open generation when the media path is replaced', async t => {
+  const { groups } = await catalog('sam');
+  const movie = groups[0][0], route = `/api/items/${movie.id}/offline`;
+  const ready = (await call('sam', 'GET', route)).data;
+  const original = app.library.item(movie.id).path, backup = original + '.backup', replacement = original + '.replacement';
+  const bytes = fs.readFileSync(original);
+  fs.writeFileSync(replacement, Buffer.alloc(bytes.length));
+  const open = fs.promises.open;
+  let replaced = false;
+  t.mock.method(fs.promises, 'open', async (file, ...args) => {
+    const handle = await open(file, ...args);
+    if (file === original && !replaced) {
+      const stat = handle.stat.bind(handle);
+      handle.stat = async () => {
+        const properties = await stat();
+        fs.renameSync(original, backup);
+        fs.renameSync(replacement, original);
+        replaced = true;
+        return properties;
+      };
+    }
+    return handle;
+  });
+  try {
+    const url = base + route + '/file?version=' + ready.version;
+    const headers = { cookie: jar.sam, range: 'bytes=0-31' };
+    const range = await fetch(url, { headers });
+    assert.equal(range.status, 206);
+    assert.deepEqual(Buffer.from(await range.arrayBuffer()), bytes.subarray(0, 32));
+    assert.equal(replaced, true);
+    const stale = await fetch(url, { headers });
+    assert.equal(stale.status, 409);
+    await stale.body.cancel();
+  } finally {
+    if (fs.existsSync(backup)) fs.renameSync(backup, original);
+    fs.rmSync(replacement, { force: true });
+  }
 });
 
 test('offline media preparation is authenticated and serves versioned, seekable files', async () => {
@@ -265,6 +321,25 @@ test('offline media preparation is authenticated and serves versioned, seekable 
   const second = await fetch(base + episode + '/file?audio=' + audio + '&version=' + ready.version, { headers });
   assert.equal(second.status, 206);
   assert.match(Buffer.from(await second.arrayBuffer()).toString('latin1'), /ftyp/);
+});
+
+test('subtitle files next to the video are listed and served as WebVTT', async () => {
+  const movie = (await catalog('sam')).groups[0][0];
+  const { files } = (await call('sam', 'GET', `/api/items/${movie.id}/info`)).data;
+  assert.deepEqual(files.map(f => [f.language, f.forced, f.sdh]).sort(), [['en', false, false], ['pl', true, false], ['und', false, false]].sort());
+  const english = files.find(f => f.language === 'en'), polish = files.find(f => f.language === 'pl'), broken = files.find(f => f.language === 'und');
+  // Ids come from the file name, so they do not move when another subtitle file appears next to the video.
+  fs.writeFileSync(path.join(mediaDir, 'Heat (1995)', 'Heat.1995.aa.srt'), 'x');
+  const again = (await call('sam', 'GET', `/api/items/${movie.id}/info`)).data.files;
+  assert.equal(again.length, files.length + 1); assert.equal(again.find(f => f.language === 'en').id, english.id);
+  fs.rmSync(path.join(mediaDir, 'Heat (1995)', 'Heat.1995.aa.srt'));
+  const vtt = await call('sam', 'GET', `/api/items/${movie.id}/subtitles/f${english.id}`);
+  assert.equal(vtt.status, 200);
+  assert.match(vtt.data, /^WEBVTT/); assert.match(vtt.data, /Sidecar line/);
+  assert.match((await call('sam', 'GET', `/api/items/${movie.id}/subtitles/f${polish.id}`)).data, /Tylko obce/);
+  assert.equal((await call('sam', 'GET', `/api/items/${movie.id}/subtitles/f${broken.id}`)).status, 422);
+  assert.equal((await call('sam', 'GET', `/api/items/${movie.id}/subtitles/f9`)).status, 404);
+  assert.equal((await call(null, 'GET', `/api/items/${movie.id}/subtitles/f${english.id}`)).status, 401);
 });
 
 test('any viewer can add labelled subtitles; only owner or head account can edit them', async () => {
@@ -346,9 +421,11 @@ test('dismissing a show from an older client preserves current playback and othe
     [movie]: { position: 20, duration: 100, completed: false, updated: 400 } };
   const put = body => call('eve', 'PUT', '/api/state', body);
   assert.equal((await put({ progress: older, queue: [movie, first], preferences: { autoplay: false } })).status, 200);
+  const movieProgress = (await catalog('eve')).progress[movie];
   const advanced = { [first]: { position: 100, duration: 100, completed: true, updated: 500 },
     [second]: { position: 35, duration: 100, completed: false, updated: 510 } };
-  assert.equal((await put({ progress: advanced })).status, 200);
+  const saved = await put({ progress: advanced });
+  assert.equal(saved.status, 200);
 
   const route = `/api/items/${second}/progress`;
   assert.equal((await call(null, 'PATCH', route, { dismiss: true })).status, 401);
@@ -356,45 +433,100 @@ test('dismissing a show from an older client preserves current playback and othe
   const otherBefore = await catalog('sam');
   const dismissed = await call('eve', 'PATCH', route, { dismiss: true });
   assert.equal(dismissed.status, 200);
-  const hidden = { [first]: { ...advanced[first], hidden: true }, [second]: { ...advanced[second], hidden: true } };
+  const hidden = Object.fromEntries(Object.entries(saved.data.progress).map(([id, entry]) => [id, { ...entry, hidden: true }]));
   assert.deepEqual(dismissed.data.progress, hidden);
 
   // A late full save from either client cannot undo the dismissal.
   await put({ progress: older });
   await put({ progress: advanced });
   const after = await catalog('eve');
-  assert.deepEqual(after.progress, { ...hidden, [movie]: older[movie] });
+  assert.deepEqual(after.progress, { ...hidden, [movie]: movieProgress });
   assert.deepEqual(after.queue, [movie, first]);
-  assert.deepEqual(after.preferences, { autoplay: false });
+  assert.deepEqual(after.preferences, { autoplay: false, volume: 0.72 });
   assert.deepEqual((await catalog('sam')).progress, otherBefore.progress);
 
   const pausedSeek = { ...advanced[second], position: 37, updated: 515 };
-  await put({ progress: { [second]: pausedSeek } });
-  assert.deepEqual((await catalog('eve')).progress[second], { ...pausedSeek, hidden: true });
+  const paused = (await put({ progress: { [second]: pausedSeek } })).data.progress[second];
+  assert.deepEqual({ ...paused, updated: 515 }, { ...pausedSeek, hidden: true });
+  assert.deepEqual((await catalog('eve')).progress[second], paused);
 
   const resumed = { ...advanced[second], position: 40, hidden: false, updated: 520 };
-  await put({ progress: { [second]: resumed } });
-  assert.deepEqual((await catalog('eve')).progress[second], resumed);
+  const resumedProgress = (await put({ progress: { [second]: resumed } })).data.progress[second];
+  assert.deepEqual({ ...resumedProgress, updated: 520 }, resumed);
+  assert.deepEqual((await catalog('eve')).progress[second], resumedProgress);
 
   assert.equal((await call('eve', 'PATCH', route, { dismiss: true })).status, 200);
   const staleToggle = await call('eve', 'PATCH', `/api/items/${first}/progress`, { completed: false, checkpoint: older[first] });
   assert.equal(staleToggle.status, 200);
-  assert.deepEqual({ ...staleToggle.data.progress[first], updated: 500 }, { ...hidden[first], completed: false });
+  assert.deepEqual({ ...staleToggle.data.progress[first], updated: hidden[first].updated }, { ...hidden[first], completed: false });
   const recovered = { position: 55, duration: 100, hidden: false, updated: 530 };
   const newerToggle = await call('eve', 'PATCH', route, { completed: true, checkpoint: recovered });
   assert.equal(newerToggle.status, 200);
   assert.deepEqual({ ...newerToggle.data.progress[second], updated: 530 }, { ...recovered, completed: true, hidden: true });
-  assert.deepEqual((await catalog('eve')).progress, { ...staleToggle.data.progress, ...newerToggle.data.progress, [movie]: older[movie] });
+  assert.deepEqual((await catalog('eve')).progress, { ...staleToggle.data.progress, ...newerToggle.data.progress, [movie]: movieProgress });
 
   // A stale client can seek in an episode with no existing progress row.
   assert.equal((await join('seek-viewer', 'seek-viewer', 'viewer-pass-3')).status, 200);
   const saveFirst = await call('seek-viewer', 'PUT', '/api/state', { progress: { [first]: advanced[first] } });
   assert.equal(saveFirst.status, 200);
   const dismissFirst = await call('seek-viewer', 'PATCH', `/api/items/${first}/progress`, { dismiss: true });
-  assert.deepEqual(dismissFirst.data.progress, { [first]: hidden[first] });
+  assert.deepEqual(dismissFirst.data.progress, { [first]: { ...saveFirst.data.progress[first], hidden: true } });
   const saveSeek = await call('seek-viewer', 'PUT', '/api/state', { progress: { [second]: pausedSeek, [movie]: older[movie] } });
   assert.equal(saveSeek.status, 200);
-  assert.deepEqual((await catalog('seek-viewer')).progress, { [first]: hidden[first], [second]: { ...pausedSeek, hidden: true }, [movie]: older[movie] });
+  assert.equal(saveSeek.data.progress[second].hidden, true);
+  assert.deepEqual((await catalog('seek-viewer')).progress, { ...dismissFirst.data.progress, ...saveSeek.data.progress });
+});
+
+test('watch state uses account-bound operations and ignores invalid or stale checkpoints', async () => {
+  assert.equal((await join('state-viewer', 'state-viewer', 'viewer-pass-4')).status, 200);
+  const { user, groups } = await catalog('state-viewer');
+  const [first, second] = groups[1];
+  const movie = groups[0][0].id;
+  const headers = { 'x-matro-account': String(user.id) };
+  const put = body => call('state-viewer', 'PUT', '/api/state', body, headers);
+  const mismatch = await call('eve', 'PUT', '/api/state', { queue: [] }, headers);
+  assert.equal(mismatch.status, 409);
+  assert.equal(mismatch.data.code, 'account-changed');
+  assert.equal((await call('eve', 'PATCH', `/api/items/${first.id}/progress`, { dismiss: true }, headers)).status, 409);
+  assert.equal((await call('eve', 'GET', '/api/library', undefined, headers)).status, 409);
+
+  await put({ queueChange: { add: [movie, first.id], remove: [] }, preferences: { autoplay: false, tracks: { show: { off: true }, other: { delay: 1 } } } });
+  await put({ queueChange: { add: [second.id], remove: [first.id] }, preferences: { tracks: { show: { delay: 2 } } } });
+  await call('state-viewer', 'PUT', '/api/state', { progress: {}, queue: [first.id], preferences: { volume: .2 } });
+  const options = await catalog('state-viewer');
+  assert.deepEqual(options.queue, [movie, second.id]);
+  assert.deepEqual(options.preferences, { autoplay: false, volume: .2, tracks: { show: { off: true, delay: 2 }, other: { delay: 1 } } });
+  const { queueChange } = await import('../../../packages/core/client/watch-progress.js');
+  await put({ queueChange: queueChange(options.queue, [second.id, movie]) });
+  assert.deepEqual((await catalog('state-viewer')).queue, [second.id, movie]);
+
+  const before = Date.now();
+  const future = await put({ progress: { [first.id]: { position: 10, duration: 100, updated: 1e20 } } });
+  assert.ok(future.data.progress[first.id].updated >= before && future.data.progress[first.id].updated <= Date.now());
+  await put({ progress: { [first.id]: null, [second.id]: { position: '15', duration: 100, updated: Date.now() } } });
+  await call('state-viewer', 'PUT', '/api/state', `{"progress":{"${first.id}":{"position":1e400,"duration":100,"updated":1e400}}}`, { ...headers, 'content-type': 'application/json' });
+  const cutoff = Date.now();
+  assert.deepEqual((await catalog('state-viewer')).progress, future.data.progress);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const current = await put({ progress: { [first.id]: { position: 15, duration: 100, updated: cutoff }, [second.id]: { position: 25, duration: 100, updated: cutoff + 1 } } });
+  assert.equal(current.data.progress[first.id].position, 15);
+  const dismissal = await call('state-viewer', 'PATCH', `/api/items/${first.id}/progress`, { dismiss: true, dismissedAt: cutoff }, headers);
+  assert.equal(dismissal.data.progress[first.id].hidden, true);
+  assert.equal(dismissal.data.progress[second.id], undefined);
+  assert.equal((await catalog('state-viewer')).progress[second.id].position, 25);
+});
+
+test('an older client echoing server times cannot overwrite a slow-clock phone', async () => {
+  assert.equal((await join('slow-viewer', 'slow-viewer', 'viewer-pass-5')).status, 200);
+  const { user, groups } = await catalog('slow-viewer');
+  const id = groups[0][0].id, headers = { 'x-matro-account': String(user.id) };
+  const slow = Date.now() - 3600e3;
+  await call('slow-viewer', 'PUT', '/api/state', { progress: { [id]: { position: 100, duration: 1000, updated: slow } } }, headers);
+  const loaded = (await catalog('slow-viewer')).progress[id];
+  await call('slow-viewer', 'PUT', '/api/state', { progress: { [id]: { position: 500, duration: 1000, updated: slow + 60e3 } } }, headers);
+  // No account header: this is the old client, sending everything it loaded earlier.
+  await call('slow-viewer', 'PUT', '/api/state', { progress: { [id]: loaded } });
+  assert.equal((await catalog('slow-viewer')).progress[id].position, 500);
 });
 
 test('head account upload lands in the library; logout and password reset end sessions', async () => {
@@ -459,6 +591,9 @@ test('static app is served with a locked-down policy', async () => {
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-security-policy'), /default-src 'self'/);
   assert.equal((await fetch(base + '/..%2f..%2fpackage.json')).status, 404);
+  const manifest = await fetch(base + '/manifest.webmanifest');
+  assert.equal(manifest.headers.get('content-type'), 'application/manifest+json');
+  assert.equal((await manifest.json()).display, 'standalone');
 });
 
 test('guessing invite codes is throttled', async () => {

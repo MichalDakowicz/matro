@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const config = require('./config');
-const { open } = require('./db');
+const { open, lockData } = require('./db');
 const { createAuth } = require('./auth');
 const { createLibrary } = require('./library');
 const { createRouter, createServer } = require('./http');
@@ -17,16 +17,23 @@ function createApp({ dataDir = config.dataDir, tmdb: tmdbOptions, downloads: dow
   app.downloads = createDownloads({ dataDir, library, tmdb: app.tmdb, ...downloadOptions });
   app.movieRequests = createMovieRequests(db, requestOptions);
   for (const name of ['account', 'library', 'play', 'admin', 'downloads', 'movie-requests']) require(`./routes/${name}`).register(app);
-  const server = createServer({ router, publicDir: config.publicDir, authenticate: token => auth.user(token), config });
+  const server = createServer({ router, publicDir: config.publicDir, authenticate: token => auth.session(token), config });
   server.on('listening', () => app.movieRequests.start());
   server.on('close', () => { app.scanner.close(); app.downloads.close(); app.movieRequests.close(); app.closePlayback?.(); });
   return { app, server, db, library };
 }
 
 async function main() {
+  const unlock = lockData(config.dataDir);
   fs.mkdirSync(config.mediaDir, { recursive: true });
-  const { server, library, app } = createApp();
-  if (!library.byPath(config.mediaDir)) await library.addFolder(config.mediaDir);
+  const { server, library, app, db } = createApp();
+  server.on('close', () => { db.close(); unlock(); });
+  if (!await library.coveringFolder(config.mediaDir)) {
+    await library.addFolder(config.mediaDir).catch(error => {
+      if (error.status !== 409) throw error;
+      console.error(`library folder ${config.mediaDir}: ${error.message}`);
+    });
+  }
   // Folders the operator wants shared from the start, e.g. read-only mounts in a container.
   for (const folder of config.libraryFolders) if (!library.byPath(folder)) await library.addFolder(folder).catch(error => console.error(`library folder ${folder}: ${error.message}`));
   library.rescanAll().catch(error => console.error('scan failed:', error.message));

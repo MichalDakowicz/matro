@@ -16,7 +16,11 @@ function createMovieUpgrades({ getState, probe, stat, describe, persist, resolve
   const find = id => { const item = getState().items.find(item => item.id === id); if (!item || item.kind !== 'movie') throw new Error('Choose a movie already in the library.'); return item; };
   function groupFor(item) {
     const state = getState();
-    return Object.values(state.movieEditions || {}).find(group => group.editions.includes(item.id)) || { sourceId: item.id, title: metadata(item)?.title || cleanQuery(item.group || item.title), year: metadata(item)?.year || yearOf(item.group || item.title) || '', editions: [item.id], favorite: item.id };
+    const existing = Object.values(state.movieEditions || {}).find(group => group.editions.includes(item.id));
+    if (existing) return existing;
+    const name = item.group || item.title, match = metadata(item);
+    return { sourceId: item.id, title: match?.title || (item.year ? name : cleanQuery(name)),
+      year: match?.year || item.year || yearOf(name) || '', editions: [item.id], favorite: item.id };
   }
   async function measure(item) {
     const details = await stat(item.path), key = `${item.path}:${details.size}:${details.mtimeMs}`;

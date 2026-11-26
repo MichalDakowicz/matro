@@ -7,8 +7,7 @@ services:
     ports:
       - "8484:8484"
     environment:
-      # Set when the server sits behind an HTTPS reverse proxy.
-      MATRO_TRUST_PROXY: "1"
+      MATRO_TRUST_PROXY: "0"
       MATRO_REQUEST_FCM_CREDENTIALS: ${MATRO_REQUEST_FCM_CREDENTIALS:-}
     volumes:
       - matro-data:/data
