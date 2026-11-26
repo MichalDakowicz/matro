@@ -101,7 +101,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
   // Captions and the Skip pill keep one place. They rise only when the controls (or the pills) would cover them, and glide on the player's curve.
   const controlsHeight = controlsTop !== null ? height - controlsTop : insets.bottom + 100;
   const pills = (segment ? 1 : 0) + (creditsNext ? 1 : 0), skipBottom = controlsHeight + 12, skipTop = height - skipBottom - pills * 50 - (pills > 1 ? 8 : 0);
-  const captionTop = Math.max(insets.top + 12, headerEnd + 8);
+  const captionTop = Math.max(insets.top + 12, controls ? headerEnd + 8 : 0);
   const pictureBottom = (height - pictureHeight) / 2 + pictureHeight * .06;
   const captionBottom = Math.max(insets.bottom + 16, pictureBottom);
   const captionLeft = insets.left + 12, captionRight = insets.right + 12;

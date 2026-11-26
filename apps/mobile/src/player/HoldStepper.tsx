@@ -24,7 +24,7 @@ function StepButton({ label, glyph, onStep }: { label: string; glyph: string; on
 
 export function HoldStepper({ label, value, minusLabel, plusLabel, onStep, onReset }: { label: string; value: string; minusLabel: string; plusLabel: string; onStep: (direction: -1 | 1) => void; onReset?: () => void }) {
   return <View style={s.row}>
-    <View style={{ flex: 1 }}><Text style={t.muted}>{label}</Text>{onReset ? <Pressable accessibilityRole="button" accessibilityLabel={`Reset ${label.toLowerCase()}`} onPress={onReset} hitSlop={{ top: 8, bottom: 8, left: 8, right: 16 }}><Text style={[t.dim, { textDecorationLine: 'underline' }]}>Reset</Text></Pressable> : null}</View>
+    <View style={{ flex: 1 }}><Text style={t.muted}>{label}</Text>{onReset ? <Pressable accessibilityRole="button" accessibilityLabel={`Reset ${label.toLowerCase()}`} onPress={onReset} style={s.reset} hitSlop={{ top: 8, bottom: 8, left: 8, right: 16 }}><Text style={[t.dim, { textDecorationLine: 'underline' }]}>Reset</Text></Pressable> : null}</View>
     <StepButton label={minusLabel} glyph="−" onStep={() => onStep(-1)} />
     <Text accessibilityLiveRegion="polite" style={s.value}>{value}</Text>
     <StepButton label={plusLabel} glyph="+" onStep={() => onStep(1)} />
@@ -34,6 +34,7 @@ export function HoldStepper({ label, value, minusLabel, plusLabel, onStep, onRes
 const s = StyleSheet.create({
   row: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 6 },
   step: { width: 44, height: 44, borderRadius: 999, borderWidth: 1, borderColor: chrome.line, alignItems: 'center', justifyContent: 'center' },
+  reset: { minHeight: 44, justifyContent: 'center' },
   glyph: { color: colors.text, fontFamily: fonts.medium, fontSize: 20, lineHeight: 24 },
   value: { minWidth: 64, textAlign: 'center', color: colors.text, fontFamily: fonts.mono, fontSize: 13 },
 });
