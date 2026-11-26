@@ -191,7 +191,10 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     const titles = new Map();
     for (const item of items) if (item.kind === 'movie' || item.kind === 'show') {
       const key = keyFor(item);
-      if (!titles.has(key)) titles.set(key, { key, kind: item.kind, query: cleanQuery(item.group), year: yearOf(item.group) || (item.kind === 'movie' ? yearOf(path.basename(item.path)) : null), seasons: new Set() });
+      if (!titles.has(key)) {
+        const year = item.year ? String(item.year) : yearOf(item.group) || (item.kind === 'movie' ? yearOf(path.basename(item.path)) : null);
+        titles.set(key, { key, kind: item.kind, query: item.year ? item.group : cleanQuery(item.group), year, seasons: new Set() });
+      }
       if (item.season !== null && item.season !== undefined) titles.get(key).seasons.add(item.season);
     }
     for (const job of titles.values()) job.seasons = [...job.seasons].sort((a, b) => a - b);

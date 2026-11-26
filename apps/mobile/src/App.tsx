@@ -13,6 +13,7 @@ import * as SecureStore from 'expo-secure-store';
 import { configureTokenStorage } from './lib/server';
 import { forgetOfflineAccount, offlineLibrary } from './lib/offline';
 import { forgetMovieRequestAlerts } from './lib/movie-request-alerts';
+import { clearPlaybackCache } from './player/diskBuffer';
 
 const tokenKey = (base: string) => 'matro.session.' + Array.from(base).map(c => c.charCodeAt(0).toString(16)).join('');
 configureTokenStorage({
@@ -32,6 +33,7 @@ export default function App() {
 
   // Reopen straight into the library when the saved server still has a live session.
   useEffect(() => {
+    try { clearPlaybackCache(); } catch { /* Cache cleanup must not block startup. */ }
     (async () => {
       const base = await loadServer();
       if (!base) return setRoute({ name: 'server' });
