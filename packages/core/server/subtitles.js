@@ -1,5 +1,5 @@
-const fs = require('node:fs/promises');
 const path = require('node:path');
+const { createAssetCache } = require('./asset-cache');
 const config = require('./config');
 const { run } = require('./media');
 const { charsetFor } = require('./lang');
@@ -37,17 +37,17 @@ async function toVtt(buffer, { filename, language, charset }) {
   return vtt;
 }
 
-function createEmbedded() {
-  const dir = path.join(config.dataDir, 'cache', 'subs'), pending = new Map();
+function createEmbedded(dataDir = config.dataDir, cache = createAssetCache(dataDir)) {
+  const pending = new Map();
   return async function embedded(item, index) {
-    const file = path.join(dir, `${item.id}-${index}-${item.mtime}.vtt`);
-    try { return await fs.readFile(file, 'utf8'); } catch { /* not cached yet */ }
+    const file = `${item.id}-${index}-${item.mtime}.vtt`;
+    const cached = await cache.read('subs', file, 'utf8');
+    if (cached !== null) return cached;
     if (pending.has(file)) return pending.get(file);
     const task = (async () => {
       const vtt = await run(config.ffmpeg, ['-v', 'error', '-nostdin', '-i', item.path, '-map', `0:${index}`, '-c:s', 'webvtt', '-f', 'webvtt', 'pipe:1'], { timeout: 180000 });
       if (!isVtt(vtt)) throw new Error('Embedded subtitles did not produce WebVTT.');
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(file + '.tmp', vtt).then(() => fs.rename(file + '.tmp', file)).catch(() => {});
+      await cache.write('subs', file, vtt);
       return vtt;
     })().finally(() => pending.delete(file));
     pending.set(file, task);

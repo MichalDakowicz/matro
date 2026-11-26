@@ -234,9 +234,52 @@ test('track info, direct play ranges, transcode and embedded subtitles', async (
   assert.equal(frame.headers.get('content-type'), 'image/jpeg');
   const jpeg = Buffer.from(await frame.arrayBuffer());
   assert.ok(jpeg.length > 500 && jpeg[0] === 0xff && jpeg[1] === 0xd8);
+  const nearbyWidth = await fetch(`${base}/api/items/${ep.id}/frame?t=1&w=230`, { headers: { cookie: jar.sam } });
+  assert.deepEqual(Buffer.from(await nearbyWidth.arrayBuffer()), jpeg);
+  assert.deepEqual(fs.readdirSync(path.join(dataDir, 'cache', 'frames')).map(name => name.match(/-\d+-1\.jpg$/)?.[0]), ['-160-1.jpg']);
   const vtt = await call('sam', 'GET', `/api/items/${ep.id}/subtitles/e${epInfo.embedded[0].index}`);
   assert.match(vtt.data, /^WEBVTT/);
   assert.match(vtt.data, /Hello there/);
+  assert.equal(fs.readdirSync(path.join(dataDir, 'cache', 'subs')).length, 1);
+});
+
+test('an offline range still reads its open generation when the media path is replaced', async t => {
+  const { groups } = await catalog('sam');
+  const movie = groups[0][0], route = `/api/items/${movie.id}/offline`;
+  const ready = (await call('sam', 'GET', route)).data;
+  const original = app.library.item(movie.id).path, backup = original + '.backup', replacement = original + '.replacement';
+  const bytes = fs.readFileSync(original);
+  fs.writeFileSync(replacement, Buffer.alloc(bytes.length));
+  const open = fs.promises.open;
+  let replaced = false;
+  t.mock.method(fs.promises, 'open', async (file, ...args) => {
+    const handle = await open(file, ...args);
+    if (file === original && !replaced) {
+      const stat = handle.stat.bind(handle);
+      handle.stat = async () => {
+        const properties = await stat();
+        fs.renameSync(original, backup);
+        fs.renameSync(replacement, original);
+        replaced = true;
+        return properties;
+      };
+    }
+    return handle;
+  });
+  try {
+    const url = base + route + '/file?version=' + ready.version;
+    const headers = { cookie: jar.sam, range: 'bytes=0-31' };
+    const range = await fetch(url, { headers });
+    assert.equal(range.status, 206);
+    assert.deepEqual(Buffer.from(await range.arrayBuffer()), bytes.subarray(0, 32));
+    assert.equal(replaced, true);
+    const stale = await fetch(url, { headers });
+    assert.equal(stale.status, 409);
+    await stale.body.cancel();
+  } finally {
+    if (fs.existsSync(backup)) fs.renameSync(backup, original);
+    fs.rmSync(replacement, { force: true });
+  }
 });
 
 test('offline media preparation is authenticated and serves versioned, seekable files', async () => {

@@ -3,15 +3,12 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { fetch } from 'expo/fetch';
 import { inspect, mediaHeaders, request, ServerError, type Info, type Item, type Library, type MatroUser } from './server';
 import { progressRecovery, recoveryScope } from './storage';
+import { activeOfflineAccountKey as active, offlineAccount as account, offlineLibraryKey as libraryKey, offlineMediaPrefix as prefix } from './offline-storage';
 import { holdService, offlineNotice } from './offline-notifications';
 
 const PIECE = 8 * 1024 * 1024;
 // Pieces fetched ahead of the one being written, so the network never idles while the disk is busy.
 const AHEAD = 3;
-const account = (base: string, user: MatroUser) => encodeURIComponent(recoveryScope(base, user));
-const active = (base: string) => `matro:offline:active:${encodeURIComponent(base)}`;
-const libraryKey = (scope: string) => `matro:offline:library:${scope}`;
-const prefix = (scope: string) => `matro:offline:media:${scope}:`;
 const recordKey = (scope: string, id: string) => prefix(scope) + id;
 const read = async <T>(key: string): Promise<T | null> => {
   const raw = await AsyncStorage.getItem(key);
@@ -63,7 +60,7 @@ export async function savedTitle(base: string, user: MatroUser, id: string) {
 export async function offlineLibrary(base: string): Promise<Library | null> {
   const scope = await AsyncStorage.getItem(active(base));
   const data = scope ? await read<Library>(libraryKey(scope)) : null;
-  if (!data) return null;
+  if (!data || scope !== account(base, data.user)) return null;
   const ids = new Set((await savedTitles(base, data.user)).filter(entry => entry.complete && new File(entry.uri).exists).map(entry => entry.id));
   const items = data.items.filter(item => ids.has(item.id));
   const progress = await progressRecovery.restore(recoveryScope(base, data.user), data.progress, items.map(item => item.id));
