@@ -127,6 +127,7 @@ export function openProfile({ session, getState, forgetTracks, signOut, openSave
     h('main', { class: 'page web-page' },
       h('header', { class: 'page-head' }, h('div', { class: 'web-who' }, avatar(user.username, true), h('div', {}, h('h1', { class: 'page-title' }, user.username), h('p', { class: 'page-sub' }, admin ? 'Head account · looks after the library and everyone on it' : 'Viewer · watches and adds subtitles'))), h('button', { class: 'pill', type: 'button', onclick: signOut }, 'Sign out')),
       section('Activity', null, stats),
+      section('Watch history', null, h('p', { class: 'muted' }, 'What you played and when, newest first.'), h('button', { class: 'pill', type: 'button', onclick: () => { close(); document.dispatchEvent(new CustomEvent('matro:history')); } }, 'View watch history')),
       !session.offline && state?.scanStatus ? section('Library scan', null, h('p', { class: 'muted', role: 'status', 'data-library-scan-status': '' }, scanMessage(state.scanStatus)),
         h('ul', { class: 'scan-errors', 'data-library-scan-errors': '' }, state.scanStatus.errors.map(row => h('li', {}, row.folder + ': ' + row.error)))) : null,
       group('Playback',

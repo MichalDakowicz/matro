@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { markedProgress, seasonLabel, seasonNumbers } from '../../../../packages/core/client/watch-progress.js';
+import { dayLabel, markedProgress, seasonLabel, seasonNumbers, watchHistory } from '../../../../packages/core/client/watch-progress.js';
 import { continueItems, groupLibrary, matchTrack, metadataFor, resumeItem, savedServes, statusOf, trackKey } from '../../../../packages/core/client/library.ts';
 import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
 import { randomReelStart } from '../../../../packages/core/client/reel-start.js';
@@ -116,4 +116,16 @@ test('marking a season watched skips finished episodes, rewinds on unwatch and k
   assert.deepEqual(Object.keys(unwatched), ['one', 'two', 'three']);
   assert.equal(unwatched.one.position, 0); assert.equal(unwatched.three.updated, 51);
   assert.deepEqual(markedProgress(list, {}, false), {});
+});
+
+test('watch history lists played titles newest first, skips marked-only ones and honours the period', () => {
+  const list = [episode('one', 1), episode('two', 2), episode('three', 3), episode('four', 4)], day = 864e5, now = new Date(2026, 10, 25, 12).getTime();
+  const progress = {
+    one: { position: 30, duration: 100, updated: now - 8 * day }, two: { position: 99, duration: 100, completed: true, updated: now - day },
+    three: { position: 0, duration: 100, completed: true, updated: now }, four: { position: 5, duration: 100, updated: 0 }, gone: { position: 9, duration: 10, updated: now },
+  };
+  assert.deepEqual(watchHistory(list, progress).map(row => row.item.id), ['two', 'one']);
+  assert.deepEqual(watchHistory(list, progress, { since: now - 7 * day }).map(row => row.item.id), ['two']);
+  assert.deepEqual(watchHistory(list, progress, { limit: 1 }).map(row => row.item.id), ['two']);
+  assert.equal(dayLabel(now - 3600e3, now), 'Today'); assert.equal(dayLabel(now - day, now), 'Yesterday');
 });

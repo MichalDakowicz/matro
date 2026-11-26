@@ -684,6 +684,55 @@ test('web marks a season watched with one server request and keeps it after a re
   }
 });
 
+test('the profile page opens the watch history of the signed-in account', async () => {
+  const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'web-history-'));
+  const media = path.join(root, 'media'); await fs.mkdir(media);
+  await fs.copyFile(f.mkv, path.join(media, 'Northbound.mkv'));
+  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} } });
+  let browser;
+  try {
+    await app.createUser('head', 'native-and-web-test', 'admin');
+    await library.addFolder(media);
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: `http://127.0.0.1:${server.address().port}`, MATRO_METADATA: 'off' }; delete env.ELECTRON_RUN_AS_NODE;
+    browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
+    const page = await browser.firstWindow();
+    await page.getByRole('textbox', { name: 'Username', exact: true }).fill('head');
+    await page.getByLabel('Password', { exact: true }).fill('native-and-web-test');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).waitFor();
+    await page.evaluate(async () => {
+      const { items } = await (await fetch('/api/library')).json();
+      await fetch('/api/state', { method: 'PUT', headers: { 'x-matro': '1', 'content-type': 'application/json' }, body: JSON.stringify({ progress: { [items[0].id]: { position: 4, duration: 12, completed: false, updated: Date.now() } } }) });
+    });
+    await page.reload();
+    for (const [width, height, theme] of [[1280, 840, 'dark'], [390, 844, 'light']]) {
+      await browser.evaluate(({ BrowserWindow }, [width, height]) => {
+        const win = BrowserWindow.getAllWindows()[0];
+        win.setMinimumSize(300, 300); win.setContentSize(width, height);
+      }, [width, height]);
+      await page.evaluate(mode => window.matroTheme.set(mode), theme);
+      await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width);
+      await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+      await page.getByRole('button', { name: 'Profile: head' }).press('Enter');
+      await page.getByRole('button', { name: 'View watch history' }).press('Enter');
+      const dialog = page.getByRole('dialog', { name: 'Watch history' });
+      await expect(dialog).toContainText('Northbound');
+      await expect(dialog).toContainText('Stopped at 0:04 of 0:12');
+      const period = dialog.getByRole('button', { name: 'Last 30 days' });
+      await period.press('Enter');
+      await expect(period).toBeFocused();
+      await expect(period).toHaveAttribute('aria-pressed', 'true');
+      await page.keyboard.press('Escape');
+      await expect(dialog).toBeHidden();
+    }
+  } finally {
+    await browser?.close(); app.downloads.close(); app.closePlayback();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a receiver plays saved media during an outage and syncs offline changes after reconnecting', async () => {
   const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'offline-ui-'));
   const media = path.join(root, 'media'); await fs.mkdir(media);

@@ -1072,3 +1072,36 @@ test('a season, the earlier episodes or a whole show are marked watched in one s
     await expect.poll(done).toEqual([one.id, two.id].sort());
   } finally { await app.close(); }
 });
+
+test('watch history lists what was played with dates and opens the title', async () => {
+  const f = await fixtures();
+  const names = ['Historian.S01E01.One.mkv', 'Historian.S01E02.Two.mkv', 'Historian.S01E03.Three.mkv'].map(name => path.join(f.dir, name));
+  await Promise.all(names.map(file => fs.copyFile(f.mkv, file)));
+  const [one, two, three] = names.map(file => describe(file)), now = Date.now();
+  const profile = path.join(f.dir, `history-profile-${Date.now()}`); await fs.mkdir(profile);
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, folders: [], items: [one, two, three], queue: [], preferences: { autoplay: false, volume: .3, motion: 'off' },
+    progress: { [one.id]: { position: 5, duration: 12, completed: false, updated: now }, [two.id]: { position: 11.9, duration: 12, completed: true, updated: now - 20 * 864e5 }, [three.id]: { position: 0, duration: 12, completed: true, updated: now } } }));
+  const app = await electron.launch(launchOptions(profile)), page = await app.firstWindow();
+  try {
+    await page.getByRole('button', { name: 'About Matro and this library' }).click();
+    await page.getByRole('button', { name: 'Watch history', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Watch history' });
+    await expect(dialog.getByRole('heading', { name: 'Today' })).toBeVisible();
+    await expect(dialog.locator('[data-history-item]')).toHaveCount(1);
+    await expect(dialog.getByText('1 item played', { exact: true })).toBeVisible();
+    await expect(dialog).toContainText('Stopped at 0:05 of 0:12');
+    await dialog.getByRole('button', { name: 'Last 30 days' }).click();
+    await expect(dialog.locator('[data-history-item]')).toHaveCount(2);
+    await expect(dialog.getByText('2 items played', { exact: true })).toBeVisible();
+    await expect(dialog).toContainText('Finished');
+    // A title that was only marked watched has no played position, so it is not history.
+    await expect(dialog.locator(`[data-history-item="${three.id}"]`)).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    const about = page.getByRole('button', { name: 'About Matro and this library' });
+    if (await about.getAttribute('aria-expanded') !== 'true') await about.click();
+    await page.getByRole('button', { name: 'Watch history', exact: true }).click();
+    await page.locator(`[data-history-item="${one.id}"]`).click();
+    await expect(page.locator('#detail-overlay')).toBeVisible();
+  } finally { await app.close(); }
+});

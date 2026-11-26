@@ -6,7 +6,7 @@ import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
 import { randomReelStart } from '../core/client/reel-start.js';
-import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, markedProgress, normalizeProgress, queueChange, reachedCompletion, reachedOutro, reachedPlaybackEnd, resumeTarget, seasonLabel } from '../core/client/watch-progress.js';
+import { compareEpisodes, continueWatching, dayLabel, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, markedProgress, normalizeProgress, queueChange, reachedCompletion, reachedOutro, reachedPlaybackEnd, resumeTarget, seasonLabel, watchHistory } from '../core/client/watch-progress.js';
 import { initialTracks, LANGUAGES, SUBTITLE_MODES, trackDefaults } from '../core/client/track-preferences.js';
 import { createAutoSkip } from '../core/client/auto-skip.js';
 const api = window.matro;
@@ -355,7 +355,7 @@ function setTrackDefaults(change) {
 function footer() {
   const updatesEnabled = library.checkForUpdates === true;
   const updates = api.setUpdateChecks ? `<span class="theme-setting"><span>Check for updates</span><button type="button" class="switch ${updatesEnabled ? 'on' : ''}" data-update-checks role="switch" aria-label="Check for updates" aria-checked="${updatesEnabled}"></button></span>` : '';
-  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span>${library.scanStatus ? `<span data-library-scan-status role="status">${esc(scanMessage(library.scanStatus))}</span>` : ''}<span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span>${trackDefaultsSetting()}${updates}<button class="chip spoiler-setting" data-action="spoiler-safe" aria-pressed="${library.preferences.spoilerSafe === true}">Hide episode spoilers</button><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
+  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span>${library.scanStatus ? `<span data-library-scan-status role="status">${esc(scanMessage(library.scanStatus))}</span>` : ''}<span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span>${trackDefaultsSetting()}${updates}<button class="chip spoiler-setting" data-action="spoiler-safe" aria-pressed="${library.preferences.spoilerSafe === true}">Hide episode spoilers</button><button class="text-button" data-action="history">Watch history</button><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
 }
 const sectionGrid = (title, items, count, more) => items.length ? `<section class="section"><div class="section-heading"><h2>${title}</h2><span>${count}${more ? ` · <button class="text-button" data-tab="${more}">See all</button>` : ''}</span></div><div class="grid">${items.map(poster).join('')}</div></section>` : '';
 const kinds = [['show', 'Shows', 'shows'], ['movie', 'Movies', 'titles'], ['audio', 'Music & audio', 'files']];
@@ -804,6 +804,28 @@ function showSeason(season) {
   document.querySelectorAll('[data-season-panel]').forEach(panel => { panel.hidden = Number(panel.dataset.seasonPanel) !== season; });
   document.querySelectorAll('[data-season-tab]').forEach(tab => { const on = Number(tab.dataset.seasonTab) === season; tab.setAttribute('aria-selected', String(on)); tab.setAttribute('aria-pressed', String(on)); });
 }
+// Watch history: what was played and when, newest first, from the same per-person progress that powers Continue watching.
+let historyDays = 7;
+function openHistory() {
+  let box = $('#history-dialog');
+  if (!box) { box = document.createElement('dialog'); box.id = 'history-dialog'; box.className = 'match-dialog'; box.setAttribute('aria-labelledby', 'history-title'); document.body.append(box); }
+  renderHistory(); box.showModal();
+}
+function renderHistory() {
+  const box = $('#history-dialog'); if (!box) return;
+  const rows = watchHistory(library.items, library.progress, { since: historyDays ? Date.now() - historyDays * 864e5 : 0 });
+  let last = '';
+  const list = rows.map(({ item, entry, at }) => {
+    const label = dayLabel(at), head = label === last ? '' : `<h3 class="season-heading">${esc(label)}</h3>`; last = label;
+    const when = new Date(at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    const state = completed(item.id) ? 'Finished' : `Stopped at ${fmt(entry.position)}${entry.duration ? ` of ${fmt(entry.duration)}` : ''}`;
+    return `${head}<button class="match-row history-row" data-history-item="${esc(item.id)}"><span class="min"><strong>${esc(displayName(item))}${item.kind === 'show' ? ` · ${code(item)}` : ''}</strong>${item.kind === 'show' ? `<small>${esc(episodeName(item))}</small>` : ''}<small>${esc(`${when} · ${state}`)}</small></span></button>`;
+  }).join('');
+  box.innerHTML = `<div class="section-heading"><h2 id="history-title">Watch history</h2><button class="icon-button" data-action="close-history" aria-label="Close">×</button></div>
+    <div class="chip-row" role="group" aria-label="Period">${[[7, 'Last 7 days'], [30, 'Last 30 days'], [0, 'All time']].map(([days, text]) => `<button class="chip" data-history-days="${days}" aria-pressed="${historyDays === days}">${text}</button>`).join('')}</div>
+    <div class="match-results" aria-live="polite"><p class="match-note">${rows.length ? `${rows.length} ${rows.length === 1 ? 'item' : 'items'} played` : historyDays ? 'Nothing played in this period.' : 'Your watch history is empty.'}</p>${list}</div>`;
+}
+document.addEventListener('matro:history', openHistory);
 // Manual TMDB matching: search, then pin a result (or none) to the title.
 let matchItem = null, matchTimer, matchRun = 0;
 const cleanName = text => String(text).replace(/[._]+/g, ' ').replace(/\s*[[(]?\b(?:19|20)\d{2}\b[\])]?.*$/, '').trim() || String(text);
@@ -1668,9 +1690,10 @@ const actions = {
   'spoiler-safe': async () => {
     library.preferences.spoilerSafe = library.preferences.spoilerSafe !== true;
     rerender();
-    await save();
+    await savePreferences({ spoilerSafe: library.preferences.spoilerSafe });
     root.querySelector('[data-action=spoiler-safe]')?.focus();
   },
+  history: openHistory, 'close-history': () => $('#history-dialog')?.close(),
   shortcuts: () => $('#shortcuts').showModal(), library: backToLibrary,
   toggle, backward: () => seek(offset + video.currentTime - SKIP), forward: () => seek(offset + video.currentTime + SKIP),
   previous: () => step(-1), next: () => step(1), fullscreen: () => api.window('fullscreen'),
@@ -1743,6 +1766,8 @@ document.addEventListener('click', event => {
       catch (error) { if (error.name !== 'AbortError') throw error; }
       return;
     }
+    if (btn.dataset.historyDays) { historyDays = Number(btn.dataset.historyDays); renderHistory(); $(`[data-history-days="${historyDays}"]`)?.focus(); return; }
+    if (btn.dataset.historyItem) { $('#history-dialog')?.close(); return openDetail(btn.dataset.historyItem); }
     if (btn.dataset.complete) return markComplete(btn.dataset.complete);
     if (btn.dataset.removeContinue) return removeContinue(btn.dataset.removeContinue);
     if (btn.dataset.markerStart) { markerDraft = { type: btn.dataset.markerStart, start: offset + video.currentTime }; renderTracks(); return; }
