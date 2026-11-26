@@ -303,6 +303,13 @@ export function createAdapter(session) {
     chooseSource: window.matroDesktop?.chooseSource,
     recoveryScope: scope,
     load, inspect, prepare: inspect, savedPlayback, subtitles, loadSubtitle, stream,
+    get subtitleSearchStatus() { return session.offline ? null : () => get('/api/subtitle-search'); },
+    searchSubtitles: async ({ id, language }) => (await get(`/api/items/${id}/subtitle-search?${new URLSearchParams({ language })}`)).results,
+    downloadSubtitle: async ({ id, token }) => {
+      const { subtitle } = await stateRequest('POST', `/api/items/${id}/subtitle-search`, { token });
+      const saved = track(subtitle);
+      return { text: await subtitles({ id, index: saved.index }), track: saved };
+    },
     get offlineSave() { return session.offline ? null : id => saveOffline([id]); },
     get offlineSaveMany() { return session.offline ? null : saveOffline; },
     dismissContinue: (id, progress) => changeProgress(id, { dismiss: true }, progress),

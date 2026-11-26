@@ -56,6 +56,20 @@ async function fakeTmdb(url) {
   return new Response('{}', { status: 404 });
 }
 
+// A stand-in for api.opensubtitles.com: records each request so tests can see what was sent and that nothing is sent while search is off.
+const openSubtitlesCalls = [];
+async function fakeOpenSubtitles(url, options = {}) {
+  const u = new URL(url);
+  openSubtitlesCalls.push({ url: String(url), headers: options.headers || {}, body: options.body });
+  if (u.pathname.endsWith('/subtitles')) return json({ data: [
+    { attributes: { release: 'Heat.1995.BluRay', language: 'pl', files: [{ file_id: 11, file_name: 'heat.srt' }] } },
+    { attributes: { release: 'Elsewhere', language: 'pl', files: [{ file_id: 12 }] } },
+    { attributes: { release: 'Broken', language: 'pl', files: [] } }] });
+  if (u.pathname.endsWith('/download')) return json({ link: JSON.parse(options.body).file_id === 12 ? 'https://evil.example/x.srt' : 'https://www.opensubtitles.com/download/abc/heat.srt' });
+  if (u.hostname === 'www.opensubtitles.com') return new Response('1\n00:00:01,000 --> 00:00:02,000\nZażółć gęślą jaźń\n', { status: 200 });
+  return new Response('', { status: 404 });
+}
+
 test.before(async () => {
   make(path.join(mediaDir, 'Heat (1995)', 'Heat.1995.mp4'), ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=4', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-movflags', '+faststart']);
   const srt = path.join(root, 'in.srt');
@@ -68,7 +82,7 @@ test.before(async () => {
   fs.writeFileSync(path.join(heat, 'Heat.1995.pl.forced.srt'), '1\n00:00:01,000 --> 00:00:02,000\nTylko obce\n');
   fs.writeFileSync(path.join(heat, 'Heat.1995.broken.srt'), 'not a subtitle');
   fs.writeFileSync(path.join(heat, 'Other.en.srt'), '1\n00:00:00,500 --> 00:00:02,000\nNot ours\n');
-  const created = createApp({ dataDir, tmdb: { fetchImpl: fakeTmdb, env: { TMDB_API_KEY: 'test-key' } } }), { server, library, db } = created;
+  const created = createApp({ dataDir, tmdb: { fetchImpl: fakeTmdb, env: { TMDB_API_KEY: 'test-key' } }, subtitleSearch: { fetch: fakeOpenSubtitles } }), { server, library, db } = created;
   app = created.app;
   database = db;
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -377,6 +391,67 @@ test('any viewer can add labelled subtitles; only owner or head account can edit
   assert.equal((await call('eve', 'GET', '/api/me/subtitles')).data.subtitles.length, 0);
   assert.equal((await call('admin', 'GET', '/api/me/subtitles')).data.subtitles.length, 2);
   assert.equal((await call('admin', 'DELETE', `/api/subtitles/${id}`)).status, 200);
+});
+
+test('online subtitle search is off until the head account adds a key, and the key never leaves the server', async () => {
+  const movie = (await catalog('sam')).groups[0][0], key = 'secret-key-123', url = `/api/items/${movie.id}/subtitle-search`;
+  assert.deepEqual((await call('sam', 'GET', '/api/subtitle-search')).data, { enabled: false });
+  assert.equal((await call('sam', 'GET', `${url}?language=pl`)).status, 403);
+  assert.equal((await call('sam', 'POST', url, { token: 'x' })).status, 403);
+  assert.equal(openSubtitlesCalls.length, 0);
+  assert.equal((await call('sam', 'PUT', '/api/admin/subtitle-search', { key })).status, 403);
+  assert.equal((await call('admin', 'PUT', '/api/admin/subtitle-search', { key: 'bad key' })).status, 400);
+  const on = await call('admin', 'PUT', '/api/admin/subtitle-search', { key });
+  assert.deepEqual(on.data, { enabled: true });
+  const status = await call('sam', 'GET', '/api/subtitle-search');
+  assert.deepEqual(status.data, { enabled: true });
+  assert.equal(JSON.stringify([on.data, status.data, (await call('admin', 'GET', '/api/library')).data, (await call('admin', 'GET', '/api/me')).data]).includes(key), false);
+
+  assert.equal((await call('sam', 'GET', `${url}?language=und`)).status, 400);
+  const found = await call('sam', 'GET', `${url}?language=pol`);
+  assert.deepEqual(found.data.results.map(r => [r.name, r.language]), [['Heat.1995.BluRay', 'pl'], ['Elsewhere', 'pl']]);
+  assert.equal(openSubtitlesCalls[0].headers['Api-Key'], key);
+  assert.match(openSubtitlesCalls[0].url, /query=Heat&languages=pl&type=movie/);
+  assert.equal(JSON.stringify(found.data).includes(key), false);
+
+  const [first, elsewhere] = found.data.results;
+  assert.equal((await call('sam', 'POST', url, { token: 'unknown' })).status, 404);
+  assert.equal((await call('sam', 'POST', url, { token: elsewhere.token })).status, 502);
+  const saved = await call('sam', 'POST', url, { token: first.token });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.data.subtitle.language, 'pl');
+  assert.match((await call('sam', 'GET', `/api/items/${movie.id}/subtitles/u${saved.data.subtitle.id}`)).data, /Zażółć/);
+  assert.equal((await call('sam', 'POST', url, { token: first.token })).data.subtitle.id, saved.data.subtitle.id);
+  assert.equal((await call('eve', 'POST', url, { token: first.token })).status, 404);
+
+  assert.deepEqual((await call('admin', 'PUT', '/api/admin/subtitle-search', { key: '' })).data, { enabled: false });
+  assert.equal((await call('sam', 'GET', `${url}?language=pl`)).status, 403);
+  assert.equal((await call('sam', 'DELETE', `/api/subtitles/${saved.data.subtitle.id}`)).status, 200);
+});
+
+test('online subtitle search limits each account so one viewer cannot spend the shared OpenSubtitles quota', async () => {
+  const movie = (await catalog('sam')).groups[0][0], url = `/api/items/${movie.id}/subtitle-search`;
+  assert.equal((await call('admin', 'PUT', '/api/admin/subtitle-search', { key: 'secret-key-123' })).status, 200);
+  try {
+    const calls = openSubtitlesCalls.length;
+    for (let n = 0; n < 10; n++) assert.equal((await call('eve', 'GET', `${url}?language=pl`)).status, 200);
+    assert.equal(openSubtitlesCalls[calls].headers['User-Agent'], `Matro v${require('../../../package.json').version}`);
+    const blocked = await call('eve', 'GET', `${url}?language=pl`);
+    assert.equal(blocked.status, 429);
+    assert.match(JSON.stringify(blocked.data), /Too many subtitle searches/);
+    assert.equal(openSubtitlesCalls.length, calls + 10, 'a refused search never reaches OpenSubtitles');
+    const found = await call('admin', 'GET', `${url}?language=pl`);
+    assert.equal(found.status, 200, 'another account keeps its own allowance');
+
+    const token = found.data.results[0].token;
+    for (let n = 0; n < 20; n++) assert.equal((await call('admin', 'POST', url, { token })).status, 200);
+    const spent = openSubtitlesCalls.length, capped = await call('admin', 'POST', url, { token });
+    assert.equal(capped.status, 429);
+    assert.match(JSON.stringify(capped.data), /downloads today/);
+    assert.equal(openSubtitlesCalls.length, spent);
+  } finally {
+    assert.deepEqual((await call('admin', 'PUT', '/api/admin/subtitle-search', { key: '' })).data, { enabled: false });
+  }
 });
 
 test('watch state is saved per person and merged into the catalog they load', async () => {
