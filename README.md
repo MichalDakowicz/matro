@@ -40,6 +40,11 @@ npm run dist                     # Windows installer
 
 Tests generate isolated media and profiles under `.test-media/` and temporary directories. Download tests use mock clients and never download real releases. Set `MATRO_METADATA=off` to prevent metadata requests during local testing.
 
+In the standalone desktop library, open **?** and turn on **Check for updates** to check GitHub
+on launch and when you enable the setting. If a newer stable release is available, Matro offers
+to open its release page so you can download the installer. The setting starts off and stays
+off until you enable it.
+
 ### Posters and metadata (TMDB, optional)
 
 Matro can fill in posters, backdrops, director/creator, year, genres, overview, episode names and the TMDb rating from [TMDB](https://www.themoviedb.org/). It is off unless you provide credentials. Put them in a `.env` file — in the project folder for development, or in the user-data folder for a packaged app:
@@ -54,7 +59,7 @@ TMDB_ACCESS_TOKEN=your-read-access-token   # or TMDB_API_KEY=...; VITE_-prefixed
 
 - Save a movie or episode for offline playback in the web app, desktop receiver, or native app. **Profile → Saved for offline** shows progress, lets you resume or remove saves, and opens saved titles. Use HTTPS to reopen the web app while offline. The desktop receiver also supports offline startup for its configured LAN server. Offline saves require a Matro 0.7.9 or later server.
 
-- Recursive folder import and rescan, file import, drag/drop, search, and shows/movies/audio filters. Title folders with one video become movies; multiple videos become shows. Season folders stay under their parent show. Episode numbers come from `S01E02`, `1x02`, or chapter/episode filenames, with natural filename order as a fallback.
+- Recursive folder import and rescan, file import, drag/drop, **Open with Matro** from Windows Explorer (after installing from the installer; the file plays in the running window), search, and shows/movies/audio filters. Title folders with one video become movies; multiple videos become shows. Season folders stay under their parent show. Episode numbers come from `S01E02`, `1x02`, or chapter/episode filenames, with natural filename order as a fallback.
 - Playback through bundled FFmpeg, including MKV, MP4, AVI, MOV, WebM, MPEG/TS and common audio inputs supported by that build.
 - Seeking with hover thumbnails and precise timestamps, 5-second skip buttons and arrow keys, pause, volume/mute with a percentage readout, speed, fullscreen, chapters, queue (a drawer over the video), autoplay, and resume saved between launches. Skip markers show as faint ranges on the seeker. Fullscreen expands video to the display, removes window chrome, and hides the queue until requested; Esc exits fullscreen.
 - Embedded text subtitles and external SRT/VTT/ASS/SSA converted to WebVTT, plus embedded bitmap subtitles (PGS, DVD/VobSub, DVB, XSUB) composited into playback. Subtitle delay works for text and bitmap tracks; text size is adjustable, while bitmaps retain their original appearance.

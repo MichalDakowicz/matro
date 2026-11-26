@@ -5,9 +5,10 @@ const crypto = require('node:crypto');
 const { createTorrents } = require('../desktop/torrents.cjs');
 const { join } = require('../desktop/download-layout.cjs');
 const config = require('./config');
+const { HttpError } = require('./http');
 
 // The head account manages qBittorrent on this same host (including a shared Docker mount).
-function createDownloads({ dataDir, library, tmdb, pathMap = JSON.parse(process.env.MATRO_DOWNLOAD_PATH_MAP || '{}'), hostConfig = {}, ...options }) {
+function createDownloads({ dataDir, library, tmdb, pathMap = JSON.parse(process.env.MATRO_DOWNLOAD_PATH_MAP || '{}'), hostConfig = {}, afterImport, ...options }) {
   const host = {
     url: process.env.MATRO_QBITTORRENT_URL || 'http://127.0.0.1:8080',
     movieRoot: process.env.MATRO_DOWNLOAD_MOVIES || path.join(config.mediaDir, 'Movies'),
@@ -51,10 +52,10 @@ function createDownloads({ dataDir, library, tmdb, pathMap = JSON.parse(process.
     return mapping ? path.join(mapping[1], path.relative(mapping[0], absolute)) : absolute;
   }
   async function validate(file) {
-    if (typeof file !== 'string' || !path.isAbsolute(file) || /[\0\r\n]/.test(file)) throw new Error('Use an absolute folder on the Matro host.');
+    if (typeof file !== 'string' || !path.isAbsolute(file) || /[\0\r\n]/.test(file)) throw new HttpError(400, 'Use an absolute folder on the Matro host.');
     const actual = await canonical(mappedPath(file));
     for (const folder of library.folders()) if (within(await canonical(folder.path), actual)) return actual;
-    throw new Error('Add this destination under Folders first. Downloads must stay inside a shared library folder.');
+    throw new HttpError(400, 'Add this destination under Folders first. Downloads must stay inside a shared library folder.');
   }
   const prowlarr = process.env.MATRO_PROWLARR_URL || process.env.MATRO_PROWLARR_API_KEY ? { url: process.env.MATRO_PROWLARR_URL, key: process.env.MATRO_PROWLARR_API_KEY } : undefined;
   const torrents = createTorrents({ prowlarr, ...options, dir: dataDir, secure, videos: config.mediaDir,
@@ -80,6 +81,7 @@ function createDownloads({ dataDir, library, tmdb, pathMap = JSON.parse(process.
         if (!result.ok) throw new Error(result.error);
       }
       tmdb.sync();
+      afterImport?.();
     }
   });
   return {
@@ -96,16 +98,16 @@ function createDownloads({ dataDir, library, tmdb, pathMap = JSON.parse(process.
       return excluded;
     },
     async configure(value) {
-      if (value?.target && value.target !== 'server') throw new Error('Downloads run on the Matro host.');
+      if (value?.target && value.target !== 'server') throw new HttpError(400, 'Downloads run on the Matro host.');
       for (const field of ['movieRoot', 'showRoot']) await validate(host[field]);
       const previous = await torrents.config();
       return torrents.configure({ target: 'server', url: host.url, username: value.username, password: value.password,
         sshHost: '', storage: { ...previous.server?.storage, movieRoot: host.movieRoot, showRoot: host.showRoot } });
     },
     async add(value) {
-      if (value?.target !== 'server') throw new Error('Downloads run on the Matro host.');
+      if (value?.target !== 'server') throw new HttpError(400, 'Downloads run on the Matro host.');
       const saved = (await torrents.config()).server;
-      if (!saved) throw new Error('Configure the host download client first.');
+      if (!saved) throw new HttpError(409, 'Configure the host download client first.');
       for (const field of ['movieRoot', 'showRoot']) await validate(saved.storage[field]);
       return torrents.add(value);
     }
