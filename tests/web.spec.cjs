@@ -138,6 +138,7 @@ test('receiver shows local title, artwork and plot without TMDB', async () => {
     await page.getByLabel('Password', { exact: true }).fill('local-art-test-pass');
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await page.locator('.dock [data-tab="movie"]').click();
+    await expect(page.getByRole('heading', { name: 'Movies', level: 1, exact: true })).toBeVisible();
     await page.evaluate(() => window.matroTheme.set('dark'));
     await page.setViewportSize({ width: 1280, height: 800 });
     const card = page.getByRole('button', { name: /^Open Family Film/ });
@@ -287,13 +288,17 @@ test('an open web library picks up a catalog change without a reload', async () 
     await page.getByLabel('Password', { exact: true }).fill('local-catalog-test');
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await page.locator('.dock [data-tab="movie"]').click();
-    await expect(page.getByRole('button', { name: 'Open Northbound', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Movies', level: 1, exact: true })).toBeVisible();
+    const northbound = page.getByRole('button', { name: 'Open Northbound', exact: true });
+    await northbound.focus();
+    await expect(northbound).toBeFocused();
     const newTitle = page.getByRole('button', { name: 'Open New Arrival', exact: true });
     await expect(newTitle).toHaveCount(0);
     const timeOrigin = await page.evaluate(() => performance.timeOrigin);
     await fs.copyFile(f.mkv, path.join(media, 'New Arrival.mkv'));
     await library.rescanAll();
     await expect(newTitle).toBeVisible({ timeout: 12000 });
+    await expect(northbound).toBeFocused();
     expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
 
     await page.getByRole('button', { name: 'Folders', exact: true }).press('Enter');
