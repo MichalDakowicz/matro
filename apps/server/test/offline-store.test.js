@@ -65,6 +65,37 @@ test('removing a title frees every piece', async () => {
   assert.deepEqual(await store.usage(), { bytes: 0, titles: 0 });
 });
 
+test('a late chunk from a replaced file cannot overwrite the new download', async () => {
+  const { createStore, memoryBackend, CHUNK } = await load();
+  const backend = memoryBackend(), oldTab = createStore(backend), newTab = createStore(backend);
+  const size = CHUNK + 1, args = { id: 'race', size, info: {}, type: 'video/mp4' };
+  const { promise: requested, resolve: markRequested } = Promise.withResolvers();
+  const { promise: lastPiece, resolve: release } = Promise.withResolvers();
+  const old = oldTab.download({ ...args, version: 'old', fetchRange: async (start, end) => {
+    if (start === 0) return bytes(end - start + 1);
+    markRequested();
+    return lastPiece;
+  } });
+  await requested;
+  await newTab.download({ ...args, version: 'new', fetchRange: async (start, end) => new Blob([new Uint8Array(end - start + 1).fill(9)]) });
+  const rejected = assert.rejects(old, { name: 'AbortError' });
+  release(bytes(1));
+  await rejected;
+  assert.equal((await newTab.meta('race')).version, 'new');
+  const file = await oldTab.file('race');
+  assert.deepEqual([...new Uint8Array(await file.slice(CHUNK - 1).arrayBuffer())], [9, 9]);
+});
+
+test('a completed legacy save remains readable through its original chunk keys', async () => {
+  const { createStore, memoryBackend } = await load();
+  const backend = memoryBackend(), store = createStore(backend);
+  await backend.set('meta:legacy', { id: 'legacy', size: 1, type: 'video/mp4', chunks: 1, have: 1, complete: true });
+  await backend.set('chunk:legacy:0', bytes(1));
+  assert.equal((await store.file('legacy')).size, 1);
+  await store.remove('legacy');
+  assert.deepEqual(await backend.keys(''), []);
+});
+
 test('subtitles added offline are kept with the saved title; SRT becomes WebVTT, ASS waits for the server', async () => {
   const { createStore, memoryBackend, toVtt, CHUNK } = await load();
   assert.equal(toVtt('1\r\n00:00:01,500 --> 00:00:02,000\r\nHi\r\n', 'a.srt'), 'WEBVTT\n\n1\n00:00:01.500 --> 00:00:02.000\nHi\n');

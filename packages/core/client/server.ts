@@ -1,7 +1,7 @@
 // Portable native client. Sessions are supplied by the platform's secure storage;
 // media requests carry the same revocable bearer session as API requests.
 
-export type MatroUser = { id: number; username: string; role: string };
+export type MatroUser = { id: number; accountKey?: string; legacyScope?: true; username: string; role: string };
 export type Status = { setup: boolean; user: MatroUser | null };
 
 const PRIVATE_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|[^.]+$|.*\.(local|lan|home)$)/i;
@@ -17,8 +17,11 @@ export function candidates(input: string): string[] {
 
 export class ServerError extends Error {
   status?: number;
-  constructor(message: string, status?: number) { super(message); this.status = status; }
+  code?: string;
+  constructor(message: string, status?: number, code?: string) { super(message); this.status = status; this.code = code; }
 }
+/** A 401, or the server saying the signed-in account differs from the one this client opened. Other 409s are ordinary refusals. */
+export const accountChanged = (error: unknown) => error instanceof ServerError && (error.status === 401 || error.status === 409 && error.code === 'account-changed');
 
 let tokenStorage: { get: (base: string) => Promise<string | null>; set: (base: string, token: string | null) => Promise<void> } | null = null;
 export function configureTokenStorage(storage: NonNullable<typeof tokenStorage>) { tokenStorage = storage; }
@@ -26,44 +29,85 @@ export async function mediaHeaders(base: string): Promise<Record<string, string>
   const token = await tokenStorage?.get(base);
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
-export async function request(base: string, path: string, init: { method?: string; body?: unknown } = {}, ms = 15000) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), ms);
-  try {
-    const res = await fetch(base + path, {
-      method: init.method ?? 'GET',
-      credentials: 'include',
-      signal: ctrl.signal,
-      headers: {
-        'x-matro': '1',
-        'x-matro-client': 'native',
-        ...await mediaHeaders(base),
-        ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
-      },
-      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+
+// Keep the signal attached through the body read, with a fresh deadline after headers arrive.
+// `read` may call `touch` as data arrives to restart the body deadline, making `bodyMs` an idle limit for large bodies.
+export async function fetchWithDeadline<R, T>(
+  send: (signal: AbortSignal) => Promise<R>,
+  read: (response: R, touch: () => void) => Promise<T>,
+  { signal, requestMs = 15000, bodyMs = 30000 }: { signal?: AbortSignal; requestMs?: number; bodyMs?: number } = {},
+): Promise<T> {
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  signal?.addEventListener('abort', cancel);
+  if (signal?.aborted) cancel();
+  async function phase<V>(run: (touch: () => void) => Promise<V>, ms: number, message: string) {
+    if (controller.signal.aborted) throw new Error('Request cancelled.');
+    let timedOut = false;
+    let rejectAbort: () => void;
+    const aborted = new Promise<never>((_, reject) => {
+      rejectAbort = () => reject(new Error(timedOut ? message : 'Request cancelled.'));
+      controller.signal.addEventListener('abort', rejectAbort);
     });
-    const json = await res.json().catch(() => null);
-    if (!res.ok) throw new ServerError(json?.error ?? `Server answered ${res.status}.`, res.status);
-    if (json?.token) await tokenStorage?.set(base, json.token);
-    return json;
-  } finally {
-    clearTimeout(timer);
+    const arm = () => setTimeout(() => { timedOut = true; cancel(); }, ms);
+    let timer = arm();
+    const touch = () => { clearTimeout(timer); timer = arm(); };
+    try { return await Promise.race([aborted, run(touch)]); }
+    finally { clearTimeout(timer); controller.signal.removeEventListener('abort', rejectAbort!); }
   }
+  try {
+    const response = await phase(() => send(controller.signal), requestMs, 'The server took too long to respond.');
+    return await phase(touch => read(response, touch), bodyMs, 'The server took too long to send the response.');
+  } catch (error) {
+    cancel();
+    throw error;
+  } finally {
+    signal?.removeEventListener('abort', cancel);
+  }
+}
+
+export async function request(base: string, path: string, init: { method?: string; body?: unknown; signal?: AbortSignal; accountId?: number } = {}, ms = 15000) {
+  const headers = {
+    'x-matro': '1',
+    'x-matro-client': 'native',
+    ...(init.accountId === undefined ? {} : { 'x-matro-account': String(init.accountId) }),
+    ...await mediaHeaders(base),
+    ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+  };
+  const json = await fetchWithDeadline(signal => fetch(base + path, {
+    method: init.method ?? 'GET',
+    credentials: 'include',
+    signal,
+    headers,
+    body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+  }), async res => {
+    const json = await res.json().catch(error => {
+      if (error instanceof SyntaxError) return null;
+      if (!res.ok) throw new ServerError(`Server answered ${res.status}.`, res.status);
+      throw error;
+    });
+    if (!res.ok) throw new ServerError(json?.error ?? `Server answered ${res.status}.`, res.status, json?.code);
+    return json;
+  }, { signal: init.signal, requestMs: ms, bodyMs: ms });
+  if (json?.token) await tokenStorage?.set(base, json.token);
+  return json;
 }
 
 /** Finds a working address for what the person typed and proves it is a Matro server. */
 export async function connect(input: string): Promise<{ base: string; status: Status }> {
   const list = candidates(input);
   if (!list.length) throw new ServerError('Enter your server address.');
+  let answered: ServerError | undefined;
   for (const base of list) {
     try {
       const status = await request(base, '/api/status');
       if (status && typeof status.setup === 'boolean') return { base, status };
-    } catch {
+    } catch (error) {
+      if (error instanceof ServerError && error.status) answered = error; // The server replied: keep its own message.
       /* try the next scheme */
     }
   }
-  throw new ServerError("Couldn't reach a Matro server at that address.");
+  throw answered ?? new ServerError("Couldn't reach a Matro server at that address.");
 }
 
 const sessionExchanges = new Map<string, Promise<void>>();
@@ -116,17 +160,28 @@ export type Segment = { type: 'intro' | 'outro' | 'recap'; start: number; end: n
 export type ScannerStatus = { ready: number; total: number; message: string; complete?: boolean };
 export type Library = { markers?: Record<string, Segment[]>; scanner?: ScannerStatus; user: MatroUser; items: Item[]; folders?: string[]; progress: Record<string, Progress>; queue: string[]; preferences: Preferences; metadata: Record<string, Metadata>; catalogRevision?: string; movieRequestsEnabled?: boolean; movieRequestPushEnabled?: boolean };
 export type Track = { index: number; language: string; title: string; bitmap?: boolean; text?: boolean; codec?: string; channels?: number; default?: boolean };
-export type Info = { duration: number; directPlay: boolean; video?: { codec: string; height: number; width: number } | null; chapters?: { start: number; title: string }[]; audio: Track[]; embedded: Track[]; uploaded: { id: number; language: string; name: string }[] };
-export const library = async (base: string): Promise<Library> => { await ensureNativeSession(base); return request(base, '/api/library'); };
-export const inspect = (base: string, id: string): Promise<Info> => request(base, `/api/items/${encodeURIComponent(id)}/info`);
-export const saveProgress = (base: string, id: string, entry: Progress) => request(base, '/api/state', { method: 'PUT', body: { progress: { [id]: entry } } });
-export const changeProgress = (base: string, id: string, body: { dismiss: true } | { completed: boolean; checkpoint?: Progress }): Promise<{ progress: Record<string, Progress> }> =>
-  request(base, `/api/items/${encodeURIComponent(id)}/progress`, { method: 'PATCH', body });
-export function playbackPath(id: string, info: Info, position: number, audio: number | null, burn: number | null, delay = 0) {
+export type Info = { duration: number; directPlay: boolean; video?: { codec: string; height: number; width: number } | null; chapters?: { start: number; title: string }[]; audio: Track[]; embedded: Track[]; uploaded: { id: number; language: string; name: string }[]; files?: { id: number; language: string; title: string; codec: string; forced: boolean; sdh: boolean }[] };
+export const library = async (base: string, accountId?: number): Promise<Library> => { await ensureNativeSession(base); return request(base, '/api/library', { accountId }); };
+export const inspect = (base: string, id: string, signal?: AbortSignal): Promise<Info> => request(base, `/api/items/${encodeURIComponent(id)}/info`, { signal });
+export const writeWatchState = (base: string, accountId: number, body: { progress?: Record<string, Progress>; queueChange?: { add: string[]; remove: string[] }; preferences?: Preferences }): Promise<{ progress?: Record<string, Progress> }> =>
+  request(base, '/api/state', { method: 'PUT', body, accountId });
+export const changeProgress = (base: string, accountId: number, id: string, body: { dismiss: true; dismissedAt?: number } | { completed: boolean; checkpoint?: Progress }): Promise<{ progress: Record<string, Progress> }> =>
+  request(base, `/api/items/${encodeURIComponent(id)}/progress`, { method: 'PATCH', body, accountId });
+export function playbackPath(id: string, info: Info, position: number, audio: number | null, burn: number | null, delay = 0, session?: string) {
   const root = `/api/items/${encodeURIComponent(id)}`;
-  if (info.directPlay && burn === null && (audio === null || audio === info.audio[0]?.index)) return { path: root + '/direct', offset: 0, start: position };
-  const q = new URLSearchParams({ t: String(position) });
+  const q = new URLSearchParams();
+  if (session) q.set('session', session);
+  if (info.directPlay && burn === null && (audio === null || audio === info.audio[0]?.index)) return { path: root + '/direct' + (session ? '?' + q : ''), offset: 0, start: position };
+  q.set('t', String(position));
   if (audio !== null) q.set('audio', String(audio));
   if (burn !== null) { q.set('burn', String(burn)); if (delay) q.set('delay', String(delay)); }
   return { path: root + '/transcode?' + q, offset: position, start: 0 };
+}
+
+export function playbackState(base: string, session: string, playing: boolean, buffering = false) {
+  return request(base, '/api/playback/state', { method: 'POST', body: { session, playing, buffering } });
+}
+
+export function stopPlayback(base: string, session: string) {
+  return request(base, '/api/playback/stop', { method: 'POST', body: { session } });
 }

@@ -98,7 +98,7 @@ test('a growing preparation holds its response until eight seconds are ready, th
     child.kill = () => { child.stdout.end(); child.emit('close', 1); }; return child;
   } });
   const options = { file: 'buffer', input: 'buffer', info: { video: null }, offset: 0, burn: null };
-  const server = http.createServer((req, res) => void cache.serve(req, res, options));
+  const server = http.createServer((req, res) => void cache.serve(req, res, options, {}, 'player'));
   t.after(async () => { server.closeAllConnections(); await new Promise(r => server.close(r)); cache.close(); await new Promise(r => setTimeout(r, 50)); await fs.rm(dir, { recursive: true, force: true }); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   let received = false;
@@ -112,8 +112,44 @@ test('a growing preparation holds its response until eight seconds are ready, th
   const res = await response;
   assert.equal(res.status, 200);
   assert.equal((await cache.get(options)).done, false, 'startup does not wait for the whole movie');
+  cache.release('player');
   child.stdout.end(Buffer.from('last fragment')); child.emit('close', 0);
   assert.equal(await res.text(), 'first fragmentlast fragment');
+});
+
+test('pruning honors offline pins and keeps recently accessed preparations ahead of cold files', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-cache-prune-'));
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const cache = createPlaybackCache({
+    ffmpeg: 'fake', dir, maxBytes: 12, stat: async () => ({ size: 100, mtimeMs: 1 }),
+    spawnProcess: () => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      child.kill = () => {};
+      setImmediate(() => { child.stdout.end(Buffer.from('data')); child.emit('close', 0); });
+      return child;
+    }
+  });
+  t.after(async () => { cache.close(); await fs.rm(dir, { recursive: true, force: true }); });
+  const options = file => ({ file, input: file, info: { video: null }, offset: 0 });
+  const prepare = async (file, pinMs) => {
+    const entry = await cache.get(options(file), null, { pinMs });
+    await entry.finished;
+    assert.equal(entry.done, true);
+    now += 180000;
+    return entry;
+  };
+  const offline = await prepare('offline', 600000);
+  const used = await prepare('used');
+  const cold = await prepare('cold');
+  assert.equal(await cache.get(options('used')), used);
+  await prepare('new');
+  await fs.access(offline.file);
+  await fs.access(used.file);
+  await assert.rejects(fs.access(cold.file), { code: 'ENOENT' });
+  await prepare('after expiry');
+  await assert.rejects(fs.access(offline.file), { code: 'ENOENT' });
 });
 
 test('seeking replaces the same viewer’s preparation without exhausting capacity or killing another viewer’s shared job', async t => {

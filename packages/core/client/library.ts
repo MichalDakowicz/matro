@@ -1,4 +1,4 @@
-import type { Item, Library, Metadata, Track, TrackChoice } from './server';
+import type { Info, Item, Library, Metadata, Track, TrackChoice, TrackPreference } from './server';
 import { compareEpisodes, continueWatching, groupTitles, isCompleted, resumeTarget } from './watch-progress.js';
 export const trackKey = (item: Item) => item.groupId || item.group;
 export const titleKey = (item: Item) => item.kind === 'show' ? item.groupId || item.group : item.id;
@@ -19,6 +19,13 @@ export function matchTrack(tracks: Track[], choice?: TrackChoice | null) {
   if (!choice) return null;
   const score = (track: Track) => Number(track.title === choice.title) * 4 + Number(track.channels === choice.channels) * 2 + Number(track.codec === choice.codec);
   return tracks.filter(t => t.language === choice.language).sort((a, b) => score(b) - score(a))[0] || null;
+}
+// A saved copy keeps the first audio track and the text subtitles only, so stream whenever the chosen tracks need more.
+export function savedServes(saved: Info & { text?: Record<string, string> }, full: Info, choice?: TrackPreference) {
+  const audio = matchTrack(full.audio, choice?.audio)?.index ?? full.audio.find(t => t.default)?.index ?? full.audio[0]?.index ?? null;
+  if (audio !== (saved.audio[0]?.index ?? null)) return false;
+  const subtitle = choice?.off ? null : matchTrack([...full.embedded, ...full.uploaded.map(t => ({ index: 10000 + t.id, language: t.language, title: t.name } as Track)), ...(full.files || []).map(t => ({ ...t, index: 20000 + t.id }))], choice?.subtitle)?.index ?? null;
+  return subtitle === null || saved.embedded.some(t => t.index === subtitle) || saved.uploaded.some(t => 10000 + t.id === subtitle) || !!saved.files?.some(t => 20000 + t.id === subtitle);
 }
 export function languageName(value: string) {
   if (!value || value === 'und') return 'Unknown language';
