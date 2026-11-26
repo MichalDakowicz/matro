@@ -1017,9 +1017,11 @@ async function play(id, keepQueue = false, compareEdition = false, remotePositio
   // Starting playback from the library always opens with the queue closed; next, previous and autoplay keep it as it was.
   if (view !== 'player') queueOpen = false;
   hidePreview(); remember();
-  const saved = await api.savedPlayback?.(id);
+  // The web checkpoint is already durable locally. Playback can switch while it syncs.
+  if (api.savedPlayback) void attempt(save);
+  else await save();
   if (token !== generation) return;
-  if (!saved) await save();
+  const saved = await api.savedPlayback?.(id);
   if (token !== generation) return;
   loading = true; frameRun++; selected = null;
   // A preloaded stream is used only if its track choice still matches what this title would pick now.
