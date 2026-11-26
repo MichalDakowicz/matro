@@ -9,7 +9,7 @@ const { createEmbeddedSubtitles } = require('./embedded-subtitles.cjs');
 const { remote } = require('./ssh-media.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { scan, describe, groupFolders, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
+const { scan, describe, groupFolders, existingShowGroups, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
 const { createStreamServer } = require('./stream.cjs');
 const { createPreviews } = require('./previews.cjs');
 const { createSegments } = require('./segments.cjs');
@@ -67,13 +67,14 @@ async function pendingLibraryFiles() {
   }
   return excluded;
 }
-const scanLibraryFolder = root => scan(root, pendingLibraryFiles);
+const scanLibraryFolder = (root, knownShows = existingShowGroups(state.items)) => scan(root, pendingLibraryFiles, knownShows);
 function rescan(roots = state.folders) {
   scanQueue = scanQueue.catch(() => {}).then(() => scanFolders(roots.filter(root => state.folders.includes(root))));
   return scanQueue;
 }
 async function scanFolders(roots) {
-  const results = await Promise.all(roots.map(async root => { try { return { root, items: await scanLibraryFolder(root) }; } catch { return { root, error: 'Folder unavailable. Check the drive or network connection.' }; } }));
+  const knownShows = existingShowGroups(state.items);
+  const results = await Promise.all(roots.map(async root => { try { return { root, items: await scanLibraryFolder(root, knownShows) }; } catch { return { root, error: 'Folder unavailable. Check the drive or network connection.' }; } }));
   const previous = new Map(state.items.map(item => [item.id, item]));
   for (const { root, items } of results) if (items && state.folders.includes(root)) {
     for (const item of items) item.added = previous.get(item.id)?.added ?? item.added;
@@ -136,7 +137,7 @@ app.whenReady().then(async () => {
   streams = await createStreamServer({ dir: path.join(app.getPath('userData'), 'playback') });
   protocol.handle('matro', request => {
     const url = new URL(request.url);
-    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/playback-buffer.js': 'playback-buffer.js', '/recovery.js': 'recovery.js', '/core/client/watch-progress.js': '../core/client/watch-progress.js', '/icons.json': 'icons.json', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-discovery.js': 'downloads-discovery.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg', '/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
+    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/playback-buffer.js': 'playback-buffer.js', '/recovery.js': 'recovery.js', '/core/client/watch-progress.js': '../core/client/watch-progress.js', '/core/client/reel-start.js': '../core/client/reel-start.js', '/icons.json': 'icons.json', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-discovery.js': 'downloads-discovery.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg', '/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
     const artwork = url.hostname === 'app' && url.pathname.startsWith('/artwork/') && metadata.artworkFile(url.pathname.slice('/artwork/'.length));
     if (artwork) return net.fetch(pathToFileURL(artwork).href);
     const file = url.hostname === 'app' && files[url.pathname];
