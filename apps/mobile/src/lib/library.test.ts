@@ -13,10 +13,18 @@ test('native shelves use the same show grouping, movie editions and metadata key
   assert.equal(groups.length, 3); assert.deepEqual(groups[0].map(i => i.id), ['one', 'two']);
   assert.equal(metadataFor(data, second).title, 'The show'); assert.equal(trackKey(movie), trackKey(edition));
 
-  const cuts = [{ ...movie, editionGroup: 'cuts' }, { ...edition, groupId: 'encode', editionGroup: 'cuts' }];
-  const catalog = blank(cuts);
+  const theatrical = { ...movie, path: 'Z Film.mkv', added: 3, editionGroup: 'cuts', editionLabel: 'Z Film' };
+  const cut = { ...edition, groupId: 'encode', path: 'A Film Extended.mkv', added: 2, editionGroup: 'cuts', editionLabel: 'Extended' };
+  const encode = { ...cut, id: 'movie-0', path: 'B Film 4K.mkv', added: 1, editionLabel: '4K' };
+  const catalog = blank([encode, cut, theatrical]);
   const [group] = groupLibrary(catalog.items);
-  assert.deepEqual(group.map(item => item.id), ['movie-a', 'movie-b']);
+  assert.deepEqual(group.map(item => item.id), ['movie-a', 'movie-b', 'movie-0']);
+  assert.equal(resumeItem(catalog, group), theatrical);
+
+  catalog.metadata[cut.id] = { title: 'Old file match' };
+  assert.equal(metadataFor(catalog, cut).title, undefined);
+  catalog.metadata.cuts = { title: 'Shared match', poster: 'artwork/shared.jpg' };
+  for (const item of group) assert.equal(metadataFor(catalog, item), catalog.metadata.cuts);
   catalog.progress['movie-b'] = { position: 30, duration: 90, updated: 1 };
   assert.equal(resumeItem(catalog, group).id, 'movie-b');
   assert.equal(statusOf(catalog, group), 'progress');

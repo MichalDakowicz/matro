@@ -1,8 +1,8 @@
 import type { Item, Library, Metadata, Track, TrackChoice } from './server';
-import { compareEpisodes, continueWatching, groupTitles, isCompleted, resumeTarget } from './watch-progress.js';
+import { compareEditions, compareEpisodes, continueWatching, groupTitles, isCompleted, resumeTarget } from './watch-progress.js';
 export const trackKey = (item: Item) => item.groupId || item.group;
 export const titleKey = (item: Item) => item.kind === 'show' ? item.groupId || item.group : item.editionGroup || item.id;
-export const metadataFor = (data: Library, item: Item): Metadata => data.metadata[titleKey(item)] || data.metadata[item.id] || {};
+export const metadataFor = (data: Library, item: Item): Metadata => data.metadata[titleKey(item)] || (!item.editionGroup && data.metadata[item.id]) || {};
 export const nameFor = (data: Library, item: Item) => metadataFor(data, item).title || item.group;
 export const episodeName = (data: Library, item: Item) => metadataFor(data, item).episodes?.[String(item.season)]?.[String(item.episode)]?.name || item.title;
 export const formatTime = (value: number) => {
@@ -11,7 +11,7 @@ export const formatTime = (value: number) => {
 };
 export function groupLibrary(items: Item[]) {
   return groupTitles(items).map(group => group[0].editionGroup
-    ? group.sort((a, b) => (a.added ?? 0) - (b.added ?? 0) || a.id.localeCompare(b.id))
+    ? group.sort(compareEditions)
     : group.sort(compareEpisodes));
 }
 export const resumeItem = (data: Library, items: Item[]) => resumeTarget(items, data.progress);

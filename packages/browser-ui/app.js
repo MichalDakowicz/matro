@@ -2,7 +2,7 @@ import icons from './icons.json' with { type: 'json' };
 import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
-import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, normalizeProgress, resumeTarget } from '../core/client/watch-progress.js';
+import { compareEditions, compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, normalizeProgress, resumeTarget } from '../core/client/watch-progress.js';
 const api = window.matro;
 if (api?.chooseSource && !document.querySelector('.desktop-source-button')) {
   const button = document.createElement('button'); button.className = 'pill desktop-source-button'; button.textContent = 'Server'; button.setAttribute('aria-label', 'Playback source');
@@ -141,7 +141,7 @@ function rememberTracks() {
   discardPrepared(); void attempt(save);
 }
 // Title metadata comes from TMDB when configured; everything falls back to file names.
-const metaKey = item => item.kind === 'show' ? titleKey(item) : item.id;
+const metaKey = item => item.kind === 'show' ? titleKey(item) : item.editionGroup || item.id;
 const meta = item => metadata[metaKey(item)] || null;
 const displayName = item => meta(item)?.title || item.group;
 const episodeName = item => meta(item)?.episodes?.[item.season]?.[item.episode]?.name || item.title;
@@ -230,6 +230,7 @@ function checkpoint(now = false) {
 function groups(kind) {
   const words = tab === 'search' ? query.trim().toLowerCase() : '';
   return groupTitles(library.items.filter(i => i.kind === kind && (!folderFilter || i.root === folderFilter)))
+    .map(items => items[0].editionGroup ? items.sort(compareEditions) : items)
     .filter(items => searchText(items).includes(words));
 }
 const groupStatus = items => (items[0].editionGroup ? items.some(i => completed(i.id)) : items.every(i => completed(i.id))) ? 'done' : items.some(i => completed(i.id) || library.progress[i.id]?.position > 0) ? 'progress' : 'new';
@@ -595,9 +596,9 @@ function restoreFocus(element) { element?.focus({ preventScroll: true, focusVisi
 function detail(id, focus = true) {
   selected = library.items.find(i => i.id === id); if (!selected) return;
   const items = selected.kind === 'show' ? orderedEpisodes(selected)
-    : selected.editionGroup ? library.items.filter(item => item.editionGroup === selected.editionGroup) : [selected];
+    : selected.editionGroup ? library.items.filter(item => item.editionGroup === selected.editionGroup).sort(compareEditions) : [selected];
   const m = meta(selected), name = displayName(selected), seasons = new Set(items.map(i => i.season)).size;
-  const target = resumeTarget(items, library.progress, selected), p = library.progress[target.id];
+  const target = resumeTarget(items, library.progress, selected.editionGroup ? items[0] : selected), p = library.progress[target.id];
   const resume = p?.position > 0 && !completed(target.id) ? target : null;
   const facts = [[m?.year, m?.genres?.slice(0, 3).join(' · ')], [selected.kind === 'show' ? `${seasons} ${seasons === 1 ? 'season' : 'seasons'} · ${items.length} episodes` : m?.runtime ? `${Math.floor(m.runtime / 60) ? `${Math.floor(m.runtime / 60)}h ` : ''}${m.runtime % 60}m` : null]].flat().filter(Boolean);
   const overlay = document.createElement('div'); overlay.className = 'detail'; overlay.id = 'detail-overlay'; overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-labelledby', 'detail-title');
