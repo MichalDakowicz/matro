@@ -1,26 +1,43 @@
-import { get, post } from './http.js';
+import { api, get, post } from './http.js';
 import { h } from './dom.js';
 import { forgetOfflineSession, lastOfflineUser, networkLost } from './offline.js';
+
+const pendingLogout = 'matro.pending-logout';
+
+async function finishLogout() {
+  const marker = localStorage.getItem(pendingLogout);
+  if (!marker) return;
+  try {
+    const result = await api('POST', '/api/logout', {}, { signal: AbortSignal.timeout(5000) });
+    if (result.ok === true && localStorage.getItem(pendingLogout) === marker) localStorage.removeItem(pendingLogout);
+  } catch { /* An unavailable server still has the cookie. Try again at the next sign-in screen. */ }
+}
+
+export async function signOut() {
+  localStorage.setItem(pendingLogout, String(crypto.getRandomValues(new Uint32Array(1))[0]));
+  await forgetOfflineSession().catch(() => {});
+  await finishLogout();
+  location.reload();
+}
 
 // The way in: nothing else loads until you are signed in. Two forms share the page: sign in, and join with a one-time
 // invite code from the head account (opened directly by a link ending in #/join/CODE). Enter moves between fields and submits.
 // The head account itself is created from the command line on the server, so a fresh server shows instructions instead.
 export async function signIn(root, onOffline) {
+  await finishLogout();
   let response;
-  try { response = await get('/api/status'); }
+  try { response = localStorage.getItem(pendingLogout) ? { setup: false, user: null } : await get('/api/status'); }
   catch (error) {
-    if (networkLost(error)) {
-      const user = await lastOfflineUser().catch(() => null);
-      if (user) { onOffline(); return user; }
-      root.replaceChildren(h('main', { class: 'page' }, h('section', { class: 'welcome' },
-        h('h1', {}, 'Matro is unavailable.'), h('p', {}, 'Connect to your server to open the library.'),
-        h('button', { class: 'pill', onclick: () => location.reload() }, 'Try again'))));
-      return new Promise(() => {});
-    }
-    throw error;
+    if (!networkLost(error)) throw error;
+    const user = await lastOfflineUser().catch(() => null);
+    if (user && !localStorage.getItem(pendingLogout)) { onOffline(); return user; }
+    root.replaceChildren(h('main', { class: 'page' }, h('section', { class: 'welcome' },
+      h('h1', {}, 'Matro is unavailable.'), h('p', {}, 'Connect to your server to open the library.'),
+      h('button', { class: 'pill', onclick: () => location.reload() }, 'Try again'))));
+    return new Promise(() => {});
   }
   const { setup, user } = response;
-  if (user) return user;
+  if (user && !localStorage.getItem(pendingLogout)) return user;
   await forgetOfflineSession().catch(() => {});
   if (setup) {
     root.replaceChildren(h('main', { class: 'page' }, h('section', { class: 'welcome' }, h('p', { class: 'show-kicker' }, 'Matro · first run'), h('h1', {}, 'This server needs setting up.'),
@@ -44,6 +61,7 @@ export async function signIn(root, onOffline) {
       e.preventDefault(); error.textContent = ''; submit.disabled = true;
       try {
         const { user } = joining ? await post('/api/signup', { code: code.value, username: username.value, password: password.value }) : await post('/api/login', { username: username.value, password: password.value });
+        localStorage.removeItem(pendingLogout);
         document.removeEventListener('keydown', wake); history.replaceState(null, '', location.pathname + location.search); resolve(user);
       } catch (err) { error.textContent = err.message; submit.disabled = false; (joining && /code/i.test(err.message) ? code : password).select(); }
     } }, codeRow, h('label', { class: 'search-field' }, username), h('label', { class: 'search-field' }, password), error, submit, hint, toggle);
