@@ -51,10 +51,10 @@ function register(app) {
       groupId: r.group_id, titlePath: r.group_id, kind: r.kind, season: r.season, episode: r.episode, format: path.extname(r.path).slice(1).toUpperCase(), added: r.added }));
     const { progressTimes, queueEdited, ...state } = stateOf(ctx.user.id); scanner.refresh();
     return { user: ctx.user, folders: [...new Set(q.folders.all().map(f => label(f.path)))], items, ...state, markers: scanner.markers(state.markers, state.markerDismissals),
-      scanner: scanner.snapshot(), metadata: tmdb.snapshot(), metadataEnabled: tmdb.enabled, catalogRevision: library.state.revision, movieRequestsEnabled: true,
+      scanStatus: library.scanStatus(admin), scanner: scanner.snapshot(), metadata: tmdb.snapshot(), metadataEnabled: tmdb.enabled, catalogRevision: library.state.revision, movieRequestsEnabled: true,
       movieRequestPushEnabled: admin && app.movieRequests.push.enabled };
   });
-  router.add('GET', '/api/library/revision', () => ({ catalogRevision: library.state.revision }));
+  router.add('GET', '/api/library/revision', ctx => ({ catalogRevision: library.state.revision, scanStatus: library.scanStatus(ctx.user.role === 'admin') }));
 
   router.add('GET', '/api/segments', ctx => {
     const state = stateOf(ctx.user.id); scanner.refresh();

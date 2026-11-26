@@ -248,6 +248,16 @@ test('an open web library picks up a catalog change without a reload', async () 
     await page.getByRole('button', { name: 'Rescan folders', exact: true }).press('Enter');
     await expect(page.locator('#toast')).toContainText('No media files were found. Existing titles were kept.');
     await expect(page.locator('.source-count')).toHaveText('2 items');
+    const status = page.locator('.sources [data-library-scan-status], main [data-library-scan-status]').last();
+    await expect(status).toContainText('1 folder had an error');
+    const revision = library.state.revision;
+    await fs.rmdir(media);
+    await fs.rename(path.join(root, 'disconnected'), media);
+    await library.rescanAll();
+    expect(library.state.revision).toBe(revision);
+    await expect(status).not.toContainText('folder had an error', { timeout: 12000 });
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
+
     await page.setViewportSize({ width: 375, height: 800 });
     await page.evaluate(() => window.matroTheme.set('light'));
     await page.emulateMedia({ reducedMotion: 'reduce' });

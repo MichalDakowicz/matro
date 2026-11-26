@@ -1,3 +1,4 @@
+import { scanMessage } from '../core/client/scan-status.js';
 import icons from './icons.json' with { type: 'json' };
 import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
@@ -325,7 +326,7 @@ let footerOpen = false, savingUpdateChecks = false;
 function footer() {
   const updatesEnabled = library.checkForUpdates === true;
   const updates = api.setUpdateChecks ? `<span class="theme-setting"><span>Check for updates</span><button type="button" class="switch ${updatesEnabled ? 'on' : ''}" data-update-checks role="switch" aria-label="Check for updates" aria-checked="${updatesEnabled}"></button></span>` : '';
-  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span>${updates}<button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
+  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span>${library.scanStatus ? `<span data-library-scan-status role="status">${esc(scanMessage(library.scanStatus))}</span>` : ''}<span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span>${updates}<button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
 }
 const sectionGrid = (title, items, count, more) => items.length ? `<section class="section"><div class="section-heading"><h2>${title}</h2><span>${count}${more ? ` · <button class="text-button" data-tab="${more}">See all</button>` : ''}</span></div><div class="grid">${items.map(poster).join('')}</div></section>` : '';
 const kinds = [['show', 'Shows', 'shows'], ['movie', 'Movies', 'titles'], ['audio', 'Music & audio', 'files']];
@@ -354,9 +355,16 @@ function searchPage() {
     ${sections}${files.length ? `<section class="section"><div class="section-heading"><h2>Files</h2><span>${files.length}</span></div>${files.map(i => `<button class="file-row" data-play="${i.id}">${icon('file')}<span class="mono">${esc(sourcePath(i.path))}</span><small>${esc(i.format)}</small></button>`).join('')}</section>` : ''}
     ${words && !total ? '<div class="empty-results"><h2>No matches.</h2><p>Check the spelling, or search by part of a file name.</p></div>' : ''}`;
 }
+const scanErrorsMarkup = status => status.errors.map(row => `<li>${esc(row.folder)}: ${esc(row.error)}</li>`).join('');
+function renderLibraryScanStatus(status) {
+  if (!status) return;
+  document.querySelectorAll('[data-library-scan-status]').forEach(node => { node.textContent = scanMessage(status); });
+  document.querySelectorAll('[data-library-scan-errors]').forEach(node => { node.innerHTML = scanErrorsMarkup(status); });
+}
 function foldersPage() {
   const loose = library.items.filter(i => !library.folders.includes(i.root)).length;
   return `<div class="page-head"><div><h1 class="page-title">Folders</h1><p class="page-sub">${library.folders.length} ${library.folders.length === 1 ? 'source' : 'sources'} · ${library.items.length} items · local and SSH sources</p></div><div class="show-actions"><button class="pill" data-action="files">${icon('plus')}Open files</button><button class="pill" data-action="rescan" aria-label="Rescan folders">${icon('refresh')}Rescan</button><button class="pill" data-action="ssh">${icon('network')}Connect SSH</button><button class="pill primary" data-action="folder">${icon('plus')}Add folder</button></div></div>
+    ${library.scanStatus ? `<div class="section"><p class="muted" data-library-scan-status role="status">${esc(scanMessage(library.scanStatus))}</p><ul class="scan-errors" data-library-scan-errors>${scanErrorsMarkup(library.scanStatus)}</ul></div>` : ''}
     <ul class="sources">${library.folders.map((f, index) => `<li class="source-row"><span class="source-icon">${icon(/^\\\\|^\/\//.test(f) ? 'network' : 'folder')}</span><span class="min"><span class="source-name">${esc(base(f))}</span><span class="source-path mono" title="${esc(sourcePath(f))}">${esc(sourcePath(f))}</span></span><span class="source-count">${library.items.filter(i => i.root === f).length} items</span><span class="source-actions"><button class="pill small" data-folder="${index}" aria-label="Browse ${esc(base(f))}">Browse</button><button class="icon-button" data-remove-folder="${index}" aria-label="Remove ${esc(base(f))} from library">${icon('trash')}</button></span></li>`).join('')}
     ${loose ? `<li class="source-row"><span class="source-icon">${icon('file')}</span><span><span class="source-name">Opened files</span><span class="source-path">Added one by one or dropped into the window</span></span><span class="source-count">${loose} items</span><span></span></li>` : ''}</ul>
     ${!library.folders.length && !loose ? '<p class="page-sub">No folders yet. Add one to build your library — mounted network drives work too.</p>' : ''}
@@ -1625,7 +1633,8 @@ api?.onFullscreen(active => { fullscreenActive = active; fullscreenQueueOpen = f
 api?.onDownloads?.(state => {
   library = { ...library, ...state };
   if (state.metadata) metadata = state.metadata;
-  rerender();
+  renderLibraryScanStatus(state.scanStatus);
+  if (state.items || state.folders || state.metadata) rerender();
 });
 api?.onMetadata?.(update => { metadata = update || {}; rerender(); });
 api?.onSegments(update => {

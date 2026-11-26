@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Image, Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
+import { scanMessage } from '../../../../packages/core/client/scan-status.js';
 import { ThemeRow } from './ThemeRow';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -110,6 +111,7 @@ export function AccountSheet({ visible, onClose, data, base, offline, requests, 
       <View><Text style={s.stat}>{data?.items.length || 0}</Text><Text style={t.dim}>{data?.items.length === 1 ? 'File' : 'Files'}</Text></View>
       <View><Text style={s.stat}>{Object.values(data?.progress || {}).filter(p => p.completed).length}</Text><Text style={t.dim}>Watched</Text></View>
     </View>
+    {!offline && data?.scanStatus && <Text accessibilityLiveRegion="polite" style={[t.muted, { marginTop: 8 }]}>{scanMessage(data.scanStatus)}</Text>}
     <SectionLabel>Library</SectionLabel>
     {data && <Row icon="download" label="Saved for offline" chevron onPress={() => go('offline')} />}
     {admin && <Row icon="folder" label="Folders" chevron onPress={() => go('folders')} />}

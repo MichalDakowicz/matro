@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog, protocol, net, session, shell, safeStorage } = require('electron');
 const fs = require('node:fs/promises');
+const { watchFolders } = require('./folder-watcher.cjs');
 const { createTorrents } = require('./torrents.cjs');
 const { createPathChecker, destinationFile } = require('./download-files.cjs');
 const { createMovieUpgrades } = require('./movie-upgrades.cjs');
@@ -120,18 +121,29 @@ async function pendingLibraryFiles() {
   }
   return excluded;
 }
-const scanLibraryFolder = (root, knownShows = existingShowGroups(state.items)) => scan(root, pendingLibraryFiles, knownShows);
-function rescan(roots = state.folders) {
-  scanQueue = scanQueue.catch(() => {}).then(() => scanFolders(roots.filter(root => state.folders.includes(root))));
+const scanLibraryFolder = (root, knownShows = existingShowGroups(state.items), onDirectoryError) => scan(root, pendingLibraryFiles, knownShows, onDirectoryError);
+const folderWatcher = watchFolders(async root => {
+  await rescan([root], true);
+  publishDownloads();
+});
+const syncFolderWatcher = () => folderWatcher.sync(state.folders.filter(root => !remote.isRemote(root)));
+function rescan(roots = state.folders, fromWatcher = false) {
+  scanQueue = scanQueue.catch(() => {}).then(() => scanFolders(roots.filter(root => state.folders.includes(root)), fromWatcher));
   return scanQueue;
 }
-async function scanFolders(roots) {
+async function scanFolders(roots, fromWatcher) {
   const knownShows = existingShowGroups(state.items);
-  const results = await Promise.all(roots.map(async root => { try { return { root, items: await scanLibraryFolder(root, knownShows) }; } catch { return { root, error: 'Folder unavailable. Check the drive or network connection.' }; } }));
+  const results = await Promise.all(roots.map(async root => {
+    const unavailable = [];
+    try { return { root, items: await scanLibraryFolder(root, knownShows, (_error, dir) => unavailable.push(dir)), unavailable }; }
+    catch { return { root, error: 'Folder unavailable. Check the drive or network connection.' }; }
+  }));
   const previous = new Map(state.items.map(item => [item.id, item]));
-  for (const { root, items } of results) if (items && state.folders.includes(root)) {
+  for (const { root, items, unavailable } of results) if (items && state.folders.includes(root)) {
+    // A change event that leaves nothing behind is trusted only when the whole folder was read.
+    if (fromWatcher && !items.length && unavailable.length) continue;
     for (const item of items) item.added = previous.get(item.id)?.added ?? item.added;
-    state.items = state.items.filter(i => i.root !== root).concat(items);
+    state.items = state.items.filter(i => i.root !== root || unavailable.some(dir => contains(dir, i.path))).concat(items);
   }
   state.items = regroup([...new Map(state.items.map(item => [item.id, item])).values()]);
   state.libraryVersion = 2;
@@ -186,11 +198,13 @@ app.whenReady().then(async () => {
   for (const config of state.sshConnections || []) {
     try { remote.register(config); } catch { /* Leave cached titles available if a saved configuration is invalid. */ }
   }
-  if (state.libraryVersion !== 2) await rescan();
+  syncFolderWatcher();
+  const catchUp = state.libraryVersion === 2;
+  if (!catchUp) await rescan();
   streams = await createStreamServer({ dir: path.join(app.getPath('userData'), 'playback') });
   protocol.handle('matro', request => {
     const url = new URL(request.url);
-    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/playback-buffer.js': 'playback-buffer.js', '/recovery.js': 'recovery.js', '/core/client/watch-progress.js': '../core/client/watch-progress.js', '/core/client/reel-start.js': '../core/client/reel-start.js', '/icons.json': 'icons.json', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-discovery.js': 'downloads-discovery.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg', '/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
+    const files = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/playback-buffer.js': 'playback-buffer.js', '/recovery.js': 'recovery.js', '/core/client/watch-progress.js': '../core/client/watch-progress.js', '/core/client/reel-start.js': '../core/client/reel-start.js', '/core/client/scan-status.js': '../core/client/scan-status.js', '/icons.json': 'icons.json', '/styles.css': 'styles.css', '/theme.js': 'theme.js', '/downloads.js': 'downloads.js', '/downloads-view.js': 'downloads-view.js', '/downloads-discovery.js': 'downloads-discovery.js', '/downloads-settings.js': 'downloads-settings.js', '/downloads.css': 'downloads.css', '/assets/logo.svg': 'assets/logo.svg', '/assets/tmdb.svg': 'assets/tmdb.svg', '/assets/imdb.svg': 'assets/imdb.svg', '/assets/fonts/Geist-Variable.woff2': 'assets/fonts/Geist-Variable.woff2', '/assets/fonts/GeistMono-Variable.woff2': 'assets/fonts/GeistMono-Variable.woff2' };
     const artwork = url.hostname === 'app' && url.pathname.startsWith('/artwork/') && metadata.artworkFile(url.pathname.slice('/artwork/'.length));
     if (artwork) return net.fetch(pathToFileURL(artwork).href);
     const file = url.hostname === 'app' && files[url.pathname];
@@ -283,7 +297,7 @@ app.whenReady().then(async () => {
       throw new Error(`Could not read SSH media: ${error.message}. Check that SSH key login works in your terminal and Python 3 is installed on the server.`);
     }
   });
-  handle('library:folder', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (result.canceled) return state; const root = result.filePaths[0]; const items = await scanLibraryFolder(root); if (!state.folders.includes(root)) state.folders.push(root); const existing = new Map(state.items.map(i => [i.id, i])); for (const item of items) existing.set(item.id, item); state.items = regroup([...existing.values()]); await persist(); scanner.invalidate(); void refreshMetadata(); return state; });
+  handle('library:folder', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (result.canceled) return state; const root = result.filePaths[0]; const items = await scanLibraryFolder(root); if (!state.folders.includes(root)) state.folders.push(root); syncFolderWatcher(); const existing = new Map(state.items.map(i => [i.id, i])); for (const item of items) existing.set(item.id, item); state.items = regroup([...existing.values()]); await persist(); scanner.invalidate(); void refreshMetadata(); return state; });
   handle('library:files', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Media', extensions: [...extensions] }, { name: 'All files', extensions: ['*'] }] }); return result.canceled ? state : importFiles(result.filePaths); });
   handle('library:take-open', takeOpen);
   handle('library:import', files => { if (!Array.isArray(files) || files.length > 5000) throw new Error('Invalid file selection'); return importFiles(files); });
@@ -323,7 +337,7 @@ app.whenReady().then(async () => {
     if (!win.isDestroyed()) win.webContents.send('library:metadata', snapshot);
     return snapshot;
   });
-  handle('library:remove-folder', async root => { state.folders = state.folders.filter(f => f !== root); state.items = state.items.filter(i => i.root !== root); state.sshConnections = (state.sshConnections || []).filter(config => remote.register(config) !== root); remote.remove(root); await persist(); scanner.invalidate(); void refreshMetadata(); return state; });
+  handle('library:remove-folder', async root => { state.folders = state.folders.filter(f => f !== root); syncFolderWatcher(); state.items = state.items.filter(i => i.root !== root); state.sshConnections = (state.sshConnections || []).filter(config => remote.register(config) !== root); remote.remove(root); await persist(); scanner.invalidate(); void refreshMetadata(); return state; });
   handle('library:save', async data => {
     const ids = new Set(state.items.map(i => i.id));
     if (data.progress && typeof data.progress === 'object') for (const [id, value] of Object.entries(data.progress)) if (ids.has(id) && value && Number.isFinite(value.position) && Number.isFinite(value.duration) && !(Number.isFinite(value.updated) && value.updated < (state.progress[id]?.updated || 0))) state.progress[id] = { position: Math.max(0, value.position), duration: Math.max(0, value.duration), updated: Number.isFinite(value.updated) ? value.updated : Date.now(), completed: !!value.completed, hidden: !!value.hidden };
@@ -411,6 +425,10 @@ app.whenReady().then(async () => {
   torrents.start();
   scanner.refresh();
   void refreshMetadata();
+  if (catchUp) {
+    const localRoots = state.folders.filter(root => !remote.isRemote(root));
+    if (localRoots.length) void rescan(localRoots, true).then(publishDownloads).catch(() => {});
+  }
 });
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => { updateRequest?.abort(); torrents?.close(); streams?.close(); previews.close(); scanner?.close(); remote.close(); });
+app.on('before-quit', () => { updateRequest?.abort(); folderWatcher.close(); torrents?.close(); streams?.close(); previews.close(); scanner?.close(); remote.close(); });

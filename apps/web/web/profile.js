@@ -1,5 +1,6 @@
 // The one page the desktop app does not have: who you are, what you have added, your password, and for the head account the people.
-import { get, post, patch, put, del } from './http.js';
+import { scanMessage } from '../../../packages/core/client/scan-status.js';
+import { get, post, patch, del } from './http.js';
 import { h, say, dialog, languageSelect, languageName, copyText, selectText } from './dom.js';
 
 const hue = name => { let n = 2166136261; for (const c of name) n = Math.imul(n ^ c.codePointAt(0), 16777619); return (n >>> 0) % 360; };
@@ -115,6 +116,8 @@ export function openProfile({ session, getState, forgetTracks, signOut, openSave
     h('main', { class: 'page web-page' },
       h('header', { class: 'page-head' }, h('div', { class: 'web-who' }, avatar(user.username, true), h('div', {}, h('h1', { class: 'page-title' }, user.username), h('p', { class: 'page-sub' }, admin ? 'Head account · looks after the library and everyone on it' : 'Viewer · watches and adds subtitles'))), h('button', { class: 'pill', type: 'button', onclick: signOut }, 'Sign out')),
       section('Activity', null, stats),
+      !session.offline && state?.scanStatus ? section('Library scan', null, h('p', { class: 'muted', role: 'status', 'data-library-scan-status': '' }, scanMessage(state.scanStatus)),
+        h('ul', { class: 'scan-errors', 'data-library-scan-errors': '' }, state.scanStatus.errors.map(row => h('li', {}, row.folder + ': ' + row.error)))) : null,
       group('Playback',
         section('Dub and subtitles', forget, h('p', { class: 'muted' }, 'The player remembers which audio and subtitle language you pick for each show or film, so a dub chosen in one episode carries through the series.')),
         section('Saved for offline', null, h('button', { class: 'pill', type: 'button', onclick: () => { close(); openSaved(); } }, 'View offline downloads')),

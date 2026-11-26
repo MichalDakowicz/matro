@@ -76,14 +76,17 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
         }
         const user = dataRef.current?.user;
         if (!user) return;
-        const { catalogRevision } = await request(base, '/api/library/revision', { accountId: user.id });
+        const { catalogRevision, scanStatus } = await request(base, '/api/library/revision', { accountId: user.id });
         if (closed || revision.current !== before) return;
         void retryInterrupted(base, user)?.catch(() => {});
-        if (catalogRevision === before) return;
+        if (catalogRevision === before) {
+          setData(current => current && JSON.stringify(current.scanStatus) !== JSON.stringify(scanStatus) ? { ...current, scanStatus } : current);
+          return;
+        }
         const next = await library(base, user.id);
         if (closed || revision.current !== before) return;
         revision.current = next.catalogRevision;
-        setData(current => current && { ...current, items: next.items, folders: next.folders, metadata: next.metadata, scanner: next.scanner, catalogRevision: next.catalogRevision });
+        setData(current => current && { ...current, items: next.items, folders: next.folders, metadata: next.metadata, scanner: next.scanner, scanStatus: next.scanStatus, catalogRevision: next.catalogRevision });
       } catch (error) {
         if (!closed && accountChanged(error)) onSignedOut();
       } finally { checking = false; }

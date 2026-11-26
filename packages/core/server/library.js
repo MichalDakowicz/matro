@@ -64,7 +64,7 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, onScan, 
       WHERE removed = 0 AND probe IS NULL AND retry_probe_after > ?`)
   };
   const state = { scanning: false, probing: false, lastScan: null, revision: randomUUID() };
-  const pending = new Map(), folderScans = new Map();
+  const pending = new Map(), folderScans = new Map(), scanErrors = new Map();
   let allFoldersScan, folderAdds = Promise.resolve(), probeAgain = false, retryTimer;
   const changed = () => { state.revision = randomUUID(); onChange?.(); };
 
@@ -103,7 +103,19 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, onScan, 
   }
   function rescan(folderId) {
     const prior = folderScans.get(folderId) || Promise.resolve();
-    const task = prior.catch(() => {}).then(() => scanFolder(folderId)).finally(() => {
+    const task = prior.catch(() => {}).then(() => scanFolder(folderId)).then(result => {
+      if (q.folder.get(folderId)) {
+        if (result.ok) scanErrors.delete(folderId);
+        else scanErrors.set(folderId, { folder: result.folder, error: result.error });
+      }
+      state.lastScanAt = Date.now();
+      return result;
+    }, error => {
+      const folder = q.folder.get(folderId);
+      if (folder) scanErrors.set(folderId, { folder: folder.path, error: 'Unexpected error while scanning folder.' });
+      state.lastScanAt = Date.now();
+      throw error;
+    }).finally(() => {
       if (folderScans.get(folderId) === task) folderScans.delete(folderId);
     });
     folderScans.set(folderId, task);
@@ -116,6 +128,7 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, onScan, 
       const results = [];
       for (const folder of q.folders.all()) results.push(await rescan(folder.id));
       state.lastScan = { at: Date.now(), results };
+      state.lastScanAt = state.lastScan.at;
       return state.lastScan;
     })().finally(() => { state.scanning = false; allFoldersScan = null; });
     return allFoldersScan;
@@ -172,7 +185,7 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, onScan, 
       }
       return true;
     });
-    if (removed) changed();
+    if (removed) { scanErrors.delete(id); changed(); }
   }
 
   // Durations and codecs come from ffprobe, filled in one file at a time so a big scan does not starve playback.
@@ -230,7 +243,11 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, onScan, 
       if (probeAgain) { probeAgain = false; probeSoon(); }
     });
   }
-  return { changed, folders: () => q.folders.all(), addFolder, removeFolder, rescan, rescanAll, item: id => q.item.get(id), info, probeSoon, state,
+  function scanStatus(admin) {
+    return { scanning: state.scanning || folderScans.size > 0, lastScanAt: state.lastScanAt || null,
+      errors: [...scanErrors.values()].map(row => admin ? row : { folder: path.basename(row.folder || ''), error: 'Folder could not be scanned completely.' }) };
+  }
+  return { scanStatus, changed, folders: () => q.folders.all(), addFolder, removeFolder, rescan, rescanAll, item: id => q.item.get(id), info, probeSoon, state,
     byPath: p => { const folder = q.byPath.get(p); return folder?.removed === 0 ? folder : undefined; }, coveringFolder };
 }
 module.exports = { createLibrary };
