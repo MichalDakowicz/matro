@@ -37,6 +37,15 @@ export function normalizeProgress(progress) {
   }));
 }
 
+/** @param {string[]} previous @param {string[]} next */
+export function queueChange(previous, next) {
+  // Appending the reordered suffix leaves any items added by other devices alone.
+  let prefix = 0;
+  for (const id of previous) if (id === next[prefix]) prefix++;
+  const kept = new Set(next.slice(0, prefix));
+  return { add: next.slice(prefix), remove: previous.filter(id => !kept.has(id)) };
+}
+
 /** @param {Progress | undefined} entry */
 function hasActivity(entry) {
   return !!entry && (entry.position > 0 || isCompleted(entry));

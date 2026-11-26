@@ -4,15 +4,16 @@ The responsive web app is the visual reference. Native rendering changes the UI 
 
 | Web source | Native component | Phone layout |
 | --- | --- | --- |
-| `.window-zone`, `.help-button`, `.web-avatar` | `Corner` | Help at left; 34 px brand mark and 36 px avatar at right |
-| `.dock` | `Dock` | Floating 56 px icon pill, 14 px margins, above the bottom safe area |
+| `.window-zone`, `.web-avatar` | `Corner` | Brand mark (a back chevron on screens opened from another screen) at left, 44 px avatar at right, both on a top gradient fade; About Matro lives in the profile sheet |
+| `.dock` | `Dock` | Floating 64 px pill with the artboards' four items (Library, Search, Queue, Server); the active item shows its label. 14 px margins above the bottom safe area, hidden while the keyboard is up |
 | `.cw-row`, `.continue-card` | `ContinueRow` | Horizontal 240 × 138 cards with title, remaining time and progress |
 | `.showcase`, `.reel`, `.show-meta` | `FeaturedReel` | Animated tilted poster reel, wrapped scrolling, dots/count, then title, metadata and two actions |
-| `.grid`, `.card` | `PosterCard` | Minimum three columns on phones; 2:3 artwork; 12.5 px title / 11 px metadata |
+| `.grid`, `.card` | `PosterCard` | Two columns under 380 dp, three or more above; 2:3 artwork; two-line 13 px title, year or season count as metadata |
 | `.detail-hero`, `.detail-head`, `.episode-row` | `TitleScreen` | Faded 420 px hero, 36 px title, play pill, round secondary actions, season chips and 128 px episode stills |
 | `.stage`, `.player-top`, `.player-controls` | `NativePlayer` | Video fills the scene. Back/title at top; seeker, time, transport and utilities overlaid at bottom |
 | `.tracks-panel`, `.queue-panel` | Native modal sheets | Readable language names, selected rows, subtitle delay/size and season-grouped queue |
-| Downloads / Folders / Profile | Native screens and sheets | Existing information structure, controls, cards and rounded surfaces |
+| `MobileQueue`, `MobileServer`, `MobileSearch` artboards | `QueueScreen`, `ServerPage`, `SearchView` | Up next with autoplay; the server connection, libraries and admin entry points; Search with Recent and filter chips |
+| Downloads / Folders / Profile | Native screens and sheets | Profile is a grouped sheet (Library, Server, Account) with confirmations; Folders sits under the Library chips for admins |
 
 Colors and Geist fonts follow `packages/browser-ui/styles.css`; SVG geometry is shared through `packages/browser-ui/icons.json`, also imported by the web renderer. The brand geometry comes from the existing SVG. Native primitives are centralized in `apps/mobile/src/components/Matro.tsx`.
 
