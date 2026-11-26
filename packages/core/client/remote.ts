@@ -78,7 +78,8 @@ export function createRemote({ post, playback, receive, changed }: {
     },
     async command(target: string, action: RemoteAction) {
       if (!device) throw new Error('Connect this device first.');
-      await call('command', { ...device, target, ...action }, 23000);
+      // Let the server report its confirmation timeout before aborting the request.
+      await call('command', { ...device, target, ...action }, action.action === 'start' ? 63_000 : 23_000);
     },
   };
 }

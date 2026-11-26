@@ -4,6 +4,7 @@ const { HttpError, readJson } = require('../http');
 
 const DEVICE_TTL = 12_000;
 const COMMAND_TTL = 20_000;
+const START_COMMAND_TTL = 60_000;
 const actions = new Set(['start', 'play', 'pause', 'seek']);
 const validPosition = value => Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 const randomId = () => randomBytes(18).toString('base64url');
@@ -85,7 +86,7 @@ function register({ router, library }) {
         else resolve({ ok: true });
       };
       const disconnected = () => finish('The sending device disconnected.');
-      const timer = setTimeout(() => finish('The receiving device did not confirm the command.'), COMMAND_TTL);
+      const timer = setTimeout(() => finish('The receiving device did not confirm the command.'), action === 'start' ? START_COMMAND_TTL : COMMAND_TTL);
       timer.unref();
       ctx.res.once('close', disconnected);
       const command = { id: randomId(), action, itemId, ...(needsPosition ? { position } : {}) };

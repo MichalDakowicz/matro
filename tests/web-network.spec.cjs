@@ -118,10 +118,13 @@ test('browser and desktop receiver control playback and hand it back through the
     await expect.poll(() => position(receiver)).toBeGreaterThan(.2);
     await useControl(box, 'Pause');
     await expect.poll(() => paused(receiver)).toBe(true);
+    await expect(box.getByText('Northbound · Paused', { exact: true })).toBeVisible();
     await useControl(box, 'Ahead 10 s');
     await expect.poll(() => position(receiver)).toBeGreaterThan(9);
     await useControl(box, 'Play');
     await expect.poll(() => paused(receiver)).toBe(false);
+    // The sender learns the post-seek position when the receiver's playing state reaches it.
+    await expect(box.getByText('Northbound · Playing', { exact: true })).toBeVisible();
 
     await useControl(box, 'Continue on this device');
     await expect(box).toHaveCount(0);

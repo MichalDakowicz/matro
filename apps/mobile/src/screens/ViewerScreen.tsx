@@ -182,7 +182,8 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
         if (ok && run === playRun.current) resolve();
         else reject(new Error('Could not start playback here.'));
       };
-      const timer = setTimeout(() => confirm(false), 16000);
+      // Leave time for command delivery and acknowledgement within the server's 60-second window.
+      const timer = setTimeout(() => confirm(false), 55_000);
       setPlaying({ item, start: position, queue, remoteStart: { run, confirm } });
     });
   }
