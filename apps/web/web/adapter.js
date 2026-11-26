@@ -224,7 +224,8 @@ export function createAdapter(session, remote = null) {
   async function stream({ id, offset = 0, audio = null, bitmapSubtitle = null, subtitleDelay = 0, audioDelay = 0, preload = false, forceTranscode = false, hdr = false, channels = 2 }) {
     const local = async (fallback = false) => {
       const saved = await savedPlayback(id);
-      if (!saved || (!fallback && (bitmapSubtitle !== null || (audio !== null && audio !== saved.info.audio[0]?.index)))) return null;
+      // Online, an audio delay needs the server's transcode; a saved copy plays the file as it is.
+      if (!saved || (!fallback && (bitmapSubtitle !== null || (audioDelay && !session.offline) || (audio !== null && audio !== saved.info.audio[0]?.index)))) return null;
       return { url: preload && offset > 0 ? `${saved.url}#t=${offset}` : saved.url, offset: 0, diagnostics: savedDiagnostics };
     };
     const saved = await local();

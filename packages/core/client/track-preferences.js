@@ -41,6 +41,7 @@ export function pickSubtitle(tracks, audioTrack, defaults) {
 // Whether a saved copy (one audio track and its text subtitles) holds the tracks this title opens with, so it can play
 // instead of the stream. saved and full: { audio, subtitles }. Shared by the Android and web players.
 export function savedServes(saved, full, choice, preferences) {
+  if (choice?.audioDelay) return false; // A saved copy plays the file as it is, so only the stream can shift the sound.
   const { audio, subtitle } = initialTracks(full, choice, preferences);
   return audio === (saved.audio[0]?.index ?? null) && (subtitle === null || saved.subtitles.some(t => t.index === subtitle));
 }

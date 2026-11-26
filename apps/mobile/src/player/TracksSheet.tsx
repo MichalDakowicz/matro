@@ -22,7 +22,7 @@ type Props = {
   delay: number; onDelay: (delay: number) => void; size: number; onSize: (size: number) => void; bitmap: boolean;
   diagnostics?: { mode: string; reason: string } | null;
   qualities: { id: string; label: string }[]; quality: string; onQuality: (id: string) => void;
-  audioDelay: number; onAudioDelay: (delay: number) => void;
+  audioDelay: number; onAudioDelay?: (delay: number) => void;
   position: SubtitlePosition; onPosition: (position: SubtitlePosition) => void; style: SubtitleStyle; onStyle: (change: Partial<SubtitleStyle>) => void;
 };
 
@@ -49,7 +49,7 @@ export function TracksSheet({ audio, audioIndex, onAudio, subtitles, subtitleInd
         {diagnostics && <Section title={`Playback info · ${diagnostics.mode}`}><Text style={t.muted}>{diagnostics.reason}</Text></Section>}
         {qualities.length > 0 && <Section title="Quality"><ChipRow>{qualities.map(tier => <Chip key={tier.id} label={tier.label} selected={tier.id === quality} onPress={() => onQuality(tier.id)} />)}</ChipRow></Section>}
         {audio.length ? audio.map((track, index) => <TrackRow key={track.index} track={track} position={index + 1} selected={audioIndex === track.index} onPress={() => onAudio(track.index)} />) : <Text style={t.dim}>No audio tracks available.</Text>}
-        <Section title="Audio timing"><HoldStepper label="Audio delay" value={delayLabel(audioDelay)} minusLabel="Audio earlier" plusLabel="Audio later" onStep={direction => onAudioDelay(audioDelay + direction * .1)} onReset={audioDelay ? () => onAudioDelay(0) : undefined} /></Section>
+        {onAudioDelay && <Section title="Audio timing"><HoldStepper label="Audio delay" value={delayLabel(audioDelay)} minusLabel="Audio earlier" plusLabel="Audio later" onStep={direction => onAudioDelay(audioDelay + direction * .1)} onReset={audioDelay ? () => onAudioDelay(0) : undefined} /></Section>}
       </> : <>
         <Pressable onPress={() => onSubtitle(null)} accessibilityRole="radio" accessibilityState={{ checked: subtitleIndex === null }} style={[s.track, subtitleIndex === null && s.selected]}><Text style={[t.text, { flex: 1 }]}>Off</Text>{subtitleIndex === null && <Icon name="check" size={18} />}</Pressable>
         {subtitles.map((track, index) => <TrackRow key={track.index} track={track} position={index + 1} selected={subtitleIndex === track.index} onPress={() => onSubtitle(track.index)} />)}

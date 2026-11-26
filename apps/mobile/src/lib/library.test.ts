@@ -104,6 +104,7 @@ test('a saved copy serves online playback only when its single audio track and t
   assert.equal(savedServes(saved, full), true);
   assert.equal(savedServes(saved, full, { audio: { language: 'jpn', title: '' }, subtitle: { language: 'eng', title: '' } }), true);
   assert.equal(savedServes(saved, full, { audio: { language: 'eng', title: '' } }), false);
+  assert.equal(savedServes(saved, full, { audioDelay: -.5 }), false);
   assert.equal(savedServes(saved, { ...full, embedded: [full.embedded[1]] }, { subtitle: { language: 'eng', title: '' } }), false);
 });
 

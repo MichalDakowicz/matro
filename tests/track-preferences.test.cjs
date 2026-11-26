@@ -66,4 +66,6 @@ test('one rule decides whether a saved copy has the tracks a title opens with', 
   assert.equal(savedServes(saved, full, undefined, prefs({ subtitles: 'always', subtitleLanguage: 'en' })), true);
   assert.equal(savedServes(saved, full, undefined, prefs({ audio: 'pl' })), false);
   assert.equal(savedServes(saved, full, { subtitle: { language: 'jpn', title: '' } }, {}), false);
+  assert.equal(savedServes(saved, full, { audioDelay: .3 }, {}), false);
+  assert.equal(savedServes(saved, full, { audioDelay: 0 }, {}), true);
 });
