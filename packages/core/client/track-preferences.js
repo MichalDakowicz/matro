@@ -38,6 +38,12 @@ export function pickSubtitle(tracks, audioTrack, defaults) {
   const wanted = inLanguage(usable, defaults.subtitleLanguage);
   return (wanted.find(t => !isForced(t) && !isSdh(t)) || wanted.find(t => !isForced(t)) || wanted[0])?.index ?? null;
 }
+// Whether a saved copy (one audio track and its text subtitles) holds the tracks this title opens with, so it can play
+// instead of the stream. saved and full: { audio, subtitles }. Shared by the Android and web players.
+export function savedServes(saved, full, choice, preferences) {
+  const { audio, subtitle } = initialTracks(full, choice, preferences);
+  return audio === (saved.audio[0]?.index ?? null) && (subtitle === null || saved.subtitles.some(t => t.index === subtitle));
+}
 // details: { audio, subtitles }. choice: this title's saved choice (undefined if none).
 export function initialTracks({ audio, subtitles }, choice, preferences) {
   const defaults = trackDefaults(preferences);

@@ -8,7 +8,7 @@ import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-bu
 import { createRecovery } from './recovery.js';
 import { randomReelStart } from '../core/client/reel-start.js';
 import { compareEditions, compareEpisodes, continueWatching, dayLabel, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, markedProgress, normalizeProgress, queueChange, reachedCompletion, reachedOutro, reachedPlaybackEnd, resumeTarget, seasonLabel, watchHistory } from '../core/client/watch-progress.js';
-import { initialTracks, LANGUAGES, SUBTITLE_MODES, trackDefaults } from '../core/client/track-preferences.js';
+import { initialTracks, LANGUAGES, savedServes, SUBTITLE_MODES, trackDefaults } from '../core/client/track-preferences.js';
 import { createAutoSkip } from '../core/client/auto-skip.js';
 const api = window.matro;
 if (api?.chooseSource && !document.querySelector('.desktop-source-button')) {
@@ -1026,8 +1026,14 @@ async function play(id, keepQueue = false, compareEdition = false, remotePositio
   if (api.savedPlayback) void attempt(save);
   else await save();
   if (token !== generation) return;
-  const saved = await api.savedPlayback?.(id);
+  let saved = await api.savedPlayback?.(id);
   if (token !== generation) return;
+  // Online, a saved copy plays only when it holds the tracks this title opens with; otherwise the title streams.
+  if (saved && api.inspectOnline) {
+    const full = await api.inspectOnline(id).catch(() => null);
+    if (token !== generation) return;
+    if (full && !savedServes(saved.info, full, library.preferences.tracks?.[titleKey(item)], library.preferences)) saved = null;
+  }
   loading = true; frameRun++; selected = null;
   // A preloaded stream is used only if its track choice still matches what this title would pick now.
   const fresh = remotePosition === undefined && prepared?.id === id && (!saved || prepared.url.split('#')[0] === saved.url)

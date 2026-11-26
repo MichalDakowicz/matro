@@ -58,3 +58,12 @@ test('bad stored defaults fall back to off', async () => {
   const { trackDefaults } = await load();
   assert.deepEqual(trackDefaults({ trackDefaults: { audio: 5, subtitles: 'x', subtitleLanguage: '!!' } }), { audio: '', subtitles: 'off', subtitleLanguage: '' });
 });
+
+test('one rule decides whether a saved copy has the tracks a title opens with', async () => {
+  const { savedServes } = await load();
+  const full = { audio, subtitles: subs }, saved = { audio: [audio[0]], subtitles: [subs[2]] };
+  assert.equal(savedServes(saved, full, undefined, {}), true);
+  assert.equal(savedServes(saved, full, undefined, prefs({ subtitles: 'always', subtitleLanguage: 'en' })), true);
+  assert.equal(savedServes(saved, full, undefined, prefs({ audio: 'pl' })), false);
+  assert.equal(savedServes(saved, full, { subtitle: { language: 'jpn', title: '' } }, {}), false);
+});

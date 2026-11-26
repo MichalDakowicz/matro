@@ -130,17 +130,20 @@ export function createAdapter(session, remote = null) {
     })();
   }
   const savedPlayback = id => offline.playback(id).catch(() => null);
+  // Online, the server's info lists every track; the player decides with savedServes whether the saved copy has them.
   async function inspect(id) {
     const saved = await savedPlayback(id);
-    if (saved) return { ...saved.info, qualities: [] };
+    if (saved && session.offline) return { ...saved.info, qualities: [] };
     if (session.offline) throw new Error('This title is not saved on this device.');
     try { return await inspectRemote(id); }
     catch (error) {
-      const fallback = await savedPlayback(id);
-      if (fallback) return fallback.info;
+      const fallback = saved || await savedPlayback(id);
+      if (fallback) return { ...fallback.info, qualities: [] };
       throw error;
     }
   }
+  // A short deadline, so a slow server does not hold up a saved copy.
+  const inspectOnline = id => session.offline ? Promise.resolve(null) : inspectRemote(id, { signal: AbortSignal.timeout(4000), deadline: true });
   async function inspectRemote(id, { signal, deadline } = {}) {
     const info = await api('GET', `/api/items/${id}/info`, undefined, { signal, deadline });
     const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay, hdrDirectMime: info.hdrDirectMime, hdrToneMap: info.hdrToneMap, qualities: qualityOptions(info.video),
@@ -359,7 +362,7 @@ export function createAdapter(session, remote = null) {
     chooseSource: window.matroDesktop?.chooseSource,
     remote,
     recoveryScope: scope,
-    load, inspect, prepare: inspect, savedPlayback, subtitles, loadSubtitle, stream,
+    load, inspect, inspectOnline, prepare: inspect, savedPlayback, subtitles, loadSubtitle, stream,
     get canEditLists() { return !session.offline && Array.isArray(latest?.lists); },
     async editLists(change) {
       const { lists } = await stateRequest('POST', '/api/lists', change);

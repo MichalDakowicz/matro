@@ -1,5 +1,5 @@
 import type { Info, Item, Library, Metadata, Preferences, Track, TrackChoice, TrackPreference } from './server';
-import { initialTracks } from './track-preferences.js';
+import { initialTracks, savedServes as servesTracks } from './track-preferences.js';
 import { compareEditions, compareEpisodes, continueWatching, groupTitles, isCompleted, resumeTarget } from './watch-progress.js';
 export const trackKey = (item: Item) => item.groupId || item.group;
 export const titleKey = (item: Item) => item.kind === 'show' ? item.groupId || item.group : item.editionGroup || item.id;
@@ -26,9 +26,8 @@ export function subtitleTracks(info: Info): Track[] {
   ];
 }
 
-export function savedServes(saved: Info, full: Info, choice?: TrackPreference, preferences?: Preferences) {
-  const { audio, subtitle } = initialTracks({ audio: full.audio, subtitles: subtitleTracks(full) }, choice, preferences);
-  return audio === (saved.audio[0]?.index ?? null) && (subtitle === null || subtitleTracks(saved).some(track => track.index === subtitle));
+export function savedServes(saved: Info, full: Info, choice?: TrackPreference, preferences?: Preferences): boolean {
+  return servesTracks({ audio: saved.audio, subtitles: subtitleTracks(saved) }, { audio: full.audio, subtitles: subtitleTracks(full) }, choice, preferences);
 }
 // A save starts with the tracks the player would open: that audio, and the subtitle burned in only when it is a bitmap.
 export function offlineStart(info: Info, choice?: TrackPreference, preferences?: Preferences) {
