@@ -1,5 +1,6 @@
 // Electron host entry; application services live in the shared core.
 const { app } = require('electron');
+require('./test-window.cjs')(app);
 if (!app.isPackaged && process.env.MATRO_USER_DATA) app.setPath('userData', require('node:path').resolve(process.env.MATRO_USER_DATA));
 const { loadSource } = require('../../packages/core/desktop/desktop-source.cjs');
 const flag = process.argv.findIndex(value => value === '--server');
