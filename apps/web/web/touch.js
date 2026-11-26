@@ -1,5 +1,7 @@
 // Touch has no mousemove to wake the player's hidden controls, so a tap on the picture wakes them first and only
 // toggles play when they were already showing.
+// What counts as a phone: a narrow window, or a touch screen turned sideways (short). Keep in step with web.css.
+const phone = matchMedia('(max-width:720px), (pointer:coarse) and (max-height:480px)');
 let swallow = false, timer = 0;
 document.addEventListener('pointerdown', event => {
   if (event.pointerType === 'mouse') return;
@@ -16,7 +18,7 @@ document.addEventListener('click', event => {
 }, true);
 // On a phone the queue is a sheet over the controls, so a tap on the picture above it closes it.
 document.addEventListener('click', event => {
-  if (!matchMedia('(max-width:720px)').matches || !document.querySelector('.player-layout.with-queue')) return;
+  if (!phone.matches || !document.querySelector('.player-layout.with-queue')) return;
   if (!event.target.closest?.('.stage') || event.target.closest('.queue-panel, .player-controls, .player-top, .tracks-panel')) return;
   event.stopPropagation(); event.preventDefault();
   document.querySelector('[data-action="queue"]')?.click();
@@ -36,7 +38,7 @@ const askToConfirm = (title, confirm) => new Promise(resolve => {
 });
 let confirmed = null;
 document.addEventListener('click', event => {
-  if (!matchMedia('(max-width:720px)').matches) return;
+  if (!phone.matches) return;
   const button = event.target.closest?.('[data-restart], [data-complete]');
   if (!button || button === confirmed) { confirmed = null; return; }
   const restart = button.hasAttribute('data-restart');

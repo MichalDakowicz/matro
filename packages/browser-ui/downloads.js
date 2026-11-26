@@ -34,6 +34,8 @@ function seedChoice(saved) {
   });
 }
 
+// Phones get the inline "Connect download client" card instead of a modal in front of the page. Keep in step with the phone rules in web.css.
+const PHONE = '(max-width:720px), (pointer:coarse) and (max-height:480px)';
 export function createDownloadBrowser(api, { play = () => {} } = {}) {
   const hostOnly = api.downloadHostOnly === true;
   const labels = hostOnly ? { server: 'Matro host' } : { local: 'This PC', server: 'Server' };
@@ -328,7 +330,7 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
     const paths = kind === 'anime' ? [['Movies', storage?.movieRoot], ['Series', storage?.showRoot]].filter(([, value]) => value).map(([name, value]) => `${name} · ${value}`).join(' / ') : storage?.[kind === 'show' ? 'showRoot' : 'movieRoot'];
     container.innerHTML = `<div class="page-head"><div><h1 class="page-title">Downloads</h1><p class="page-sub">Find movies, series, and anime. Choose where they go.</p></div><button class="pill" id="open-download-settings">Download settings</button></div>
       <div class="download-destination"><div class="chip-row" role="group" aria-label="Download to">${Object.entries(labels).map(([id, label]) => `<button class="chip" data-destination="${id}" aria-pressed="${target === id}" aria-label="${label}${config[id] ? '' : ' — not configured'}">${label}</button>`).join('')}</div><span class="path"><span class="status-dot${config[target] ? '' : ' off'}"></span><span class="mono dim">${esc(paths || 'Open Download settings to connect this destination')}</span></span></div>
-      <p id="download-message" role="status" aria-live="polite">${esc(message)}</p><div id="download-upgrade-panel"></div>
+      <p id="download-message" role="status" aria-live="polite">${esc(message)}</p>${loaded && !config[target] ? `<section class="download-connect" aria-labelledby="download-connect-title"><h2 id="download-connect-title">Connect a download client</h2><p class="muted">Downloads go through qBittorrent on ${esc(labels[target])}. Connect it to add downloads; you can browse and search the catalog first.</p><button class="pill primary" type="button" data-connect>Connect download client</button></section>` : ''}<div id="download-upgrade-panel"></div>
       <section class="section" id="download-activity" hidden><div class="section-heading"><h2>On ${labels[target]}</h2><span><button class="text-button" id="refresh-downloads">Refresh downloads</button></span></div><div class="cw-row" id="download-transfers" aria-live="off"></div></section>
       <div class="download-catalog-controls"><div class="chip-row" role="group" aria-label="Media type">${Object.entries(kinds).map(([key, [label]]) => `<button type="button" class="chip" data-download-kind="${key}" aria-pressed="${kind === key}">${label}</button>`).join('')}</div><button type="button" class="pill small" id="download-browse" aria-pressed="${catalogs[kind].mode === 'browse'}">Most seeded</button></div>
       <form id="torrent-search-form" class="search-hero" role="search"><label for="torrent-query" class="sr-only">Search ${titleKind} torrents</label><div class="search-field">${icons.search}<input id="torrent-query" type="search" maxlength="200" placeholder="Search ${kind === 'anime' ? 'an' : 'a'} ${titleKind} title" value="${esc(kind === 'show' ? seriesQuery : kind === 'anime' ? animeQuery : query)}" required autocomplete="off"><button class="pill small" type="submit">Search</button></div></form>
@@ -457,7 +459,7 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
     if (button.id === 'find-season-download') { await loadSeason(); return; }
     if (button.id === 'season-more' && seasonDownload?.nextPage) { await loadSeason(seasonDownload.nextPage); return; }
     if (button.id === 'series-more' && seriesData?.nextPage) { await loadSeries(seriesData.nextPage); return; }
-    if (button.id === 'open-download-settings') { settings.open(target); return; }
+    if (button.id === 'open-download-settings' || button.dataset.connect !== undefined) { settings.open(target); return; }
     if (button.id === 'refresh-downloads') { button.disabled = true; await refresh(true); if (button.isConnected) button.disabled = false; return; }
     if (button.id === 'close-upgrade') {
       upgrade = null; results = null; query = searchText = ''; searchId++; searching = false;
@@ -549,7 +551,7 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
         const initialConfig = await api.downloadConfig();
         if (mount !== mountId || !current()) return;
         config = initialConfig;
-        if (!loaded) { if (!config[target]) target = config.local ? 'local' : config.server ? 'server' : target; loaded = true; if (!config[target] && !requestedMovie) settings.open(target); }
+        if (!loaded) { if (!config[target]) target = config.local ? 'local' : config.server ? 'server' : target; loaded = true; if (!config[target] && !requestedMovie && !matchMedia(PHONE).matches) settings.open(target); }
         draw();
         if (searchOnMount) { searchOnMount = false; void search(); }
         await refresh();
