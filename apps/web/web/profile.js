@@ -1,11 +1,13 @@
 // The one page the desktop app does not have: who you are, what you have added, your password, and for the head account the people.
-import { get, post, patch, del } from './http.js';
+import { scanMessage } from '../../../packages/core/client/scan-status.js';
+import { get, post, put, patch, del } from './http.js';
 import { h, say, dialog, languageSelect, languageName, copyText, selectText } from './dom.js';
 
 const hue = name => { let n = 2166136261; for (const c of name) n = Math.imul(n ^ c.codePointAt(0), 16777619); return (n >>> 0) % 360; };
 const avatar = (name, big) => h('span', { class: `web-avatar${big ? ' big' : ''}`, style: { '--h': String(hue(name)) }, 'aria-hidden': 'true' }, name.slice(0, 1).toUpperCase());
 const KIND = { full: 'Full', forced: 'Forced only', sdh: 'SDH / captions' };
 const fail = error => say(error.message);
+const group = (title, ...sections) => h('div', { class: 'web-group' }, h('p', { class: 'web-group-title', 'aria-hidden': 'true' }, title), ...sections.filter(Boolean));
 const section = (title, aside, ...body) => h('section', { class: 'section' }, h('div', { class: 'section-heading' }, h('h2', {}, title), aside || null), ...body);
 
 export function profileButton(session, open) {
@@ -16,13 +18,38 @@ export function profileButton(session, open) {
   return button;
 }
 
-export function openProfile({ session, getState, save, signOut, openSaved }) {
+export function openProfile({ session, getState, forgetTracks, signOut, openSaved, openDevices }) {
   const layer = h('div', { class: 'web-layer', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Profile' });
   const close = () => { layer.remove(); document.removeEventListener('keydown', onKey, true); document.body.classList.remove('web-layer-open'); };
   const onKey = e => { if (e.key === 'Escape' && !document.querySelector('dialog[open]')) { e.stopPropagation(); close(); } };
   document.addEventListener('keydown', onKey, true);
 
   const user = session.user, admin = user.role === 'admin' && !session.offline, state = getState();
+  const subtitleStatus = h('p', { class: 'muted', role: 'status' });
+  const subtitleKey = h('input', { type: 'password', required: true, 'aria-label': 'OpenSubtitles API key', maxLength: 200, autocomplete: 'off' });
+  const subtitleOff = h('button', { class: 'pill', type: 'button', hidden: true, onclick: () => configureSubtitles('') }, 'Turn off');
+  const showSubtitleStatus = ({ enabled }) => {
+    subtitleOff.hidden = !enabled;
+    subtitleStatus.textContent = `Search is ${enabled ? 'on' : 'off'}. A search sends the title and language to OpenSubtitles.`;
+  };
+  async function configureSubtitles(key) {
+    try { showSubtitleStatus(await put('/api/admin/subtitle-search', { key }, { accountId: user.id })); subtitleKey.value = ''; }
+    catch (error) { subtitleStatus.textContent = error.message; }
+  }
+  const subtitleSettings = h('form', { onsubmit: event => { event.preventDefault(); void configureSubtitles(subtitleKey.value); } },
+    subtitleStatus, h('label', { class: 'search-field small' }, subtitleKey),
+    h('div', { class: 'show-actions' }, h('button', { class: 'pill primary', type: 'submit' }, 'Save API key'), subtitleOff));
+  const activity = h('div', { role: 'status' });
+  async function loadActivity() {
+    const { playing, preparation } = await get('/api/admin/activity');
+    activity.replaceChildren(
+      h('p', { class: 'muted' }, `${preparation.active}/${preparation.capacity} preparing · ${(preparation.bytes / 1024 ** 2).toFixed(1)} MiB playback cache`),
+      ...(playing.length ? playing.map(entry => h('div', { class: 'source-row web-row' },
+        h('div', { class: 'min' }, h('span', { class: 'source-name' }, entry.episode ? `${entry.groupTitle} · S${entry.season}E${entry.episode} · ${entry.title}` : entry.title),
+          h('span', { class: 'source-path' }, [entry.username, entry.mode, entry.encoder, entry.buffering ? 'Buffering' : null].filter(Boolean).join(' · '))))) : [h('p', { class: 'muted' }, 'No active server streams.')])
+    );
+  }
+  const refreshActivity = () => loadActivity().catch(error => { activity.textContent = error.message; });
   const done = Object.values(state?.progress || {}).filter(p => p.completed).length;
   const going = Object.values(state?.progress || {}).filter(p => !p.completed && p.position > 10 && !p.hidden).length;
   const remembered = Object.keys(state?.preferences?.tracks || {}).length;
@@ -30,7 +57,7 @@ export function openProfile({ session, getState, save, signOut, openSaved }) {
   const stats = h('div', { class: 'web-stats' }, [[done, 'Watched'], [going, 'In progress'], [state?.items.length ?? 0, 'In the library'], [remembered, 'Remembered dub / subtitle choices']].map(([n, l]) => h('div', {}, h('strong', {}, String(n)), h('span', {}, l))));
   const forget = h('button', { class: 'pill small', type: 'button', disabled: !remembered, onclick: async () => {
     if (!confirm('Forget the dub and subtitle choices Matro remembered for each show and film?')) return;
-    delete state.preferences.tracks; await save(); forget.disabled = true; say('Forgot remembered tracks. They will be picked up again as you watch.');
+    await forgetTracks(); delete state.preferences.tracks; forget.disabled = true; say('Forgot remembered tracks. They will be picked up again as you watch.');
   } }, 'Forget them');
 
   const added = h('div', { class: 'sources' });
@@ -39,7 +66,7 @@ export function openProfile({ session, getState, save, signOut, openSaved }) {
     added.replaceChildren(...(subtitles.length ? subtitles.map(s => h('div', { class: 'source-row web-row' }, h('span', { class: 'source-icon' }, h('span', { class: 'mono' }, s.language.toUpperCase())),
       h('div', { class: 'min' }, h('span', { class: 'source-name' }, s.name), h('span', { class: 'source-path' }, `${languageName(s.language)} · ${KIND[s.kind]} · ${s.groupTitle}${s.itemKind === 'show' ? ` S${String(s.season).padStart(2, '0')}E${String(s.episode).padStart(2, '0')}` : ''}${admin && s.addedBy ? ` · by ${s.addedBy}` : ''}`)),
       h('span'), h('div', { class: 'source-actions' }, h('button', { class: 'pill small', type: 'button', onclick: () => relabel(s) }, 'Edit'),
-        h('button', { class: 'pill small', type: 'button', 'aria-label': `Delete ${s.name}`, onclick: async () => { if (confirm(`Delete the subtitles "${s.name}" for everyone?`)) { try { await del(`/api/subtitles/${s.id}`); loadAdded(); } catch (e) { fail(e); } } } }, 'Delete'))))
+        h('button', { class: 'pill small danger', type: 'button', 'aria-label': `Delete ${s.name}`, onclick: async () => { if (confirm(`Delete the subtitles "${s.name}" for everyone?`)) { try { await del(`/api/subtitles/${s.id}`); loadAdded(); } catch (e) { fail(e); } } } }, 'Delete'))))
       : [h('p', { class: 'muted' }, 'Subtitles you add from the player show up here, where you can rename or remove them.')]));
   }
   function relabel(s) {
@@ -63,7 +90,7 @@ export function openProfile({ session, getState, save, signOut, openSaved }) {
     people.replaceChildren(...users.map(u => h('div', { class: 'source-row web-row' }, avatar(u.username), h('div', { class: 'min' }, h('span', { class: 'source-name' }, u.username),
       h('span', { class: 'source-path' }, u.role === 'admin' ? 'Head account' : `Viewer${u.lastWatched ? ` · last watched ${new Date(u.lastWatched).toLocaleDateString()}` : ''} · ${u.subtitles} subtitle file${u.subtitles === 1 ? '' : 's'} added`)), h('span'),
       u.role === 'admin' ? h('span') : h('div', { class: 'source-actions' }, h('button', { class: 'pill small', type: 'button', onclick: () => reset(u) }, 'Reset password'),
-        h('button', { class: 'pill small', type: 'button', onclick: async () => { if (confirm(`Remove ${u.username}? Their watch history and settings go too. Subtitles they added stay.`)) { try { await del(`/api/admin/users/${u.id}`); loadPeople(); } catch (e) { fail(e); } } } }, 'Remove')))));
+        h('button', { class: 'pill small danger', type: 'button', onclick: async () => { if (confirm(`Remove ${u.username}? Their watch history and settings go too. Subtitles they added stay.`)) { try { await del(`/api/admin/users/${u.id}`); loadPeople(); } catch (e) { fail(e); } } } }, 'Remove')))));
   }
   function reset(u) {
     const input = h('input', { type: 'text', autocomplete: 'off', placeholder: 'New password (8 or more characters)', required: true });
@@ -98,16 +125,25 @@ export function openProfile({ session, getState, save, signOut, openSaved }) {
 
   layer.append(h('button', { class: 'web-back', type: 'button', 'aria-label': 'Close profile', title: 'Back (Esc)', onclick: close }, '←'),
     h('main', { class: 'page web-page' },
-      h('header', { class: 'page-head' }, h('div', { class: 'web-who' }, avatar(user.username, true), h('div', {}, h('h1', { class: 'page-title' }, user.username), h('p', { class: 'page-sub' }, admin ? 'Head account · looks after the library and everyone on it' : 'Viewer · watches and adds subtitles')))),
-      section('Your watching', null, stats), section('Dub and subtitles', forget, h('p', { class: 'muted' }, 'The player remembers which audio and subtitle language you pick for each show or film, so a dub chosen in one episode carries through the series.')),
-      section('Saved for offline', null, h('button', { class: 'pill', type: 'button', onclick: () => { close(); openSaved(); } }, 'View offline downloads')),
-      session.offline ? null : section('Subtitles you added', null, added), session.offline ? null : section('Password', null, password),
-      admin ? section('Downloads', null, h('p', { class: 'muted' }, 'Find films and series, add magnet links, and manage downloads on the Matro host.'), h('button', { class: 'pill primary', type: 'button', onclick: () => { close(); document.querySelector('.dock-item[data-tab="downloads"]')?.click(); } }, 'Open downloads')) : null,
-      admin ? section('People', null, h('p', { class: 'page-sub', style: { margin: '-6px 0 16px' } }, 'Viewers keep their own progress and choices and can add subtitles. Only you can add or remove films and shows (Folders). To add someone, create a one-time invite code and send it to them: they sign up with it and pick their own password.'), people, h('h3', { class: 'web-sub' }, 'Invites'), invites, addPerson) : null,
-      h('div', { class: 'show-actions' }, h('button', { class: 'pill', type: 'button', onclick: signOut }, 'Sign out'))));
+      h('header', { class: 'page-head' }, h('div', { class: 'web-who' }, avatar(user.username, true), h('div', {}, h('h1', { class: 'page-title' }, user.username), h('p', { class: 'page-sub' }, admin ? 'Head account · looks after the library and everyone on it' : 'Viewer · watches and adds subtitles'))), h('button', { class: 'pill', type: 'button', onclick: signOut }, 'Sign out')),
+      section('Activity', null, stats),
+      section('Watch history', null, h('p', { class: 'muted' }, 'What you played and when, newest first.'), h('button', { class: 'pill', type: 'button', onclick: () => { close(); document.dispatchEvent(new CustomEvent('matro:history')); } }, 'View watch history')),
+      !session.offline && state?.scanStatus ? section('Library scan', null, h('p', { class: 'muted', role: 'status', 'data-library-scan-status': '' }, scanMessage(state.scanStatus)),
+        h('ul', { class: 'scan-errors', 'data-library-scan-errors': '' }, state.scanStatus.errors.map(row => h('li', {}, row.folder + ': ' + row.error)))) : null,
+      group('Playback',
+        section('Dub and subtitles', forget, h('p', { class: 'muted' }, 'The player remembers which audio and subtitle language you pick for each show or film, so a dub chosen in one episode carries through the series. New titles follow the default audio and subtitle settings in About Matro and this library.')),
+        openDevices && section('Remote playback', null, h('button', { class: 'pill remote-device-button', type: 'button', onclick: () => { close(); openDevices(); } }, 'Connected devices')),
+        section('Saved for offline', null, h('button', { class: 'pill', type: 'button', onclick: () => { close(); openSaved(); } }, 'View offline downloads')),
+        session.offline ? null : section('Subtitles you added', null, added)),
+      session.offline ? null : group('Account', section('Password', null, password)),
+      admin ? group('People and host',
+        section('Now playing', h('button', { class: 'pill small', type: 'button', onclick: refreshActivity }, 'Refresh activity'), activity),
+        section('OpenSubtitles', null, subtitleSettings),
+        section('Downloads', null, h('p', { class: 'muted' }, 'Find films and series, add magnet links, and manage downloads on the Matro host.'), h('button', { class: 'pill primary', type: 'button', onclick: () => { close(); document.querySelector('.dock-item[data-tab="downloads"]')?.click(); } }, 'Open downloads')),
+        section('People', null, h('p', { class: 'page-sub', style: { margin: '-6px 0 16px' } }, 'Viewers keep their own progress and choices and can add subtitles. Only you can add or remove films and shows (Folders). To add someone, create a one-time invite code and send it to them: they sign up with it and pick their own password.'), people, h('h3', { class: 'web-sub' }, 'Invites'), invites, addPerson)) : null));
   document.body.append(layer); document.body.classList.add('web-layer-open');
   if (!session.offline) loadAdded().catch(fail);
-  if (admin) { loadPeople().catch(fail); loadInvites().catch(fail); }
+  if (admin) { void refreshActivity(); loadPeople().catch(fail); loadInvites().catch(fail); get('/api/subtitle-search').then(showSubtitleStatus).catch(fail); }
   layer.querySelector('.web-back').focus();
   return close;
 }

@@ -1,5 +1,6 @@
 const { execFile } = require('node:child_process');
 const config = require('./config');
+const { hdrColor } = require('../playback/color.cjs');
 
 function run(binary, args, { timeout = 30000, input, maxBuffer = 32 * 1024 * 1024, encoding = 'utf8' } = {}) {
   return new Promise((resolve, reject) => {
@@ -14,9 +15,11 @@ const BITMAP_SUBS = ['hdmv_pgs_subtitle', 'dvd_subtitle', 'dvb_subtitle', 'xsub'
 async function probe(file) {
   const data = JSON.parse(await run(config.ffprobe, ['-v', 'error', '-show_format', '-show_streams', '-show_chapters', '-of', 'json', file]));
   const video = data.streams.find(s => s.codec_type === 'video' && !s.disposition?.attached_pic);
+  const hdr = video && hdrColor(video);
   return {
+    colorVersion: 1,
     duration: Number(data.format?.duration) || 0,
-    video: video ? { codec: video.codec_name, width: video.width, height: video.height, pixelFormat: video.pix_fmt } : null,
+    video: video ? { codec: video.codec_name, width: video.width, height: video.height, pixelFormat: video.pix_fmt, ...(hdr ? { hdr } : {}) } : null,
     audio: data.streams.filter(s => s.codec_type === 'audio').map(s => ({ index: s.index, language: s.tags?.language || 'und', title: s.tags?.title || '', codec: s.codec_name, channels: s.channels, default: !!s.disposition?.default })),
     subtitles: data.streams.filter(s => s.codec_type === 'subtitle').map(s => ({ index: s.index, language: s.tags?.language || 'und', title: s.tags?.title || '', codec: s.codec_name,
       forced: !!s.disposition?.forced, text: TEXT_SUBS.includes(s.codec_name), bitmap: BITMAP_SUBS.includes(s.codec_name) })),
