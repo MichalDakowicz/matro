@@ -51,10 +51,10 @@ $('#ssh-form').addEventListener('submit', async event => {
   finally { button.disabled = false; }
 });
 let tab = 'home', query = '', view = 'library', selected = null, folderFilter = null, statusFilter = 'all';
-let current = null, info = null, video = null, offset = 0, audio = null, subtitle = null, subtitleText = null, subtitleUrl = null, delay = 0;
+let current = null, info = null, video = null, offset = 0, audio = null, subtitle = null, subtitleText = null, subtitleUrl = null, delay = 0, audioDelay = 0;
 let queueOpen = false, sidePanel = null, generation = 0, lastSave = 0, idleTimer, toastTimer, subtitleGeneration = 0;
 let loading = false, playbackError = '', trackCues = [];
-let playIntent = true, streamId = null, pendingStream = null, playerEvents;
+let audioDelayTimer, playIntent = true, streamId = null, pendingStream = null, playerEvents;
 let showPlaybackAdvanced = false, rewatchingShow = false, dismissedShow = false;
 let segmentStatus = '', markerDraft = null;
 let scannerSummary = null;
@@ -162,7 +162,7 @@ function matchTrack(tracks, choice) {
 }
 function rememberTracks(changed) {
   library.preferences.tracks ||= {};
-  const key = titleKey(current), fields = { audio: trackChoice(info.audio.find(t => t.index === audio)), subtitle: trackChoice(info.subtitles.find(t => t.index === subtitle)), off: subtitle === null, delay };
+  const key = titleKey(current), fields = { audio: trackChoice(info.audio.find(t => t.index === audio)), subtitle: trackChoice(info.subtitles.find(t => t.index === subtitle)), off: subtitle === null, delay, audioDelay };
   const patch = Object.fromEntries(changed.map(field => [field, fields[field]]));
   library.preferences.tracks[key] = { ...library.preferences.tracks[key], ...patch };
   // A preloaded next episode used the old choice; prepare it again with this one.
@@ -865,12 +865,12 @@ async function play(id, keepQueue = false, compareEdition = false) {
   loading = true; frameRun++; selected = null;
   // A preloaded stream is used only if its track choice still matches what this title would pick now.
   const fresh = prepared?.id === id && (!saved || prepared.url.split('#')[0] === saved.url)
-    && (({ audio: a, subtitle: s, delay: d }) => a === prepared.audio && s === prepared.subtitle && d === prepared.delay)(chooseTracks(item, prepared.info));
+    && (({ audio: a, subtitle: s, delay: d, audioDelay: x }) => a === prepared.audio && s === prepared.subtitle && d === prepared.delay && x === prepared.audioDelay)(chooseTracks(item, prepared.info));
   const ready = fresh ? prepared : null; if (ready) prepared = null; discardPrepared();
   resetPlayer();
   await stopPlayback(token, saved?.url || ready?.url, saved ? { background: true } : undefined);
   if (token !== generation) { if (ready) releaseBuffer(ready.element); return; }
-  current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
+  current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; audioDelay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
   const previousQueue = library.queue;
   if (compareEdition) library.queue = [id];
   else if (favorite) library.queue = [...new Set(library.queue.map(queued => editions.editions.includes(queued) ? id : queued))];
@@ -889,10 +889,10 @@ async function play(id, keepQueue = false, compareEdition = false) {
   try {
     if (ready) {
       // Preloaded: tracks were chosen and the stream has been buffering; the inspect call only tells the scanner what plays.
-      ({ info, audio, subtitle, delay, subtitleText } = ready); if (!saved) void api.inspect(id).catch(() => {});
+      ({ info, audio, subtitle, delay, audioDelay, subtitleText } = ready); if (!saved) void api.inspect(id).catch(() => {});
     } else {
       const metadata = saved?.info || await api.inspect(id); if (token !== generation) return; info = metadata;
-      ({ audio, subtitle, delay } = chooseTracks(item, info));
+      ({ audio, subtitle, delay, audioDelay } = chooseTracks(item, info));
       if (info.subtitles.find(t => t.index === subtitle)?.text) {
         const text = saved ? saved.subtitles[subtitle] ?? null : await api.subtitles({ id, index: subtitle }).catch(() => null);
         if (token !== generation) return;
@@ -919,7 +919,8 @@ function chooseTracks(item, details) {
   return {
     audio: matchTrack(details.audio, choice?.audio)?.index ?? details.audio.find(a => a.default)?.index ?? details.audio[0]?.index ?? null,
     subtitle: choice?.off ? null : matchTrack(details.subtitles.filter(t => t.text || t.bitmap), choice?.subtitle)?.index ?? null,
-    delay: choice?.delay || 0
+    delay: choice?.delay || 0,
+    audioDelay: choice?.audioDelay || 0
   };
 }
 function startAt(item, duration) {
@@ -948,7 +949,7 @@ async function prepareNext(position) {
     if (details.subtitles.find(t => t.index === tracks.subtitle)?.text) { try { text = await api.subtitles({ id, index: tracks.subtitle }); } catch { tracks.subtitle = null; } }
     if (stale()) return;
     const bitmapSubtitle = details.video ? details.subtitles.find(t => t.index === tracks.subtitle && t.bitmap)?.index ?? null : null;
-    const result = await api.stream({ id, offset: startAt(item, details.duration), audio: tracks.audio, bitmapSubtitle, subtitleDelay: tracks.delay, preload: true, ...playbackOptions(details, tracks.audio) });
+    const result = await api.stream({ id, offset: startAt(item, details.duration), audio: tracks.audio, bitmapSubtitle, subtitleDelay: tracks.delay, audioDelay: tracks.audioDelay, preload: true, ...playbackOptions(details, tracks.audio) });
     if (stale()) return;
     const element = document.createElement('video'); element.playsInline = true; element.crossOrigin = 'anonymous'; element.preload = 'auto'; element.src = result.progressive ? result.url : bufferPlayback(element, result.url, details.duration - result.offset, !!details.video); element.load();
     prepared = { id, info: details, ...tracks, subtitleText: text, offset: result.offset, url: result.url, element };
@@ -1045,7 +1046,7 @@ function updateMetadata() {
 }
 async function loadStream(position, shouldPlay = true, token = generation, savedUrl) {
   playIntent = shouldPlay; loading = true; playbackError = ''; showMessage(); updateToggle(); pendingStream = { id: current.id, position };
-  const result = savedUrl ? { url: savedUrl, offset: 0 } : await api.stream({ id: current.id, offset: position, audio, bitmapSubtitle: bitmapTrack()?.index ?? null, subtitleDelay: delay, ...playbackOptions(info, audio, video.dataset.forceTranscode === 'true') }); if (token !== generation) return;
+  const result = savedUrl ? { url: savedUrl, offset: 0 } : await api.stream({ id: current.id, offset: position, audio, bitmapSubtitle: bitmapTrack()?.index ?? null, subtitleDelay: delay, audioDelay, ...playbackOptions(info, audio, video.dataset.forceTranscode === 'true') }); if (token !== generation) return;
   offset = result.offset; streamId = current.id;
   const player = video, start = Math.max(0, position - offset);
   // Preserve the target until this source has reached it. load() emits zero-time
@@ -1212,6 +1213,7 @@ function renderTracks() {
     ${qualityRow()}
     <div class="track-bottom"><div class="delay-controls"><span>Sub delay</span><button class="icon-button" data-action="delay-down" aria-label="Subtitles earlier by 0.1 seconds">−</button><output>${delay > 0 ? '+' : ''}${delay.toFixed(1)} s</output><button class="icon-button" data-action="delay-up" aria-label="Subtitles later by 0.1 seconds">+</button></div>
     <button class="text-button" data-action="subtitle-file">Load subtitle file…</button>${onlineSubtitles ? '<button class="text-button" data-action="find-subtitles">Find subtitles…</button>' : ''}</div>
+    <div class="track-bottom"><div class="audio-delay"><span>Audio delay</span><button class="icon-button" data-action="audio-delay-down" aria-label="Audio earlier by 0.1 seconds">−</button><output>${audioDelay > 0 ? '+' : ''}${audioDelay.toFixed(1)} s</output><button class="icon-button" data-action="audio-delay-up" aria-label="Audio later by 0.1 seconds">+</button></div>${audioDelay ? '<button class="text-button" data-action="audio-delay-reset">Reset</button>' : ''}</div>
     ${subStylePanel(bitmap)}
     ${bitmap ? '<p class="bitmap-note">Bitmap subtitles are part of the picture. Track or delay changes briefly reload playback.</p>' : ''}
     ${info.chapters.length ? `<div class="player-chapters">${info.chapters.map((c, index) => `<button class="chapter-button" data-chapter="${index}">${esc(c.title)} · ${fmt(c.start)}</button>`).join('')}</div>` : ''}</section>`;
@@ -1442,9 +1444,17 @@ async function pickSubtitle(value) {
   subtitle = Number(value); subtitleText = text; rememberTracks(['subtitle', 'off']); applySubtitle(); renderTracks();
   if (wasBitmap) await restartStream();
 }
+// Audio offset needs FFmpeg, so a change reloads the stream at the current position (direct play falls back to a transcode).
+async function changeAudioDelay(change, reset = false) {
+  const next = reset ? 0 : Math.max(-10, Math.min(10, Math.round((audioDelay + change) * 10) / 10));
+  if (next === audioDelay) return;
+  audioDelay = next; renderTracks(); rememberTracks(['audioDelay']); clearTimeout(audioDelayTimer);
+  audioDelayTimer = setTimeout(() => void attempt(restartStream), 350);
+}
 async function restartStream() { const token = ++generation; await loadStream(pendingStream?.id === current.id ? pendingStream.position : offset + video.currentTime, playIntent, token); }
 async function changeSubtitleDelay(change) { delay = Math.max(-60, Math.min(60, Math.round((delay + change) * 10) / 10)); adjustCues(); renderTracks(); rememberTracks(['delay']); if (bitmapTrack()) await restartStream(); }
 function resetPlayer() {
+  clearTimeout(audioDelayTimer);
   // load() resets currentTime and queues media events. Invalidate the stream
   // first so those events cannot overwrite the checkpoint we just saved.
   streamId = null; pendingStream = null; settlePending = null;
@@ -1520,6 +1530,9 @@ const actions = {
   speed: () => { const rates = [.5, .75, 1, 1.25, 1.5, 2]; video.playbackRate = rates[(rates.indexOf(video.playbackRate) + 1) % rates.length]; document.querySelector('[data-action="speed"]').textContent = `${video.playbackRate}×`; },
   autoplay: async () => { library.preferences.autoplay = !library.preferences.autoplay; await savePreferences({ autoplay: library.preferences.autoplay }); renderQueue(); },
   'clear-watched': async () => { const previous = library.queue; library.queue = previous.filter(id => id === current.id || !completed(id)); await saveQueue(previous); renderQueue(); },
+  'audio-delay-down': () => changeAudioDelay(-.1),
+  'audio-delay-up': () => changeAudioDelay(.1),
+  'audio-delay-reset': () => changeAudioDelay(0, true),
   'delay-down': () => changeSubtitleDelay(-.1),
   'delay-up': () => changeSubtitleDelay(.1),
   'find-subtitles': findOnlineSubtitles,

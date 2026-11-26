@@ -160,14 +160,14 @@ function register(app) {
     const session = playbackSession(ctx, ctx.query.get('session'));
     const item = find(ctx.params.id), info = await library.info(item);
     const number = name => ctx.query.get(name) === null ? null : Number(ctx.query.get(name));
-    const offset = number('t') ?? 0, audio = number('audio'), burn = number('burn'), delay = Math.max(-60, Math.min(60, number('delay') ?? 0)), preload = ctx.query.get('preload') === '1';
+    const offset = number('t') ?? 0, audio = number('audio'), burn = number('burn'), delay = Math.max(-60, Math.min(60, number('delay') ?? 0)), audioDelay = Math.max(-10, Math.min(10, number('adelay') || 0)), preload = ctx.query.get('preload') === '1';
     if (!Number.isFinite(offset) || offset < 0 || (info.duration && offset >= info.duration)) throw new HttpError(400, 'Bad start time.');
     if (audio !== null && !info.audio.some(t => t.index === audio)) throw new HttpError(400, 'Unknown audio track.');
     if (burn !== null && !info.subtitles.some(t => t.index === burn && t.bitmap)) throw new HttpError(400, 'Unknown image subtitle track.');
     const quality = ctx.query.get('quality');
     if (quality !== null && quality !== 'original' && !QUALITIES[quality]) throw new HttpError(400, 'Unknown quality.');
     const channels = ctx.query.get('channels') === '6' ? 6 : 2;
-    await transcode(ctx.req, ctx.res, { session, file: item.path, info, offset, audio, burn, delay: Number.isFinite(delay) ? delay : 0, preload, channels, quality: QUALITIES[quality] ? quality : null });
+    await transcode(ctx.req, ctx.res, { session, file: item.path, info, offset, audio, burn, delay: Number.isFinite(delay) ? delay : 0, audioDelay, preload, channels, quality: QUALITIES[quality] ? quality : null });
   });
 
   // A still frame, used for seek previews and thumbnails.
