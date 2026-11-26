@@ -1,6 +1,8 @@
 package expo.modules.matrokeepalive
 
+import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -29,6 +31,12 @@ class MatroKeepAliveModule : Module() {
       context.stopService(Intent(context, OfflineService::class.java))
       running = false
       null
+    }
+
+    // Battery saver: glass drops its backdrop blur and keeps the solid fill.
+    Function("powerSaveMode") {
+      val context = appContext.reactContext ?: return@Function false
+      (context.getSystemService(Context.POWER_SERVICE) as PowerManager).isPowerSaveMode
     }
   }
 }
