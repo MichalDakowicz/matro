@@ -72,7 +72,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
   const captionLeft = insets.left + 12, captionRight = insets.right + 12;
   const captionWidth = Math.max(0, width - captionLeft - captionRight), captionHeight = Math.max(0, height - captionTop - captionBottom);
   const captionLineHeight = Math.min(27 * p.subtitleSize, Math.max(16, captionHeight / 2));
-  const allSubs = [...(p.info?.embedded || []), ...(p.info?.uploaded || []).map(track => ({ index: 10000 + track.id, language: track.language, title: track.name, text: true, codec: 'vtt' }))];
+  const allSubs = [...(p.info?.embedded || []), ...(p.info?.uploaded || []).map(track => ({ index: 10000 + track.id, language: track.language, title: track.name, text: true, codec: 'vtt' })), ...(p.info?.files || []).map(track => ({ ...track, index: 20000 + track.id, text: true }))];
   const bitmap = allSubs.some(track => track.index === p.subtitle && 'bitmap' in track && track.bitmap);
   const transport = <View style={[s.transport, landscape && { gap: 4 }]}>
     <IconButton name="prev" label="Previous in queue" disabled={!hasPrevious} size={landscape ? 40 : 46} onPress={() => void select(queue[queueIndex - 1])} />

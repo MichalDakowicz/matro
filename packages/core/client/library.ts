@@ -24,8 +24,8 @@ export function matchTrack(tracks: Track[], choice?: TrackChoice | null) {
 export function savedServes(saved: Info & { text?: Record<string, string> }, full: Info, choice?: TrackPreference) {
   const audio = matchTrack(full.audio, choice?.audio)?.index ?? full.audio.find(t => t.default)?.index ?? full.audio[0]?.index ?? null;
   if (audio !== (saved.audio[0]?.index ?? null)) return false;
-  const subtitle = choice?.off ? null : matchTrack([...full.embedded, ...full.uploaded.map(t => ({ index: 10000 + t.id, language: t.language, title: t.name } as Track))], choice?.subtitle)?.index ?? null;
-  return subtitle === null || saved.embedded.some(t => t.index === subtitle) || saved.uploaded.some(t => 10000 + t.id === subtitle);
+  const subtitle = choice?.off ? null : matchTrack([...full.embedded, ...full.uploaded.map(t => ({ index: 10000 + t.id, language: t.language, title: t.name } as Track)), ...(full.files || []).map(t => ({ ...t, index: 20000 + t.id }))], choice?.subtitle)?.index ?? null;
+  return subtitle === null || saved.embedded.some(t => t.index === subtitle) || saved.uploaded.some(t => 10000 + t.id === subtitle) || !!saved.files?.some(t => 20000 + t.id === subtitle);
 }
 export function languageName(value: string) {
   if (!value || value === 'und') return 'Unknown language';

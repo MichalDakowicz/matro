@@ -7,6 +7,7 @@ import { toVtt } from './offline-store.js';
 import { mountMovieRequests } from './movie-requests.js';
 import { dismissedProgress, isContinueDismissed } from '../../../packages/core/client/watch-progress.js';
 
+const FILE = 20000; // subtitle files found next to the video on the server get indexes from here up
 const SIDECAR = 10000; // uploaded subtitle tracks get indexes from here up, as sidecar files do on the desktop
 const KIND = { full: '', forced: ' (forced)', sdh: ' (SDH)' };
 const sizeText = bytes => bytes > 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
@@ -128,7 +129,7 @@ export function createAdapter(session) {
   async function inspectRemote(id, { signal } = {}) {
     const info = await api('GET', `/api/items/${id}/info`, undefined, { signal });
     const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay,
-      subtitles: [...info.embedded.map(({ forced: _f, ...t }) => t), ...info.uploaded.map(u => track(u))] };
+      subtitles: [...info.embedded.map(({ forced: _f, ...t }) => t), ...info.uploaded.map(u => track(u)), ...(info.files || []).map(f => ({ index: FILE + f.id, language: f.language, title: f.title, codec: f.codec, text: true, bitmap: false, sidecar: true }))] };
     details.set(id, result);
     return result;
   }
@@ -193,7 +194,7 @@ export function createAdapter(session) {
     }
   }
   async function fetchSubtitles({ id, index, signal }) {
-    const res = await fetch(`/api/items/${id}/subtitles/${index >= SIDECAR ? `u${index - SIDECAR}` : `e${index}`}`, { credentials: 'same-origin', signal });
+    const res = await fetch(`/api/items/${id}/subtitles/${index >= FILE ? `f${index - FILE}` : index >= SIDECAR ? `u${index - SIDECAR}` : `e${index}`}`, { credentials: 'same-origin', signal });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not load subtitles.');
     return res.text();
   }

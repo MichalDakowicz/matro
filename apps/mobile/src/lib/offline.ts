@@ -246,7 +246,7 @@ function startDownload(base: string, scope: string, record: OfflineRecord) {
     }
     if (signal.aborted) return;
     Object.assign(record, {
-      uri: file.uri, size, have, version, info: { ...info, embedded: captions, uploaded: uploads, audio: info.audio.slice(0, 1) }, text,
+      uri: file.uri, size, have, version, info: { ...info, embedded: captions, uploaded: uploads, files: [], audio: info.audio.slice(0, 1) }, text,
       error: undefined, retryAt: undefined,
     });
     // Save the path before writing so a kill or disk error leaves a removable partial file.

@@ -69,12 +69,19 @@ const SIDECAR = 10000, subtitleExtensions = new Set(['srt', 'vtt', 'ass', 'ssa']
 async function sidecars(file) {
   const dir = path.dirname(file), stem = path.basename(file, path.extname(file)).toLowerCase();
   let names; try { names = await fs.readdir(dir); } catch { return []; }
-  return names.filter(name => subtitleExtensions.has(path.extname(name).slice(1).toLowerCase()) && (name.toLowerCase().startsWith(`${stem}.`)))
+  names = names.filter(name => subtitleExtensions.has(path.extname(name).slice(1).toLowerCase()) && (name.toLowerCase().startsWith(`${stem}.`)));
+  // Symlinks, folders and devices are skipped so a link can never make a subtitle read leave the library.
+  const regular = await Promise.all(names.map(name => fs.lstat(path.join(dir, name)).then(stat => stat.isFile(), () => false)));
+  return names.filter((_, i) => regular[i])
     .sort((a, b) => a.length - b.length || a.localeCompare(b, undefined, { numeric: true }))
     .map((name, n) => {
       const tags = path.basename(name, path.extname(name)).slice(stem.length).split('.').filter(Boolean);
-      const language = tags.find(tag => /^[a-z]{2,3}$/i.test(tag))?.toLowerCase() || 'und';
-      return { index: SIDECAR + n, path: path.join(dir, name), language, title: tags.filter(tag => tag.toLowerCase() !== language).join(' ') || 'Subtitle file', codec: path.extname(name).slice(1).toLowerCase(), text: true, bitmap: false, sidecar: true };
+      // "hi" is Hindi, but Film.en.hi.srt marks hearing impaired: it is a flag only when another language tag is present.
+      const isLanguage = tag => /^[a-z]{2,3}$/i.test(tag) && !/^(forced|sdh|cc)$/i.test(tag);
+      const hearing = tag => /^(sdh|cc)$/i.test(tag) || (/^hi$/i.test(tag) && tags.some(other => !/^hi$/i.test(other) && isLanguage(other)));
+      const language = tags.find(tag => isLanguage(tag) && !hearing(tag))?.toLowerCase() || 'und';
+      return { index: SIDECAR + n, path: path.join(dir, name), language, title: tags.filter(tag => tag.toLowerCase() !== language).join(' ') || 'Subtitle file', codec: path.extname(name).slice(1).toLowerCase(), text: true, bitmap: false, sidecar: true,
+        forced: tags.some(tag => /^forced$/i.test(tag)), sdh: tags.some(hearing) };
     });
 }
 // Keep a loaded subtitle file with the video so it is offered next time. Existing files are never overwritten.

@@ -90,7 +90,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     const run = ++subtitleRun.current; cues.current = []; setCaption('');
     if (index === null || infoRef.current?.embedded.find(t => t.index === index)?.bitmap) return;
     if (savedCopy) { cues.current = parseVtt(savedCopy.text[index] || ''); return; }
-    const headers = await mediaHeaders(base), route = index >= 10000 ? `u${index - 10000}` : `e${index}`;
+    const headers = await mediaHeaders(base), route = index >= 20000 ? `f${index - 20000}` : index >= 10000 ? `u${index - 10000}` : `e${index}`;
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15000);
     try {
       const response = await fetch(`${base}/api/items/${encodeURIComponent(item.id)}/subtitles/${route}`, { headers, signal: controller.signal });
@@ -158,7 +158,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       try {
         const details = savedCopy?.info || await inspect(base, item.id); if (!mounted.current || run !== generation.current) return;
         infoRef.current = details; setInfo(details);
-        const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true }))];
+        const tracks = [...details.embedded, ...details.uploaded.map(t => ({ index: 10000 + t.id, title: t.name, language: t.language, text: true })), ...(details.files || []).map(t => ({ index: 20000 + t.id, title: t.title, language: t.language, text: true }))];
         const choice = dataRef.current.preferences.tracks?.[trackKey(item)];
         const a = matchTrack(details.audio, choice?.audio)?.index ?? details.audio.find(t => t.default)?.index ?? details.audio[0]?.index ?? null;
         const sub = choice?.off ? null : matchTrack(tracks, choice?.subtitle)?.index ?? null;
@@ -262,7 +262,8 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     const previousBurn = infoRef.current?.embedded.find(t => t.index === choices.current.subtitle && t.bitmap)?.index ?? null;
     choices.current.subtitle = index; setSubtitle(index);
     const sidecar = infoRef.current?.uploaded.find(t => 10000 + t.id === index);
-    remember({ subtitle: sidecar ? { title: sidecar.name, language: sidecar.language } : choice(infoRef.current?.embedded.find(t => t.index === index)), off: index === null });
+    const file = infoRef.current?.files?.find(t => 20000 + t.id === index);
+    remember({ subtitle: file ? { title: file.title, language: file.language, codec: file.codec } : sidecar ? { title: sidecar.name, language: sidecar.language } : choice(infoRef.current?.embedded.find(t => t.index === index)), off: index === null });
     const nextBurn = infoRef.current?.embedded.find(t => t.index === index && t.bitmap)?.index ?? null;
     void loadText(index).catch(e => setError(e.message));
     if (previousBurn !== nextBurn) void load(at.current);

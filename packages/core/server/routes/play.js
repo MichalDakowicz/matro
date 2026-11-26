@@ -4,6 +4,7 @@ const { normalize } = require('../lang');
 const { toVtt, createEmbedded, MAX_UPLOAD } = require('../subtitles');
 const { createFrames } = require('../previews');
 const { createStreams } = require('../stream');
+const { sidecars } = require('../../desktop/media.cjs');
 const { createAssetCache } = require('../asset-cache');
 const { playbackSession, createPlaybackActivity } = require('../playback-session');
 const path = require('node:path');
@@ -12,6 +13,24 @@ const { createHash } = require('node:crypto');
 
 const KINDS = ['full', 'forced', 'sdh'];
 const MAX_SUBS_PER_ITEM = 60;
+// Subtitle files next to the video (including ones a download left there), converted once per file version. Their ids come from a
+// hash of the file name, so a link survives files being added or removed (24 bits; on a collision the later file is left out).
+const fileCache = new Map();
+async function sidecarFiles(item) {
+  const seen = new Set();
+  return (await sidecars(item.path)).map(file => ({ ...file, id: parseInt(createHash('sha1').update(path.basename(file.path).toLowerCase()).digest('hex').slice(0, 6), 16) }))
+    .filter(file => !seen.has(file.id) && seen.add(file.id)).slice(0, MAX_SUBS_PER_ITEM);
+}
+async function sidecarVtt(file, language) {
+  const stat = await fs.stat(file.path), key = `${file.path}:${stat.mtimeMs}:${stat.size}`;
+  if (!fileCache.has(key)) {
+    if (stat.size > MAX_UPLOAD) throw new HttpError(413, 'That subtitle file is too large.');
+    const vtt = await toVtt(await fs.readFile(file.path), { filename: file.path, language });
+    if (fileCache.size >= 40) fileCache.delete(fileCache.keys().next().value);
+    fileCache.set(key, vtt);
+  }
+  return fileCache.get(key);
+}
 
 function register(app) {
   const { router, db, library, dataDir } = app;
@@ -43,13 +62,17 @@ function register(app) {
 
   router.add('GET', '/api/items/:id/info', async ctx => {
     const item = find(ctx.params.id);
-    const info = await library.info(item);
+    let info;
+    try { info = await library.info(item); } catch { throw new HttpError(422, 'This file could not be read. It may be damaged or unsupported.'); }
+    const files = await sidecarFiles(item).catch(() => []);
+    if (info.broken) throw new HttpError(422, 'This file could not be read. It may be damaged or unsupported.');
     return {
       id: item.id, groupId: item.group_id, title: item.title, groupTitle: item.group_title, kind: item.kind, season: item.season, episode: item.episode,
       duration: info.duration, video: info.video, directPlay: canDirectPlay(item.path, info), chapters: info.chapters,
       audio: info.audio.map(t => ({ ...t, language: normalize(t.language) })),
       embedded: info.subtitles.map(t => ({ ...t, language: normalize(t.language) })),
-      uploaded: q.uploaded.all(item.id).map(row => subtitleOut(row, ctx.user))
+      uploaded: q.uploaded.all(item.id).map(row => subtitleOut(row, ctx.user)),
+      files: files.map(f => ({ id: f.id, language: normalize(f.language), title: f.title, codec: f.codec, forced: f.forced, sdh: f.sdh }))
     };
   });
 
@@ -126,7 +149,7 @@ function register(app) {
     await sendBytes(ctx.req, ctx.res, jpeg, 'image/jpeg', { 'Cache-Control': 'private, max-age=86400' });
   });
 
-  // Subtitle text for the player: e<stream index> is embedded in the file, u<id> was uploaded by a viewer.
+  // Subtitle text for the player: e<stream index> is embedded in the file, u<id> was uploaded by a viewer, f<id> is a file next to the video, named by a hash of its file name.
   router.add('GET', '/api/items/:id/subtitles/:key', async ctx => {
     const item = find(ctx.params.id), key = ctx.params.key;
     let vtt;
@@ -134,6 +157,11 @@ function register(app) {
       const row = q.sub.get(Number(key.slice(1)));
       if (!row || row.item_id !== item.id) throw new HttpError(404, 'Subtitles not found.');
       vtt = row.vtt;
+    } else if (/^f\d+$/.test(key)) {
+      const file = (await sidecarFiles(item).catch(() => [])).find(f => f.id === Number(key.slice(1)));
+      if (!file) throw new HttpError(404, 'Subtitles not found.');
+      try { vtt = await sidecarVtt(file, normalize(file.language)); }
+      catch (error) { throw error instanceof HttpError ? error : new HttpError(422, 'That subtitle file could not be read.'); }
     } else if (/^e\d+$/.test(key)) {
       const index = Number(key.slice(1)), info = await library.info(item);
       if (!info.subtitles.some(t => t.index === index && t.text)) throw new HttpError(404, 'That track is not a text subtitle.');

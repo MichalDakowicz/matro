@@ -26,6 +26,18 @@ test('loaded subtitle files are copied next to the video without overwriting and
     const tracks = await sidecars(video);
     assert.deepEqual(tracks.map(t => [t.index, t.language, t.title, t.codec, t.text]), [[SIDECAR, 'en', 'Subtitle file', 'srt', true], [SIDECAR + 1, 'en', '2', 'srt', true]]);
     assert.deepEqual((await sidecars(other)).map(t => path.basename(t.path)), ['Northbound.S01E02.srt']);
+    await fs.writeFile(path.join(temp, 'show', 'Northbound.S01E01.pl.forced.srt'), ''); await fs.writeFile(path.join(temp, 'show', 'Northbound.S01E01.sdh.srt'), '');
+    const flagged = Object.fromEntries((await sidecars(video)).map(t => [path.basename(t.path), [t.language, t.forced, t.sdh]]));
+    assert.deepEqual(flagged['Northbound.S01E01.pl.forced.srt'], ['pl', true, false]);
+    assert.deepEqual(flagged['Northbound.S01E01.sdh.srt'], ['und', false, true]);
+    // "hi" is Hindi on its own and hearing impaired only beside a language tag.
+    await fs.writeFile(path.join(temp, 'show', 'Northbound.S01E01.hi.srt'), ''); await fs.writeFile(path.join(temp, 'show', 'Northbound.S01E01.en.hi.srt'), '');
+    const hindi = Object.fromEntries((await sidecars(video)).map(t => [path.basename(t.path), [t.language, t.forced, t.sdh]]));
+    assert.deepEqual(hindi['Northbound.S01E01.hi.srt'], ['hi', false, false]);
+    assert.deepEqual(hindi['Northbound.S01E01.en.hi.srt'], ['en', false, true]);
+    // A folder named like a subtitle file is not one (the same lstat check skips symlinks).
+    await fs.mkdir(path.join(temp, 'show', 'Northbound.S01E01.de.srt'));
+    assert.equal((await sidecars(video)).some(t => path.basename(t.path) === 'Northbound.S01E01.de.srt'), false);
   } finally { await fs.rm(temp, { recursive: true, force: true }); }
 });
 
