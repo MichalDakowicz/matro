@@ -10,12 +10,15 @@ const { createAuth } = require('./auth');
 const { createLibrary } = require('./library');
 const { createUsers, validateCredentials } = require('./users');
 const { createInvites } = require('./invites');
+const { backup: backupData, restore: restoreData, stamp } = require('./backup');
 
 const USAGE = `Matro server
 
-  node src/cli.js setup [--username NAME] [--library PATH]...   create the head account and register media folders
-  node src/cli.js invite [--days N]                             print a one-time sign-up code for a new viewer (valid 7 days by default)
-  node src/cli.js passwd USERNAME                               set a new password for any account (signs it out everywhere)
+  setup [--username NAME] [--library PATH]...   create the head account and register media folders
+  invite [--days N]                            print a one-time sign-up code for a new viewer (valid 7 days by default)
+  passwd USERNAME                              set a new password for any account (signs it out everywhere)
+  backup [FOLDER]                              copy accounts, history, markers, subtitles and settings to a new folder
+  restore FOLDER                               replace server state with a backup and keep the previous state (stop Matro first)
 
 The password is asked for twice, hidden. For scripts, set MATRO_PASSWORD or pass --password-stdin.
 Data lives in MATRO_DATA (now: ${config.dataDir}).`;
@@ -101,12 +104,30 @@ async function passwd(args) {
   console.log(`Password for "${user.username}" changed. They were signed out everywhere.`);
 }
 
+async function backup(args) {
+  if (args._.length > 2) throw new Error('Usage: backup [FOLDER].');
+  const dest = path.resolve(args._[1] || path.join(config.dataDir, 'backups', `matro-${stamp()}`));
+  const files = backupData(config.dataDir, dest);
+  console.log(`Backup written to ${dest}
+  ${files.join(', ')}
+It holds password hashes and keys: keep it private. Media files are not included.`);
+}
+async function restore(args) {
+  if (args._.length !== 2) throw new Error('Name the backup folder: restore FOLDER.');
+  const { kept, files } = restoreData(config.dataDir, path.resolve(args._[1]));
+  console.log(`Restored ${files.join(', ')}.${kept ? `
+The state it replaced is kept in ${kept}.` : ''}
+Start the server again. Media folders must be mounted at the same paths as before.`);
+}
+
 async function main() {
   const args = parse(process.argv.slice(2)), command = args._[0];
   if (args.help || !command) { console.log(USAGE); return; }
   if (command === 'setup') await setup(args);
   else if (command === 'invite') await invite(args);
   else if (command === 'passwd') await passwd(args);
+  else if (command === 'backup') await backup(args);
+  else if (command === 'restore') await restore(args);
   else throw new Error(`Unknown command "${command}".\n\n${USAGE}`);
 }
 main().then(() => process.exit(0), error => { console.error(`Error: ${error.message}`); process.exit(1); });
