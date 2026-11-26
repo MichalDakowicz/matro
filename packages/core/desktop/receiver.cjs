@@ -45,6 +45,14 @@ function launchReceiver(address, { show = true, onUnavailable, onChooseSource } 
     win.webContents.on('will-navigate', (event, url) => { if (new URL(url).origin !== base.origin) event.preventDefault(); });
     win.webContents.on('will-redirect', (event, url) => { if (new URL(url).origin !== base.origin) event.preventDefault(); });
     win.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    // Open with plays local files, which a server-connected window cannot do: focus this window and say so instead of dropping the file.
+    const localOnly = files => { if (files.length && !win.isDestroyed()) void dialog.showMessageBox(win, { type: 'info', message: 'Open with Matro plays files in local mode only.', detail: 'This window is connected to a Matro server. Switch to this PC to play files from your computer.' }); };
+    app.on('second-instance', (_event, argv, cwd) => {
+      if (win.isDestroyed()) return;
+      if (win.isMinimized()) win.restore();
+      win.show(); win.focus(); localOnly(require('./open-with.cjs').mediaArgs(argv, { cwd }));
+    });
+    if (show) win.once('ready-to-show', () => localOnly(require('./open-with.cjs').mediaArgs(process.argv)));
     try { await win.loadURL(base.href); }
     catch {
       if (onUnavailable) { await win.loadFile(errorPage); onUnavailable(); }

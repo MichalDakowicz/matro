@@ -2,11 +2,12 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { createLocalMetadata } = require('../local-metadata.cjs');
 const { createDownloadPreview } = require('./download-preview.cjs');
 
 const API = 'https://api.themoviedb.org/3', IMAGES = 'https://image.tmdb.org/t/p/';
 const RECHECK_MISSING = 7 * 24 * 3600 * 1000;
-const artworkName = /^(?:(?:movie|tv)-\d+-(?:poster|backdrop|thumb)|movie-\d+-[a-z]{2}(?:-[A-Z]{2})?-(?:poster|backdrop)|tv-\d+-s\d+e\d+|person-\d+)\.jpg$/;
+const artworkName = /^(?:(?:movie|tv)-\d+-(?:poster|backdrop|thumb)|movie-\d+-[a-z]{2}(?:-[A-Z]{2})?-(?:poster|backdrop)|tv-\d+-s\d+e\d+|person-\d+|local-[a-f0-9]{64})\.jpg$/;
 
 // Minimal KEY=VALUE reader for the git-ignored .env (packed into local builds, see package.json "files").
 function readEnv(files) {
@@ -68,7 +69,37 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
   const file = path.join(dir, 'metadata.json'), artwork = path.join(dir, 'artwork');
   let entries = {}, queue = [], running = 0, saveTimer, updateTimer;
   let writes = Promise.resolve();
-  const pending = new Set(), failed = new Set(), edits = new Map();
+  const readLocal = createLocalMetadata(artwork, keyFor);
+  let local = {}, localTask = Promise.resolve();
+  // With `all` (every item in the library), only `items` are read again and the other titles keep what they had.
+  function syncLocal(items, all) {
+    const task = localTask.then(async () => {
+      await loaded;
+      let next = await readLocal(items, !!all);
+      if (all) {
+        const scope = new Set(items.map(keyFor)), live = new Set(all.map(keyFor));
+        next = { ...Object.fromEntries(Object.entries(local).filter(([key]) => live.has(key) && !scope.has(key))), ...next };
+      }
+      if (JSON.stringify(next) === JSON.stringify(local)) return false;
+      for (const key of new Set([...Object.keys(local), ...Object.keys(next)])) {
+        if (local[key]?.tmdbId !== next[key]?.tmdbId) failed.delete(key);
+      }
+      local = next;
+      await dropStaleLocalArt();
+      changed();
+      return true;
+    });
+    localTask = task.catch(() => {});
+    return task;
+  }
+  // A changed poster leaves its old local-<hash>.jpg copy behind; keep only the ones the current titles use.
+  async function dropStaleLocalArt() {
+    const used = new Set(Object.values(local).flatMap(fields => [fields.poster, fields.backdrop]).filter(Boolean).map(name => path.basename(name)));
+    for (const name of await fsp.readdir(artwork).catch(() => [])) {
+      if (/^local-[a-f0-9]{64}\.jpg$/.test(name) && !used.has(name)) await fsp.rm(path.join(artwork, name), { force: true }).catch(() => {});
+    }
+  }
+  const pending = new Map(), failed = new Set(), edits = new Map();
   const loaded = (async () => {
     try { entries = JSON.parse(await fsp.readFile(file, 'utf8')).entries || {}; } catch { entries = {}; }
     await fsp.mkdir(artwork, { recursive: true });
@@ -89,7 +120,14 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     return task.finally(() => { if (edits.get(key) === task) edits.delete(key); });
   }
   function changed() { clearTimeout(updateTimer); updateTimer = setTimeout(() => onUpdate?.(snapshot()), 300); }
-  function snapshot() { return Object.fromEntries(Object.entries(entries).filter(([, e]) => e.status === 'matched' && e.matcher === MATCHER).map(([key, { status, query, checked, matcher, ...rest }]) => [key, rest])); }
+  function snapshot() {
+    const matched = auth ? Object.fromEntries(Object.entries(entries).filter(([key, entry]) =>
+      entry.status === 'matched' && entry.matcher === MATCHER &&
+      (local[key]?.tmdbId ? local[key].tmdbId === entry.tmdbId : !entry.nfoId)
+    ).map(([key, { status, query, checked, matcher, nfoId, ...rest }]) => [key, rest])) : {};
+    for (const [key, fields] of Object.entries(local)) matched[key] = { ...matched[key], ...fields };
+    return matched;
+  }
   async function api(route, params = {}, options) {
     const url = new URL(apiBase.replace(/\/+$/, '') + route);
     for (const [name, value] of Object.entries(params)) if (value !== null && value !== undefined && value !== '') url.searchParams.set(name, value);
@@ -173,25 +211,38 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     return found ? tvDetails(found.id, seasons) : null;
   }
   function record(job, result, manual) {
-    entries[job.key] = { status: result ? 'matched' : 'missing', query: job.query, checked: Date.now(), matcher: MATCHER, details: DETAILS, ...(manual ? { manual: true } : {}), ...(job.language ? { language: job.language } : {}), ...(result || {}) };
+    entries[job.key] = { status: result ? 'matched' : 'missing', query: job.query, checked: Date.now(), matcher: MATCHER, details: DETAILS, nfoId: job.nfoId, ...(manual ? { manual: true } : {}), ...(job.language ? { language: job.language } : {}), ...(result || {}) };
     save();
+  }
+  function enqueue(job) {
+    pending.set(job.key, job); queue.push(job);
   }
   async function work() {
     while (queue.length && running < 4) {
-      const job = queue.shift(); running++;
+      const job = queue.shift();
+      const isCurrent = () => pending.get(job.key) === job && local[job.key]?.tmdbId === job.nfoId;
+      if (!isCurrent()) continue;
+      running++;
       void lookup(job).then(result => {
-        if (entries[job.key] !== job.previous || (job.tmdbId && !result)) return;
+        if (!isCurrent() || entries[job.key] !== job.previous || (job.tmdbId && !result)) return;
         record(job, result, job.manual);
         if (result) changed();
       })
-        .catch(() => failed.add(job.key)).finally(() => { running--; pending.delete(job.key); void work(); });
+        .catch(() => { if (isCurrent()) failed.add(job.key); }).finally(() => {
+          running--;
+          if (pending.get(job.key) === job) pending.delete(job.key);
+          void work();
+        });
     }
   }
   function titlesOf(items) {
     const titles = new Map();
     for (const item of items) if (item.kind === 'movie' || item.kind === 'show') {
       const key = keyFor(item);
-      if (!titles.has(key)) titles.set(key, { key, kind: item.kind, query: cleanQuery(item.group), year: yearOf(item.group) || (item.kind === 'movie' ? yearOf(path.basename(item.path)) : null), seasons: new Set() });
+      if (!titles.has(key)) {
+        const year = item.year ? String(item.year) : yearOf(item.group) || (item.kind === 'movie' ? yearOf(path.basename(item.path)) : null);
+        titles.set(key, { key, kind: item.kind, query: item.year ? item.group : cleanQuery(item.group), year, seasons: new Set() });
+      }
       if (item.season !== null && item.season !== undefined) titles.get(key).seasons.add(item.season);
     }
     for (const job of titles.values()) job.seasons = [...job.seasons].sort((a, b) => a - b);
@@ -201,14 +252,26 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     if (!auth) return;
     await loaded;
     for (const job of titlesOf(items)) {
-      const entry = entries[job.key];
+      const entry = entries[job.key], fields = local[job.key];
+      const nfoId = fields?.tmdbId;
+      if (pending.get(job.key)?.nfoId !== nfoId) pending.delete(job.key);
+      if (nfoId || entry?.nfoId) {
+        const pinChanged = nfoId !== entry?.nfoId;
+        const missingEpisodes = entry?.type === 'tv' && job.seasons.some(season => !entry.episodes?.[season]);
+        if ((pinChanged || missingEpisodes || entry.details !== DETAILS) && !pending.has(job.key) && !failed.has(job.key)) {
+          enqueue({ ...job, query: fields?.title || job.query, year: fields?.year || job.year, nfoId, tmdbId: nfoId, language: entry?.language, previous: entry });
+        }
+        continue;
+      }
+      if (fields?.title) job.query = fields.title;
+      if (fields?.year) job.year = fields.year;
       const missingSeason = entry?.status === 'matched' && entry.type === 'tv' && job.seasons.some(s => !entry.episodes?.[s]);
       // Matched titles with a new season or older stored details are refreshed by id, keeping the match (and whether it was manual).
       const stale = entry?.status === 'matched' && entry.matcher === MATCHER && (missingSeason || entry.details !== DETAILS);
-      if (stale || entry?.manual) { if ((stale || missingSeason) && entry.status === 'matched' && !pending.has(job.key) && !failed.has(job.key)) { pending.add(job.key); queue.push({ ...job, query: entry.query, tmdbId: entry.tmdbId, manual: !!entry.manual, language: entry.language, previous: entry }); } continue; }
+      if (stale || entry?.manual) { if ((stale || missingSeason) && entry.status === 'matched' && !pending.has(job.key) && !failed.has(job.key)) enqueue({ ...job, query: entry.query, tmdbId: entry.tmdbId, manual: !!entry.manual, language: entry.language, previous: entry }); continue; }
       const fresh = entry && entry.matcher === MATCHER && entry.query === job.query && (entry.status === 'matched' || Date.now() - entry.checked < RECHECK_MISSING);
       if (!job.query || pending.has(job.key) || failed.has(job.key) || (fresh && !missingSeason)) continue;
-      pending.add(job.key); queue.push({ ...job, language: entry?.language, previous: entry });
+      enqueue({ ...job, language: entry?.language, previous: entry });
     }
     void work();
   }
@@ -260,6 +323,6 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     api: (route, params) => api(route, params, previewOptions()),
     image: (pathname, size, name) => image(pathname, size, name, previewOptions()),
   });
-  return { enabled: !!auth, sync, search, assign, setLanguage, preview, snapshot: () => snapshot(), loaded, artworkFile: name => artworkName.test(name) ? path.join(artwork, name) : null };
+  return { enabled: !!auth, sync, syncLocal, search, assign, setLanguage, preview, snapshot: () => snapshot(), loaded, artworkFile: name => artworkName.test(name) ? path.join(artwork, name) : null };
 }
 module.exports = { readEnv, credentials, createMetadata, cleanQuery, yearOf, keyFor };
