@@ -44,6 +44,26 @@ async function previewFixture(t, handle, auth = { token: 'host-token' }) {
   return { metadata, dir, calls };
 }
 
+test('movie editions inherit a manual file match and take updates under the group key', async t => {
+  const { metadata, calls } = await previewFixture(t, url => {
+    const id = Number(url.pathname.split('/').pop());
+    return json({ id, title: id === 1 ? 'Earlier match' : 'Corrected match' });
+  });
+  const theatrical = { id: 'theatrical', kind: 'movie', group: 'Film', path: 'Film.mkv' };
+  const extended = { ...theatrical, id: 'extended', path: 'Film Extended.mkv' };
+  await metadata.assign([extended], 1);
+  const cuts = [theatrical, extended].map(item => ({ ...item, editionGroup: 'cuts' }));
+
+  await metadata.sync(cuts);
+  assert.equal(metadata.snapshot().cuts.tmdbId, 1);
+  assert.equal(calls.length, 1);
+  assert.equal((await metadata.assign(cuts, 2)).cuts.title, 'Corrected match');
+  assert.equal((await metadata.assign(cuts, null)).cuts, undefined);
+  await metadata.sync(cuts);
+  assert.equal(metadata.snapshot().cuts, undefined);
+  assert.equal(calls.length, 2);
+});
+
 test('Downloads previews are opt-in and leave the library metadata untouched', async t => {
   const disabled = await previewFixture(t, () => assert.fail('a disabled preview called TMDB'), null);
   const titles = [{ key: 'heat', kind: 'movie', title: 'A release title', imdbId: 'tt0113277' }];
@@ -280,4 +300,60 @@ test('a movie keeps its own metadata language across rematches and restarts', as
   assert.equal(restarted.snapshot().first.poster, 'artwork/movie-43-pl-poster.jpg');
   assert.equal((await restarted.setLanguage([first], null)).first.title, 'Day of the Wacko');
   assert.equal(restarted.snapshot().first.language, undefined);
+});
+
+test('local NFO fields and same-name art take precedence and update without a match', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-local-art-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const { createMetadata } = require('../packages/core/desktop/metadata.cjs');
+  const metadata = createMetadata({ dir: path.join(dir, 'cache'), auth: null, fetch: () => assert.fail('TMDB was disabled') });
+  const file = path.join(dir, 'Home Video.mkv');
+  const items = [{ id: 'home', kind: 'movie', path: file, group: 'Home Video' }, { id: 'other', kind: 'movie', path: path.join(dir, 'Other.mkv'), group: 'Other' }];
+  await fs.writeFile(path.join(dir, 'Home Video.nfo'), '<movie><title><![CDATA[Matro & friends]]></title><year>1999</year><uniqueid type="tmdb">123</uniqueid></movie>');
+  await fs.writeFile(path.join(dir, 'Home Video-poster.jpg'), Buffer.from([255, 216, 255, 224, 255, 217]));
+  await fs.writeFile(path.join(dir, 'poster.jpg'), Buffer.from([255, 216, 255, 225, 255, 217]));
+  assert.equal(await metadata.syncLocal(items), true);
+  const first = metadata.snapshot();
+  assert.equal(first.home.title, 'Matro & friends');
+  assert.equal(first.home.year, '1999');
+  assert.equal(first.home.tmdbId, 123);
+  assert.ok(first.home.poster);
+  assert.equal(first.other, undefined);
+  assert.equal(await metadata.syncLocal(items), false);
+  await fs.rm(path.join(dir, 'Home Video.nfo'));
+  assert.equal(await metadata.syncLocal(items), true);
+  assert.equal(metadata.snapshot().home.title, undefined);
+  assert.equal(metadata.snapshot().home.poster, first.home.poster);
+});
+
+test('NFO parsing keeps valid fields, ignores entity declarations and rejects bad ids', () => {
+  const { readNfo } = require('../packages/core/local-metadata.cjs');
+  assert.deepEqual(readNfo('<movie><title>A &amp; B</title><year>2001</year><plot>Plot</plot><tmdbid>77</tmdbid></movie>'), { title: 'A & B', overview: 'Plot', year: '2001', tmdbId: 77 });
+  assert.deepEqual(readNfo('<!DOCTYPE x [<!ENTITY a "b">]><movie><title>&a;</title></movie>'), {});
+  assert.deepEqual(readNfo('<tvshow><year>20x1</year><tmdbid>0</tmdbid><title>Show</title></tvshow>'), { title: 'Show' });
+});
+
+test('removing an NFO releases its cached TMDB match immediately', async t => {
+  const { metadata, dir } = await previewFixture(t, url => {
+    if (url.pathname === '/3/movie/77') return json({ id: 77, title: 'Pinned title' });
+    if (url.pathname === '/3/search/movie') return json({ results: [{ id: 88, title: 'Home Film' }] });
+    if (url.pathname === '/3/movie/88') return json({ id: 88, title: 'Home Film' });
+    return missing();
+  });
+  const nfo = path.join(dir, 'Home Film.nfo');
+  const items = [{ id: 'home', kind: 'movie', path: path.join(dir, 'Home Film.mkv'), group: 'Home Film' }];
+  const waitForMatch = async id => {
+    for (let i = 0; i < 50 && metadata.snapshot().home?.tmdbId !== id; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(metadata.snapshot().home?.tmdbId, id);
+  };
+  await fs.writeFile(nfo, '<movie><tmdbid>77</tmdbid></movie>');
+  await metadata.syncLocal(items);
+  await metadata.sync(items);
+  for (let i = 0; i < 50 && metadata.snapshot().home?.title !== 'Pinned title'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(metadata.snapshot().home?.title, 'Pinned title');
+  await fs.rm(nfo);
+  await metadata.syncLocal(items);
+  assert.equal(metadata.snapshot().home, undefined);
+  await metadata.sync(items);
+  await waitForMatch(88);
 });
