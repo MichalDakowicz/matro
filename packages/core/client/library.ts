@@ -1,8 +1,9 @@
-import type { Item, Library, Metadata, Track, TrackChoice } from './server';
-import { compareEpisodes, continueWatching, groupTitles, isCompleted, resumeTarget } from './watch-progress.js';
+import type { Info, Item, Library, Metadata, Preferences, Track, TrackPreference } from './server';
+import { initialTracks, offlineStart as startTracks, offlineTrackPatch as trackPatch, savedServes as servesTracks } from './track-preferences.js';
+import { compareEditions, compareEpisodes, continueWatching, groupTitles, isCompleted, resumeTarget } from './watch-progress.js';
 export const trackKey = (item: Item) => item.groupId || item.group;
-export const titleKey = (item: Item) => item.kind === 'show' ? item.groupId || item.group : item.id;
-export const metadataFor = (data: Library, item: Item): Metadata => data.metadata[titleKey(item)] || data.metadata[item.id] || {};
+export const titleKey = (item: Item) => item.kind === 'show' ? item.groupId || item.group : item.editionGroup || item.id;
+export const metadataFor = (data: Library, item: Item): Metadata => data.metadata[titleKey(item)] || (!item.editionGroup && data.metadata[item.id]) || {};
 export const nameFor = (data: Library, item: Item) => metadataFor(data, item).title || item.group;
 export const episodeName = (data: Library, item: Item) => metadataFor(data, item).episodes?.[String(item.season)]?.[String(item.episode)]?.name || item.title;
 export const formatTime = (value: number) => {
@@ -10,16 +11,28 @@ export const formatTime = (value: number) => {
   return `${n >= 3600 ? Math.floor(n / 3600) + ':' : ''}${String(Math.floor(n / 60) % 60).padStart(n >= 3600 ? 2 : 1, '0')}:${String(n % 60).padStart(2, '0')}`;
 };
 export function groupLibrary(items: Item[]) {
-  return groupTitles(items).map(group => group.sort(compareEpisodes));
+  return groupTitles(items).map(group => group[0].editionGroup
+    ? group.sort(compareEditions)
+    : group.sort(compareEpisodes));
 }
 export const resumeItem = (data: Library, items: Item[]) => resumeTarget(items, data.progress);
-export const statusOf = (data: Library, items: Item[]) => items.every(i => isCompleted(data.progress[i.id])) ? 'done' : items.some(i => data.progress[i.id]?.position > 0 || isCompleted(data.progress[i.id])) ? 'progress' : 'new';
+export const statusOf = (data: Library, items: Item[]) => (items[0].editionGroup ? items.some(i => isCompleted(data.progress[i.id])) : items.every(i => isCompleted(data.progress[i.id]))) ? 'done' : items.some(i => data.progress[i.id]?.position > 0 || isCompleted(data.progress[i.id])) ? 'progress' : 'new';
 export const continueItems = (data: Library, groups: Item[][]) => continueWatching(groups, data.progress);
-export function matchTrack(tracks: Track[], choice?: TrackChoice | null) {
-  if (!choice) return null;
-  const score = (track: Track) => Number(track.title === choice.title) * 4 + Number(track.channels === choice.channels) * 2 + Number(track.codec === choice.codec);
-  return tracks.filter(t => t.language === choice.language).sort((a, b) => score(b) - score(a))[0] || null;
+export function subtitleTracks(info: Info): Track[] {
+  return [
+    ...info.embedded,
+    ...info.uploaded.map(track => ({ index: 10000 + track.id, language: track.language, title: track.name, codec: 'vtt', text: true, forced: track.kind === 'forced', sdh: track.kind === 'sdh' })),
+    ...(info.files || []).map(track => ({ ...track, index: 20000 + track.id, text: true })),
+  ];
 }
+
+export function savedServes(saved: Info, full: Info, choice?: TrackPreference, preferences?: Preferences): boolean {
+  return servesTracks({ audio: saved.audio, subtitles: subtitleTracks(saved) }, { audio: full.audio, subtitles: subtitleTracks(full) }, choice, preferences);
+}
+const tracksOf = (info: Info) => ({ audio: info.audio, subtitles: subtitleTracks(info) });
+export const offlineStart = (info: Info, choice?: TrackPreference, preferences?: Preferences): { audio: number | null; burn: number | null } => startTracks(tracksOf(info), choice, preferences);
+export const offlineTrackPatch = (info: Info, start: { audio: number | null; burn: number | null }, picked: { audio?: number | null; burn?: number | null }): TrackPreference | null => trackPatch(tracksOf(info), start, picked);
+export { initialTracks, matchTrack } from './track-preferences.js';
 export function languageName(value: string) {
   if (!value || value === 'und') return 'Unknown language';
   const aliases: Record<string, string> = { eng: 'en', pol: 'pl', jpn: 'ja', spa: 'es', fre: 'fr', fra: 'fr', ger: 'de', deu: 'de', ita: 'it', rus: 'ru', por: 'pt', chi: 'zh', zho: 'zh', kor: 'ko' };
