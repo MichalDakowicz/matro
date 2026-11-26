@@ -41,7 +41,7 @@ function cleanQuery(text) {
 const keyFor = item => item.kind === 'show' ? item.groupId || item.group : item.id;
 const MATCHER = 2;
 // Bumped when stored details gain fields; matched titles are then refreshed by their TMDB id, never searched again.
-const DETAILS = 3;
+const DETAILS = 4;
 const CAST_SHOWN = 24;
 const names = (credits, jobs) => [...new Set((credits?.crew || []).filter(c => jobs.includes(c.job)).map(c => c.name))];
 // What the Production panel shows, read from TMDB's credits and company lists; the renderer decides what is worth printing.
@@ -176,7 +176,8 @@ function createMetadata({ dir, fetch, auth, onUpdate, apiBase = API, imageBase =
     const useOriginalTitle = preference === 'original' || (code && code === movie.original_language);
     const title = useOriginalTitle ? movie.original_title || movie.title : movie.title;
     const prefix = `movie-${movie.id}${language ? '-' + language : ''}`;
-    return { tmdbId: movie.id, type: 'movie', title, year: movie.release_date?.slice(0, 4) || null, genres: (movie.genres || []).map(g => g.name),
+    const collection = movie.belongs_to_collection;
+    return { collection: collection?.id && collection.name ? { id: collection.id, name: collection.name } : undefined, tmdbId: movie.id, type: 'movie', title, year: movie.release_date?.slice(0, 4) || null, genres: (movie.genres || []).map(g => g.name),
       people: [...new Set((movie.credits?.crew || []).filter(c => c.job === 'Director').map(c => c.name))], peopleLabel: 'Directed by',
       cast: await castOf(movie.credits), imdbId: movie.imdb_id || null, ...productionOf(movie, movie.credits), overview: movie.overview || '', tagline: movie.tagline || '', runtime: movie.runtime || null,
       rating: movie.vote_count ? Math.round(movie.vote_average * 10) / 10 : null, votes: movie.vote_count || 0,

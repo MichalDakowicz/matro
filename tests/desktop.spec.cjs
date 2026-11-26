@@ -1105,3 +1105,30 @@ test('watch history lists what was played with dates and opens the title', async
     await expect(page.locator('#detail-overlay')).toBeVisible();
   } finally { await app.close(); }
 });
+
+test('standalone can add a title to Watch Later and a manual list and keeps both after restart', async () => {
+  const f = await fixtures();
+  const profile = await fs.mkdtemp(path.join(f.dir, 'title-lists-profile-'));
+  const item = describe(path.join(f.dir, 'Northbound.mkv'));
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items: [item] }));
+  const launch = launchOptions(profile);
+  let app = await electron.launch(launch);
+  try {
+    const page = await app.firstWindow();
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: 'Add to list', exact: true }).press('Enter');
+    const dialog = page.getByRole('dialog', { name: 'Add to list' });
+    await dialog.getByRole('button', { name: 'Watch Later', exact: true }).press('Enter');
+    await expect(dialog.getByRole('button', { name: 'Watch Later', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await dialog.getByRole('textbox', { name: 'New list' }).fill('Weekend');
+    await dialog.getByRole('button', { name: 'Create and add' }).click();
+    await expect(dialog.getByRole('button', { name: 'Weekend', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await app.close();
+    app = await electron.launch(launch);
+    const next = await app.firstWindow();
+    await expect(next.getByRole('heading', { name: 'Watch Later', exact: true })).toBeVisible();
+    await expect(next.getByRole('heading', { name: 'Weekend', exact: true })).toBeVisible();
+  } finally { await app.close(); }
+});

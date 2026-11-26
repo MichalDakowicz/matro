@@ -323,6 +323,12 @@ export function createAdapter(session) {
     chooseSource: window.matroDesktop?.chooseSource,
     recoveryScope: scope,
     load, inspect, prepare: inspect, savedPlayback, subtitles, loadSubtitle, stream,
+    get canEditLists() { return !session.offline && Array.isArray(latest?.lists); },
+    async editLists(change) {
+      const { lists } = await stateRequest('POST', '/api/lists', change);
+      if (latest) latest.lists = lists;
+      return lists;
+    },
     quality: () => quality, setQuality: id => { quality = knownQuality(id); try { localStorage.setItem('matro-quality', quality); } catch { /* The choice only lasts for this visit. */ } },
     get subtitleSearchStatus() { return session.offline ? null : () => get('/api/subtitle-search'); },
     searchSubtitles: async ({ id, language }) => (await get(`/api/items/${id}/subtitle-search?${new URLSearchParams({ language })}`)).results,

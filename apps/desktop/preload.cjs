@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('matro', {
   downloadPreview: options => ipcRenderer.invoke('downloads:preview', options),
   downloadAdd: options => ipcRenderer.invoke('downloads:add', options),
   downloadList: target => ipcRenderer.invoke('downloads:list', target),
+  editLists: change => ipcRenderer.invoke('library:edit-lists', change),
   load: () => ipcRenderer.invoke('library:load'),
   addFolder: () => ipcRenderer.invoke('library:folder'),
   connectSSH: options => ipcRenderer.invoke('library:ssh', options),

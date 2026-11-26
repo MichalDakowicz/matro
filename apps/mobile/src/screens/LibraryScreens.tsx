@@ -3,6 +3,7 @@ import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, Text
 import { request, type Item, type Library, type ScannerStatus } from '../lib/server';
 import { loadRecents, saveRecents } from '../lib/storage';
 import { plural, rememberQuery } from '../lib/text';
+import { titleShelves } from '../../../../packages/core/client/title-shelves.js';
 import { metadataFor, nameFor, statusOf, titleKey } from '../../../../packages/core/client/library';
 import { colors, fonts, radius, themed } from '../theme';
 import { Chip, Icon, MediaArt, Pill, styles as t } from '../components/Matro';
@@ -30,6 +31,9 @@ export function HomeView({ data, groups, featured, continues, layout, chips, ref
     {!data.items.length ? <View style={{ minHeight: 420, justifyContent: 'center', gap: 18 }}><Text style={t.dim}>Matro · your library</Text><Text style={[t.display, { fontSize: 38, lineHeight: 40 }]}>Your collection.{'\n'}Your kind of player.</Text><Text style={t.muted}>All your films, shows and favourite files in one quiet place. Add a folder on your server to build your library.</Text>{data.user.role === 'admin' && <Pill label="Add folder" icon="folder" onPress={onAddFolder} primary />}</View> : <>
       <FeaturedReel key={`${art.base}:${featured.length}`} {...art} data={data} groups={featured} onPlay={onPlay} onDetail={item => onOpen(groups.find(items => titleKey(items[0]) === titleKey(item)) || [item])} />
       <ContinueRow {...art} data={data} items={continues} onPlay={onPlay} onRemove={onRemoveContinue} />
+      {titleShelves(groups, data.lists, titleKey, item => metadataFor(data, item)).map(shelf => <Shelf key={shelf.id} title={shelf.name} count={shelf.groups.length} noun="titles" onSeeAll={() => onSeeAll('list:' + shelf.id)}>
+        {shelf.groups.slice(0, 8).map(items => <PosterCard key={titleKey(items[0])} {...art} data={data} items={items} width={128} onPress={() => onOpen(items)} />)}
+      </Shelf>)}
       {shelves.map(({ kind, all }) => <Shelf key={kind} title={kindNames[kind][0]} count={all.length} noun={kindNames[kind][0].toLowerCase()} onSeeAll={() => onSeeAll(kind)}>
         {all.slice(0, 8).map(items => <PosterCard key={titleKey(items[0])} {...art} data={data} items={items} width={128} onPress={() => onOpen(items)} />)}
       </Shelf>)}

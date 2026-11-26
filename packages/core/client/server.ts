@@ -160,15 +160,20 @@ export const testMovieRequestAlert = (base: string, owner: boolean): Promise<unk
 
 export type Item = { id: string; groupId: string; title: string; group: string; kind: string; season: number | null; episode: number | null; format: string; root?: string; path?: string; added?: number; editionGroup?: string; editionLabel?: string; size?: number };
 export type Progress = { position: number; duration: number; completed?: boolean; hidden?: boolean; updated: number };
-export type Metadata = { title?: string; poster?: string; backdrop?: string; overview?: string; tagline?: string; year?: string | number; genres?: string[]; runtime?: number; rating?: number; votes?: number; people?: string[]; peopleLabel?: string; cast?: { name: string; role?: string; photo?: string }[]; episodes?: Record<string, Record<string, { name?: string; overview?: string; still?: string; runtime?: number }>> };
+export type Metadata = { collection?: { id: number; name: string }; title?: string; poster?: string; backdrop?: string; overview?: string; tagline?: string; year?: string | number; genres?: string[]; runtime?: number; rating?: number; votes?: number; people?: string[]; peopleLabel?: string; cast?: { name: string; role?: string; photo?: string }[]; episodes?: Record<string, Record<string, { name?: string; overview?: string; still?: string; runtime?: number }>> };
 export type TrackChoice = { language: string; title: string; codec?: string; channels?: number };
 export type TrackPreference = { audio?: TrackChoice | null; subtitle?: TrackChoice | null; off?: boolean; delay?: number; audioDelay?: number; size?: number };
 export type TrackDefaults = { audio?: string; subtitles?: 'off' | 'forced' | 'always'; subtitleLanguage?: string };
 export type Preferences = { autoplay?: boolean; autoSkip?: boolean; volume?: number; tracks?: Record<string, TrackPreference>; trackDefaults?: TrackDefaults; [key: string]: unknown };
 export type Segment = { type: 'intro' | 'outro' | 'recap'; start: number; end: number; source: 'manual' | 'automatic' };
 export type ScannerStatus = { ready: number; total: number; message: string; complete?: boolean };
+export type TitleList = { id: string; name: string; titles: string[] };
+export type ListChange =
+  | { action: 'create'; name: string; titleId?: string }
+  | { action: 'delete'; listId: string }
+  | { action: 'set'; listId: string; titleId: string; present: boolean };
 export type LibraryScanStatus = { scanning: boolean; lastScanAt: number | null; errors: { folder: string; error: string }[] };
-export type Library = { scanStatus?: LibraryScanStatus; markers?: Record<string, Segment[]>; scanner?: ScannerStatus; user: MatroUser; items: Item[]; folders?: string[]; progress: Record<string, Progress>; queue: string[]; preferences: Preferences; metadata: Record<string, Metadata>; catalogRevision?: string; movieRequestsEnabled?: boolean; movieRequestPushEnabled?: boolean; metadataEnabled?: boolean; requestUpdates?: { id: number; title: string; outcome: 'ready' | 'declined' }[] };
+export type Library = { lists?: TitleList[]; scanStatus?: LibraryScanStatus; markers?: Record<string, Segment[]>; scanner?: ScannerStatus; user: MatroUser; items: Item[]; folders?: string[]; progress: Record<string, Progress>; queue: string[]; preferences: Preferences; metadata: Record<string, Metadata>; catalogRevision?: string; movieRequestsEnabled?: boolean; movieRequestPushEnabled?: boolean; metadataEnabled?: boolean; requestUpdates?: { id: number; title: string; outcome: 'ready' | 'declined' }[] };
 export type Track = { index: number; language: string; title: string; bitmap?: boolean; text?: boolean; codec?: string; channels?: number; default?: boolean };
 export type Info = { duration: number; directPlay: boolean; hdrToneMap?: boolean; video?: { codec: string; height: number; width: number } | null; chapters?: { start: number; title: string }[]; audio: Track[]; embedded: Track[]; uploaded: { id: number; language: string; name: string; kind?: string }[]; files?: { id: number; language: string; title: string; codec: string; forced: boolean; sdh: boolean }[] };
 export const library = async (base: string, accountId?: number): Promise<Library> => { await ensureNativeSession(base); return request(base, '/api/library', { accountId }); };

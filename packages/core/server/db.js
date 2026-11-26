@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS items (
 CREATE INDEX IF NOT EXISTS items_group ON items(group_id);
 -- Everything the desktop renderer keeps per person: watch progress, queue, remembered tracks, subtitle style.
 CREATE TABLE IF NOT EXISTS user_state (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, data TEXT NOT NULL, updated INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS title_lists (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, data TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS subtitles (
   id INTEGER PRIMARY KEY, item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
   user_id INTEGER REFERENCES users(id) ON DELETE SET NULL, name TEXT NOT NULL, language TEXT NOT NULL,

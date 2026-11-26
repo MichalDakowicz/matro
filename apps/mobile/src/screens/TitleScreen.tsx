@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { File } from 'expo-file-system';
-import type { Item, Library, Metadata } from '../lib/server';
+import type { Item, Library, ListChange, Metadata } from '../lib/server';
 import { seasonLabel, seasonNumbers, seasonOf } from '../../../../packages/core/client/watch-progress.js';
-import { episodeName, formatTime, metadataFor, nameFor, resumeItem } from '../../../../packages/core/client/library';
+import { episodeName, formatTime, metadataFor, nameFor, resumeItem, titleKey } from '../../../../packages/core/client/library';
+import { listChoices } from '../../../../packages/core/client/title-shelves.js';
 import { cleanEpisodeName, plural, runtimeText } from '../lib/text';
 import { Chip, Icon, IconButton, MediaArt, Pill, ProgressBar, Row, Sheet, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
@@ -19,15 +20,25 @@ type Props = ArtProps & {
   onMark: (items: Item[], done: boolean) => void;
   /** Present when the server can be reached: subtitle upload for everyone, TMDB fixes for the head account when the server has TMDB. */
   online?: { admin: boolean; tmdb: boolean; notify: (text: string) => void; onMetadata: (metadata: Record<string, Metadata>) => void };
+  onEditLists?: (change: ListChange) => Promise<void>;
   onSave?: (item: Item) => void; onSaveMany?: (items: Item[]) => void; onRemoveSaved?: (items: Item[]) => void; savedIds?: Set<string>; savingIds?: Set<string>;
 };
-type Menu = null | 'save' | 'watched' | 'metadata' | { episode: Item };
+type Menu = null | 'save' | 'watched' | 'metadata' | 'lists' | { episode: Item };
 
-export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, onMark, online, onSave, onSaveMany, onRemoveSaved, savedIds, savingIds, ...art }: Props) {
+export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, onMark, online, onEditLists, onSave, onSaveMany, onRemoveSaved, savedIds, savingIds, ...art }: Props) {
   const item = items[0], m = metadataFor(data, item), target = resumeItem(data, items), p = data.progress[target.id], name = nameFor(data, item);
   const insets = useSafeAreaInsets(), seasons = seasonNumbers(items);
   const [season, setSeason] = useState(seasonOf(target)), [menu, setMenu] = useState<Menu>(null), [scrolled, setScrolled] = useState(false), [picked, setPicked] = useState<{ item: Item; file: File } | null>(null);
   const editions = item.editionGroup && items.length > 1;
+  const [listName, setListName] = useState(''), [editingList, setEditingList] = useState(false), [listError, setListError] = useState('');
+  const titleId = titleKey(item);
+  const editList = async (change: ListChange) => {
+    if (editingList || !onEditLists) return;
+    setEditingList(true); setListError('');
+    try { await onEditLists(change); if (change.action === 'create') setListName(''); }
+    catch (error) { setListError(error instanceof Error ? error.message : 'Could not update the list.'); }
+    finally { setEditingList(false); }
+  };
   const resume = p?.position > 0 && !p.completed, show = item.kind === 'show';
   const done = (list: Item[]) => list.length > 0 && list.every(i => data.progress[i.id]?.completed);
   const inSeason = items.filter(i => seasonOf(i) === season);
@@ -59,6 +70,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
       </View>
       <View style={[t.row, { marginTop: 10, flexWrap: 'wrap' }]}>
         <Pill label="Add to queue" icon="plus" style={s.action} onPress={() => onEnqueue(show ? items : [target])} />
+        {onEditLists && <Pill label="Add to list" icon="plus" style={s.action} onPress={() => { setListError(''); setMenu('lists'); }} />}
         {show ? <Pill label="Mark watched" icon="check" style={s.action} onPress={() => setMenu('watched')} />
           : <Pill label={done([target]) ? 'Mark unwatched' : 'Mark watched'} icon="check" style={s.action} onPress={() => onMark([target], !done([target]))} />}
         {onSave && (show ? onSaveMany && <Pill label="Save offline" icon="download" style={s.action} onPress={() => setMenu('save')} />
@@ -103,6 +115,22 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
       }} />
     {scrolled && <TopFade />}
     <View style={[s.back, { top: insets.top + 12 }]}><IconButton name="back" label="Close details" onPress={onBack} /></View>
+    <Sheet visible={menu === 'lists'} onClose={() => setMenu(null)} title="Add to list">
+      {listChoices(data.lists).map(list => {
+        const added = list.titles.includes(titleId);
+        return <View key={list.id} style={t.row}>
+          <View style={{ flex: 1 }}><Row icon={added ? 'check' : 'plus'} label={list.name} detail={added ? 'Added · tap to remove' : undefined}
+            onPress={() => void editList({ action: 'set', listId: list.id, titleId, present: !added })} /></View>
+          {list.id !== 'watch-later' && <IconButton name="trash" label={`Delete ${list.name}`} onPress={() => Alert.alert('Delete list?', list.name, [
+            { text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => void editList({ action: 'delete', listId: list.id }) },
+          ])} />}
+        </View>;
+      })}
+      <TextInput accessibilityLabel="New list" placeholder="New list" placeholderTextColor={colors.dim} maxLength={60}
+        value={listName} onChangeText={setListName} style={s.listInput} />
+      <Pill label="Create and add" disabled={!listName.trim() || editingList} onPress={() => void editList({ action: 'create', name: listName, titleId })} />
+      {listError ? <Text accessibilityLiveRegion="polite" style={t.muted}>{listError}</Text> : null}
+    </Sheet>
     <Sheet visible={menu === 'watched'} onClose={() => setMenu(null)} title="Mark as watched">
       <Row icon="check" label={done(inSeason) ? `${seasonLabel(season)} as unwatched` : seasonLabel(season)} detail={plural(inSeason.length, 'episode')} onPress={() => close(() => onMark(inSeason, !done(inSeason)))} />
       <Row icon="check" label={done(items) ? 'Whole show as unwatched' : 'Whole show'} detail={plural(items.length, 'episode')} last onPress={() => close(() => onMark(items, !done(items)))} />
@@ -126,6 +154,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
   </View>;
 }
 const s = themed(() => StyleSheet.create({
+  listInput: { minHeight: 44, color: colors.text, borderColor: colors.hairlineStrong, borderWidth: 1, borderRadius: radius.poster, paddingHorizontal: 12, marginVertical: 12 },
   fill: { flex: 1, backgroundColor: colors.ground }, circleAction: { borderRadius: radius.pill, borderWidth: 1, borderColor: colors.hairlineStrong }, action: { height: 44, paddingHorizontal: 16 },
   back: { position: 'absolute', left: 14, borderRadius: radius.pill, backgroundColor: colors.glass, borderWidth: 1, borderColor: colors.hairlineStrong, zIndex: 20 },
   ratings: { marginTop: 26, paddingLeft: 12, borderLeftWidth: 1, borderColor: colors.hairlineStrong }, score: { color: colors.text, fontSize: 22, fontFamily: fonts.medium },
