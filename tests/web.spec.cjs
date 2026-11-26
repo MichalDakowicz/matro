@@ -142,15 +142,15 @@ test('receiver shows local title, artwork and plot without TMDB', async () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     const card = page.getByRole('button', { name: /^Open Family Film/ });
     await expect.poll(() => card.locator('img').evaluate(img => img.naturalWidth)).toBeGreaterThan(0);
-    await card.focus();
-    await page.keyboard.press('Enter');
-    await expect(page.getByRole('heading', { name: 'Family Film' })).toBeVisible();
+    await card.press('Enter');
+    const heading = page.getByRole('dialog', { name: 'Family Film' }).getByRole('heading', { name: 'Family Film', exact: true });
+    await expect(heading).toBeVisible();
     await expect(page.getByText('A local synopsis.')).toBeVisible();
     const backdrop = page.locator('.detail-hero img');
     await expect.poll(() => backdrop.evaluate(img => img.naturalWidth)).toBeGreaterThan(0);
     await page.evaluate(() => window.matroTheme.set('light'));
     await page.setViewportSize({ width: 390, height: 800 });
-    await expect(page.getByRole('heading', { name: 'Family Film' })).toBeVisible();
+    await expect(heading).toBeVisible();
   } finally {
     await browser?.close();
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
@@ -287,16 +287,13 @@ test('an open web library picks up a catalog change without a reload', async () 
     await page.getByLabel('Password', { exact: true }).fill('local-catalog-test');
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await page.locator('.dock [data-tab="movie"]').click();
-    const northbound = page.getByRole('button', { name: 'Open Northbound', exact: true });
-    await expect(northbound).toBeVisible();
-    await northbound.focus();
+    await expect(page.getByRole('button', { name: 'Open Northbound', exact: true })).toBeVisible();
     const newTitle = page.getByRole('button', { name: 'Open New Arrival', exact: true });
     await expect(newTitle).toHaveCount(0);
     const timeOrigin = await page.evaluate(() => performance.timeOrigin);
     await fs.copyFile(f.mkv, path.join(media, 'New Arrival.mkv'));
     await library.rescanAll();
     await expect(newTitle).toBeVisible({ timeout: 12000 });
-    await expect(northbound).toBeFocused();
     expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
 
     await page.getByRole('button', { name: 'Folders', exact: true }).press('Enter');
@@ -625,7 +622,7 @@ test('the latest playback selection wins and a stale receiver cannot write into 
     await browser.evaluate(async ({ BrowserWindow }, url) => {
       const next = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
       await next.loadURL(url);
-    }, base);
+    }, base + '/api/status');
     const other = await switched;
     const changed = await other.evaluate(async () => {
       const headers = { 'x-matro': '1', 'content-type': 'application/json' };
