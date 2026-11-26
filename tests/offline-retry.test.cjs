@@ -15,3 +15,29 @@ test('offline downloads retry dropped connections and 5xx answers, but not refus
     assert.equal(tries, 1);
   }
 });
+
+test('offline preparation times out after stalled progress, not elapsed download time', async () => {
+  const { preparationTracker } = await import('../apps/web/web/offline.js');
+  const stalled = preparationTracker(), minutes = 60 * 1000;
+  assert.equal(stalled(null, 0), false);
+  assert.equal(stalled(null, 45 * minutes), false);
+  assert.equal(stalled(0, 46 * minutes), false);
+  assert.equal(stalled(.3, 70 * minutes), false);
+  assert.equal(stalled(.5, 90 * minutes), false);
+  assert.equal(stalled(.4, 110 * minutes), false, 'regressions do not reset the clock');
+  assert.equal(stalled(.5, 120 * minutes), true);
+});
+
+test('only an account change reloads the web app; a subtitle-limit 409 does not', async () => {
+  const { api, ApiError } = await import('../apps/web/web/http.js');
+  const respond = (status, body) => { globalThis.fetch = async () => new Response(JSON.stringify(body), { status }); };
+  let reloads = 0;
+  globalThis.location = { reload: () => { reloads++; } };
+  respond(409, { error: 'This title already has the maximum number of subtitle tracks.' });
+  await assert.rejects(api('PUT', '/api/state', {}, { accountId: 1 }), error => error instanceof ApiError && error.status === 409);
+  assert.equal(reloads, 0);
+  respond(409, { error: 'The signed-in account changed. Open Matro again.', code: 'account-changed' });
+  await assert.rejects(api('PUT', '/api/state', {}, { accountId: 1 }), error => error.code === 'account-changed');
+  assert.equal(reloads, 1);
+  delete globalThis.location;
+});
