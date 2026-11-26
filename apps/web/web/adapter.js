@@ -144,7 +144,7 @@ export function createAdapter(session, remote = null) {
     }
   }
   // A short deadline, so a slow server does not hold up a saved copy.
-  const inspectOnline = id => session.offline ? Promise.resolve(null) : inspectRemote(id, { signal: AbortSignal.timeout(4000), deadline: true });
+  const inspectOnline = id => session.offline ? Promise.resolve(null) : details.has(id) ? Promise.resolve(details.get(id)) : inspectRemote(id, { signal: AbortSignal.timeout(4000), deadline: true });
   async function inspectRemote(id, { signal, deadline } = {}) {
     const info = await api('GET', `/api/items/${id}/info`, undefined, { signal, deadline });
     const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay, hdrDirectMime: info.hdrDirectMime, hdrToneMap: info.hdrToneMap, qualities: qualityOptions(info.video),
