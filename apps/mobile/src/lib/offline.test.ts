@@ -208,6 +208,35 @@ test('a stalled caption and a 502 or stalled range retry before completing', asy
   assert.equal(ranges, 3);
 });
 
+test('a caption the server cannot read is left out, while a sign-in failure stops the save', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { offline, fixture, records } = setup();
+  fixture.info.embedded = [{ index: 1, text: true }, { index: 2, text: true }];
+  let broken = 0;
+  fixture.fetch = async url => {
+    if (url.endsWith('/subtitles/e1')) return new Response('WEBVTT');
+    if (url.endsWith('/subtitles/e2')) { broken++; return new Response(null, { status: 502 }); }
+    return media();
+  };
+  await offline.saveOffline(base, user, items('one')[0], 'One');
+  for (const delay of [1500, 3000, 6000, 12000, 24000, 30000]) {
+    const expected = broken + 1;
+    await until(() => broken === expected);
+    await setImmediate();
+    t.mock.timers.tick(delay);
+  }
+  await until(async () => (await records())[0]?.complete === true);
+  assert.equal(broken, 7);
+  assert.deepEqual({ ...(await offline.savedTitle(base, user, 'one'))?.text }, { 1: 'WEBVTT' });
+
+  const signedOut = setup();
+  signedOut.fixture.info.embedded = [{ index: 1, text: true }];
+  signedOut.fixture.fetch = async url => url.endsWith('/subtitles/e1') ? new Response(null, { status: 401 }) : media();
+  await signedOut.offline.saveOffline(base, user, items('two')[0], 'Two');
+  await until(async () => !!(await signedOut.records())[0]?.error);
+  assert.notEqual((await signedOut.records())[0].complete, true);
+});
+
 test('after a connection outage and relaunch, a download resumes at its last complete range', async t => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
   const first = setup(), { offline, fixture, records } = first;

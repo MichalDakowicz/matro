@@ -29,23 +29,30 @@ test('a short piece is retried, then the exact requested range is returned', asy
   }
 });
 
-test('offline captions skip only missing tracks and retry network and server outages six times', async t => {
+test('offline captions skip broken tracks, fail on sign-in and network loss, and retry server errors six times', async t => {
   const { optionalCaption, RetryableDownloadError } = await import('../packages/core/client/offline-rules.js');
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const controller = new AbortController();
-  for (const status of [404, 410]) {
+  for (const status of [403, 404, 410, 422]) {
     assert.equal(await optionalCaption(async () => new Response(null, { status }), controller.signal), undefined);
   }
-  for (const status of [401, 403]) {
-    await assert.rejects(optionalCaption(async () => new Response(null, { status }), controller.signal), { status });
-  }
+  await assert.rejects(optionalCaption(async () => new Response(null, { status: 401 }), controller.signal), { status: 401 });
+  const delays = [1500, 3000, 6000, 12000, 24000, 30000];
   let calls = 0;
   const caption = optionalCaption(async () => {
     if (++calls === 1) throw new TypeError('network');
-    return new Response(null, { status: 503 });
+    return new Response(null, { status: 502 });
   }, controller.signal);
-  const outage = assert.rejects(caption, error => error instanceof RetryableDownloadError && /HTTP 503/.test(error.message));
-  for (const delay of [1500, 3000, 6000, 12000, 24000, 30000]) {
+  for (const delay of delays) {
+    await setImmediate();
+    t.mock.timers.tick(delay);
+  }
+  assert.equal(await caption, undefined);
+  assert.equal(calls, 7);
+  calls = 0;
+  const unreachable = optionalCaption(async () => { calls++; throw new TypeError('network'); }, controller.signal);
+  const outage = assert.rejects(unreachable, error => error instanceof RetryableDownloadError && /network/.test(error.message));
+  for (const delay of delays) {
     await setImmediate();
     t.mock.timers.tick(delay);
   }

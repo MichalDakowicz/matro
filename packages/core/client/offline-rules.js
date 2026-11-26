@@ -189,16 +189,20 @@ export function fetchPiece(send, path, { version, size }, { start, end }, signal
 
 /** @param {(signal: AbortSignal) => Promise<TransferResponse>} send @param {AbortSignal} signal */
 export async function optionalCaption(send, signal) {
+  let serverFailed = false;
   try {
-    const text = await retrying(signal, () => fetchWithDeadline(send, async response => {
+    const text = await retrying(signal, () => { serverFailed = false; return fetchWithDeadline(send, async response => {
+      serverFailed = response.status >= 500;
       if (!response.ok) throw responseError(response.status, `Could not download subtitles (HTTP ${response.status}).`);
       return response.text();
-    }, { signal }));
+    }, { signal }); });
     checkAbort(signal);
     return text;
   } catch (error) {
     checkAbort(signal);
-    if (error?.status === 404 || error?.status === 410) return undefined;
+    // One broken caption must not block the save: skip it unless sign-in failed or the server could not be reached at all.
+    if (error?.status >= 400 && error.status < 500 && error.status !== 401) return undefined;
+    if (error instanceof RetryableDownloadError && serverFailed) return undefined;
     throw error;
   }
 }
