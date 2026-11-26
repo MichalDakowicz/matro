@@ -89,9 +89,11 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     if (!offline && Object.keys(changes).length) void updateWatchOptions(base, dataRef.current.user, { preferences: { tracks: { [trackKey(item)]: changes } } }).catch(() => {});
   }, [base, item, offline]);
   const reportsActivity = !offline && !savedCopy;
+  const reportsActivityRef = useRef(reportsActivity);
+  reportsActivityRef.current = reportsActivity;
   const reportActivity = useCallback((playing: boolean, buffering = false) => {
-    if (reportsActivity) void playbackState(base, session, playing, buffering).catch(() => {});
-  }, [base, reportsActivity, session]);
+    if (reportsActivityRef.current) void playbackState(base, session, playing, buffering).catch(() => {});
+  }, [base, session]);
   const pictureInPicture = useMemo(() => createPictureInPictureLifecycle(
     () => { void persist().catch(() => {}); },
     () => { intent.current = false; player.pause(); reportActivity(false); },
