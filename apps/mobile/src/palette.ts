@@ -37,6 +37,8 @@ const dark = {
   outline: '#ffffff24',
   outlineStrong: '#ffffff33',
   glass: '#1a1a1c99',
+  // The design's glass (#1a1a1c8c / --glass at .55), only over a real backdrop blur; `glass` is the fill without one.
+  glassBlur: '#1a1a1c8c',
   glassSolid: '#171719f5',
   scrim: '#0009',
   shadow: '#0006',
@@ -77,6 +79,7 @@ const light: Palette = {
   outline: '#00000026',
   outlineStrong: '#00000033',
   glass: '#ffffffb3',
+  glassBlur: '#ffffff8c',
   glassSolid: '#fffffff5',
   scrim: '#0006',
   shadow: '#0002',
@@ -98,7 +101,7 @@ export const playerChrome = {
   scrim: '#0005',
   fadeStart: '#000c',
   fadeEnd: '#000e',
-  // Translucent glass: Matro's #1a1a1c at about 80 %. React Native has no backdrop blur without a native module.
+  // Translucent glass: Matro's #1a1a1c at about 80 %. No backdrop blur here: expo-video draws into a SurfaceView, which a blur cannot sample.
   glass: '#1a1a1ccc',
   glassLine: dark.hairline,
   line: '#ffffff24',

@@ -14,6 +14,7 @@ import type { ArtProps } from '../components/LibraryParts';
 import { SmartKeep } from '../components/SmartSaves';
 import type { SmartRule } from '../lib/smart-plan';
 import { TopFade } from '../components/Shell';
+import { Backdrop, Glass, GlassScope } from '../components/Glass';
 import { MetadataSheet, SubtitleSheet } from '../components/TitleSheets';
 import { colors, fonts, overArt, radius, themed } from '../theme';
 
@@ -130,8 +131,8 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
   const episode = menu && typeof menu === 'object' ? menu.episode : null;
   // Episodes before the chosen one that are not watched yet (items are in play order).
   const earlier = episode ? items.slice(0, items.indexOf(episode)).filter(i => !data.progress[i.id]?.completed) : [];
-  return <View style={s.fill}>
-    <FlatList removeClippedSubviews={isAndroidTv ? false : undefined} data={show ? inSeason : []} keyExtractor={i => i.id} contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: insets.bottom + 40 }} ListHeaderComponent={header} ListFooterComponent={footer} showsVerticalScrollIndicator={false}
+  return <GlassScope><View style={s.fill}>
+    <Backdrop style={s.fill}><FlatList removeClippedSubviews={isAndroidTv ? false : undefined} data={show ? inSeason : []} keyExtractor={i => i.id} contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: insets.bottom + 40 }} ListHeaderComponent={header} ListFooterComponent={footer} showsVerticalScrollIndicator={false}
       scrollEventThrottle={64} onScroll={e => { const far = e.nativeEvent.contentOffset.y > 160; if (far !== scrolled) setScrolled(far); }}
       renderItem={({ item: ep }) => {
         const e = metadataFor(data, ep).episodes?.[String(ep.season)]?.[String(ep.episode)], progress = data.progress[ep.id], watched = progress?.completed, label = episodeTitle(ep);
@@ -143,8 +144,8 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
           <IconButton name="more" label={`More actions for ${label}`} onPress={() => setMenu({ episode: ep })} />
         </View>;
       }} />
-    {scrolled && <TopFade />}
-    <View style={[s.back, { top: insets.top + 12 }]}><IconButton name="back" label="Close details" onPress={onBack} /></View>
+    {scrolled && <TopFade />}</Backdrop>
+    <Glass style={[s.back, { top: insets.top + 12 }]}><IconButton name="back" label="Close details" onPress={onBack} /></Glass>
     <Sheet visible={menu === 'lists'} onClose={() => setMenu(null)} title="Add to list">
       {listChoices(data.lists).map(list => {
         const added = list.titles.includes(titleId);
@@ -195,7 +196,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
         {onSave && <Row icon={state(episode.id) === 'saved' ? 'check' : 'download'} label={saveLabel(episode.id)} last onPress={() => state(episode.id) === 'idle' ? close(() => onSave(episode)) : setMenu(null)} />}
       </>}
     </Sheet>
-  </View>;
+  </View></GlassScope>;
 }
 const s = themed(() => StyleSheet.create({
   listInput: { minHeight: 44, color: colors.text, borderColor: colors.hairlineStrong, borderWidth: 1, borderRadius: radius.poster, paddingHorizontal: 12, marginVertical: 12 },

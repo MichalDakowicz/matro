@@ -8,6 +8,7 @@ import icons from '../../../../packages/browser-ui/icons.json';
 import brand from '../../../../packages/browser-ui/brand.json';
 import { colors, coverTint, fonts, overArt, radius, type, themed } from '../theme';
 import { useReduceMotion } from './Motion';
+import { Glass } from './Glass';
 
 export type Glyph = keyof typeof icons;
 export function Icon({ name, size = 20, color = colors.text }: { name: Glyph; size?: number; color?: string }) {
@@ -46,16 +47,16 @@ export const MediaArt = memo(function MediaArt({ base, headers, path, title, sty
 });
 export const ProgressBar = ({ value, onArt }: { value: number; onArt?: boolean }) => <View style={[styles.progress, onArt && { backgroundColor: overArt.rule }]}><View style={[styles.progressFill, onArt && { backgroundColor: overArt.text }, { width: `${Math.max(0, Math.min(1, value)) * 100}%` }]} /></View>;
 
-/** Bottom sheet on a scrim. Android Back and a tap outside both close it. */
+/** Bottom sheet on a scrim. Android Back and a tap outside both close it. Glass over the screen's Backdrop where blur is on, the solid ground otherwise. */
 export function Sheet({ visible, onClose, title, children }: { visible: boolean; onClose: () => void; title: string; children: ReactNode }) {
   const insets = useSafeAreaInsets();
   return <Modal transparent visible={visible} animationType={isAndroidTv ? "none" : "fade"} statusBarTranslucent onRequestClose={onClose}>
     <Pressable focusable={isAndroidTv ? false : undefined} style={styles.scrim} onPress={onClose} accessibilityLabel={`Close ${title}`} />
-    <View style={[styles.sheet, { paddingBottom: insets.bottom + 20 }]}>
+    <Glass modal fill={colors.glassStrong} style={[styles.sheet, { paddingBottom: insets.bottom + 20 }]}>
       <View style={styles.handle} />
       <View style={[styles.sectionHeading, { marginBottom: 12 }]}><Text accessibilityRole="header" style={[styles.sheetTitle, { flex: 1 }]}>{title}</Text><IconButton name="close" preferredFocus={isAndroidTv} label={`Close ${title}`} onPress={onClose} /></View>
       <ScrollView style={{ flexGrow: 0 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">{children}</ScrollView>
-    </View>
+    </Glass>
   </Modal>;
 }
 /** One tappable row inside a sheet or list: icon, label, optional detail and a chevron when it opens something. */

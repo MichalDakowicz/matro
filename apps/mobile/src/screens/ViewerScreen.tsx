@@ -10,7 +10,8 @@ import { applyDismissals } from '../../../../packages/core/client/recovery';
 import { colors, dock, setSceneOverride, themed } from '../theme';
 import { titleShelves } from '../../../../packages/core/client/title-shelves.js';
 import { Pill, styles as t } from '../components/Matro';
-import { AboutSheet, AccountSheet, Corner, Dock, Grain, OfflinePill, Toast, useKeyboardOpen, useNotice, type DockTab } from '../components/Shell';
+import { AboutSheet, AccountSheet, BottomFade, Corner, Dock, Grain, OfflinePill, Toast, TopFade, useKeyboardOpen, useNotice, type DockTab } from '../components/Shell';
+import { Backdrop, GlassScope } from '../components/Glass';
 import { plural } from '../lib/text';
 import NativePlayer, { type RemotePlayer } from './NativePlayer';
 import TitleScreen from './TitleScreen';
@@ -459,9 +460,10 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     : ['movie', 'show'].includes(tab) ? <BrowseView {...common} data={data} kind={tab} groups={allGroups.filter(items => items[0].kind === tab)} chips={chips} />
     : <HomeView {...common} data={data} groups={allGroups} featured={featured} continues={continues} chips={chips} onPlay={play} onRemoveContinue={removeContinue} onSeeAll={value => value === 'following' ? push(value) : jump(value)} onAddFolder={() => jump('folders')} />;
   const overlay = !!(detail && data), toastBottom = overlay || keyboard ? insets.bottom + 24 : insets.bottom + dock.bottom + dock.height + 18;
-  return <View style={s.fill}>
+  return <GlassScope><View style={s.fill}>
     <View style={s.fill} importantForAccessibility={overlay ? 'no-hide-descendants' : 'auto'} accessibilityElementsHidden={overlay}>
-      {screen}
+      {/* What the corner, dock and sheets blur. The fades belong to the content, so the glass blurs them too. */}
+      <Backdrop style={s.fill}>{screen}<TopFade />{!keyboard && <BottomFade />}</Backdrop>
       {offline && data && <OfflinePill onReconnect={() => void load()} />}
       <Corner username={data?.user.username} canBack={trail.length > 0} onBack={back} onHome={() => jump('home')} onProfile={() => setAccount(true)} />
       <Dock active={dockTab} onChange={jump} queued={data?.queue.length || 0} hidden={keyboard} />
@@ -479,6 +481,6 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} requests={requestsLabel} onGo={go} onRefresh={() => void load()} onAbout={() => setAbout(true)} onServer={onChangeServer} onSignOut={onSignedOut} onTrackDefaults={changeTrackDefaults} onDevices={openDevices} />
     {remoteDialog}
     <AboutSheet visible={about} onClose={() => setAbout(false)} files={data?.items.length || 0} />
-  </View>;
+  </View></GlassScope>;
 }
 const s = themed(() => StyleSheet.create({ fill: { flex: 1, backgroundColor: colors.ground }, center: { flex: 1, justifyContent: 'center' }, overlay: { ...StyleSheet.absoluteFill, zIndex: 50, elevation: 24, backgroundColor: colors.ground } }));
