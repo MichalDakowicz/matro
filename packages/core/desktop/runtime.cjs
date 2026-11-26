@@ -9,6 +9,7 @@ const { createEmbeddedSubtitles } = require('./embedded-subtitles.cjs');
 const { remote } = require('./ssh-media.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { mediaArgs } = require('./open-with.cjs');
 const { scan, describe, groupFolders, existingShowGroups, applyPreludes, sidecars, keepSidecar, SIDECAR, extensions, probe, run, ffmpeg } = require('./media.cjs');
 const { createStreamServer } = require('./stream.cjs');
 const { createPreviews } = require('./previews.cjs');
@@ -66,6 +67,30 @@ async function importFiles(files) {
   }
   await persist(); scanner?.invalidate(); void metadata?.sync(state.items); return state;
 }
+// "Open with Matro": files named on the command line at launch, or by a second launch while Matro runs.
+// The renderer is pinged and takes the file when it is ready; the latest request wins.
+const pendingOpen = mediaArgs(process.argv);
+async function takeOpen() {
+  const files = pendingOpen.splice(0);
+  for (const file of files) {
+    try {
+      if (!(await fs.stat(file)).isFile()) continue;
+      const same = item => process.platform === 'win32' ? item.path.toLowerCase() === file.toLowerCase() : item.path === file;
+      if (!state.items.some(same)) await importFiles([file]);
+      const item = state.items.find(same);
+      if (item) return item.id;
+    } catch { /* A file that vanished or cannot be read is skipped. */ }
+  }
+  return null;
+}
+app.on('second-instance', (_event, argv, cwd) => {
+  const files = mediaArgs(argv, { cwd });
+  if (files.length) pendingOpen.splice(0, pendingOpen.length, ...files);
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.focus();
+  if (files.length) win.webContents.send('library:open');
+});
 const subtitleStyle = value => {
   const style = value && typeof value === 'object' ? value : {}, pick = (key, options, fallback) => options.includes(style[key]) ? style[key] : fallback;
   return { size: Math.max(.5, Math.min(2, Number(style.size) || 1)), font: pick('font', ['sans', 'classic', 'serif', 'mono', 'casual'], 'sans'), background: pick('background', ['none', 'light', 'dark', 'solid'], 'light'), bold: !!style.bold, italic: !!style.italic, edge: pick('edge', ['none', 'outline', 'shadow'], 'none') };
@@ -254,6 +279,7 @@ app.whenReady().then(async () => {
   });
   handle('library:folder', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (result.canceled) return state; const root = result.filePaths[0]; const items = await scanLibraryFolder(root); if (!state.folders.includes(root)) state.folders.push(root); const existing = new Map(state.items.map(i => [i.id, i])); for (const item of items) existing.set(item.id, item); state.items = regroup([...existing.values()]); await persist(); scanner.invalidate(); void metadata.sync(state.items); return state; });
   handle('library:files', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Media', extensions: [...extensions] }, { name: 'All files', extensions: ['*'] }] }); return result.canceled ? state : importFiles(result.filePaths); });
+  handle('library:take-open', takeOpen);
   handle('library:import', files => { if (!Array.isArray(files) || files.length > 5000) throw new Error('Invalid file selection'); return importFiles(files); });
   handle('library:rescan', rescan);
   // Pick (or clear) a show's prelude. Rescanning restores the regular numbering of a file that stops being the prelude.

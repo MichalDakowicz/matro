@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('matro', {
   addFolder: () => ipcRenderer.invoke('library:folder'),
   connectSSH: options => ipcRenderer.invoke('library:ssh', options),
   openFiles: () => ipcRenderer.invoke('library:files'),
+  takeOpen: () => ipcRenderer.invoke('library:take-open'),
+  onOpen: callback => { const listener = () => callback(); ipcRenderer.on('library:open', listener); return () => ipcRenderer.removeListener('library:open', listener); },
   importDrop: files => ipcRenderer.invoke('library:import', Array.from(files, file => webUtils.getPathForFile(file))),
   rescan: () => ipcRenderer.invoke('library:rescan'),
   setPrelude: options => ipcRenderer.invoke('library:prelude', options),

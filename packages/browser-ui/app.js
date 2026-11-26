@@ -1554,6 +1554,14 @@ api?.onSegments(update => {
   segmentStatus = update.stage === 'decoding' ? `Scanning ${update.scanTitle} · ${update.percent}%${scannerSummary?.playback ? ' · Video has priority' : ''}` : update.stage === 'done' ? 'Markers saved. Background scanning continues through your library.' : update.stage === 'error' ? `Detection unavailable: ${update.message}` : update.stage === 'fingerprint' ? 'Scanning this episode…' : update.stage === 'unavailable' ? `Episode unavailable: ${update.message}. Continuing with other episodes…` : update.stage === 'started' ? (update.mode === 'quick' ? 'Checking opening and ending first…' : 'Checking full episode for more matches…') : `Compared ${update.completed} of ${update.total} season episodes. ${library.markers?.[update.id]?.length || 0} markers available; scanning continues…`;
   renderSegments(); renderTracks();
 });
+// "Open with Matro": a file handed over at launch, or by a second launch while this window is open.
+let openReady = false;
+async function playRequested() {
+  if (!openReady || !api.takeOpen) return;
+  const id = await api.takeOpen(); if (!id) return;
+  library.items = (await api.load()).items; await play(id);
+}
+api?.onOpen?.(() => void attempt(playRequested));
 if (!api) { root.innerHTML = '<main class="page"><h1 class="page-title">Open Matro in its desktop app.</h1><p class="page-sub">Run npm start from the project folder.</p></main>'; }
 else void attempt(async () => { library = await api.load();
   const original = library.progress;
@@ -1563,4 +1571,5 @@ else void attempt(async () => { library = await api.load();
   scannerSummary = library.scanner || await api.scannerStatus();
   library.markers ||= {};
   if (api.movieRequests?.openOnLoad) tab = 'movie-requests';
-  applyMotion(); renderLibrary(); if (restored.recovered) void attempt(save); });
+  applyMotion(); renderLibrary(); if (restored.recovered) void attempt(save);
+  openReady = true; await playRequested(); });
