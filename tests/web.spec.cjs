@@ -287,13 +287,16 @@ test('an open web library picks up a catalog change without a reload', async () 
     await page.getByLabel('Password', { exact: true }).fill('local-catalog-test');
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await page.locator('.dock [data-tab="movie"]').click();
-    await expect(page.getByRole('button', { name: 'Open Northbound', exact: true })).toBeVisible();
+    const northbound = page.getByRole('button', { name: 'Open Northbound', exact: true });
+    await expect(northbound).toBeVisible();
+    await northbound.focus();
     const newTitle = page.getByRole('button', { name: 'Open New Arrival', exact: true });
     await expect(newTitle).toHaveCount(0);
     const timeOrigin = await page.evaluate(() => performance.timeOrigin);
     await fs.copyFile(f.mkv, path.join(media, 'New Arrival.mkv'));
     await library.rescanAll();
     await expect(newTitle).toBeVisible({ timeout: 12000 });
+    await expect(northbound).toBeFocused();
     expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
 
     await page.getByRole('button', { name: 'Folders', exact: true }).press('Enter');
@@ -321,8 +324,8 @@ test('an open web library picks up a catalog change without a reload', async () 
     await page.setViewportSize({ width: 375, height: 800 });
     await page.evaluate(() => window.matroTheme.set('light'));
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    const movies = page.locator('.dock [data-tab="movie"]'), featured = page.locator('.show-title');
-    await movies.click();
+    const featured = page.locator('.show-title');
+    await page.getByRole('button', { name: 'Matro, back to landing', exact: true }).click();
     await expect(featured).toHaveText(/^(Northbound|New Arrival)$/);
     const start = await featured.textContent(), other = start === 'Northbound' ? 'New Arrival' : 'Northbound';
     await page.locator('#reel').press('ArrowLeft');

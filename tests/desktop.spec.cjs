@@ -394,7 +394,8 @@ test('show tracking, early progress, completion, season groups, skip markers and
     await page.getByRole('button', { name: 'Mark complete', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Completed ✓', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Next in queue' }).click();
-    await expect(page.locator('.player-heading h1')).toHaveText(two.title);
+    await expect(page.locator('.player-heading h1')).toHaveText('Second');
+    await expect(page.locator('.player-heading p')).toHaveText('Northbound · S1 E4');
     await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.1);
     await page.getByRole('button', { name: 'Pause', exact: true }).click();
     await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
@@ -413,7 +414,8 @@ test('show tracking, early progress, completion, season groups, skip markers and
     await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
     await expect(page.locator('.detail .season-heading')).toHaveCount(2);
     await page.locator(`.episode-row[data-play="${one.id}"]`).click();
-    await expect(page.locator('.player-heading h1')).toHaveText(one.title);
+    await expect(page.locator('.player-heading h1')).toHaveText('The Long Thaw');
+    await expect(page.locator('.player-heading p')).toHaveText('Northbound · S1 E3');
     await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.1);
     await page.getByRole('button', { name: 'Pause', exact: true }).click();
     await seekTo(2);
@@ -453,13 +455,15 @@ test('series repairs mixed saved queue, preserves removals and stops before othe
     await page.getByRole('button', { name: 'Queue', exact: true }).click();
     await page.locator(`[data-remove-queue="${items[1].id}"]`).click();
     await page.getByRole('button', { name: 'Next in queue', exact: true }).click();
-    await expect(page.locator('.player-heading h1')).toHaveText(items[2].title);
+    await expect(page.locator('.player-heading h1')).toHaveText('Queue');
+    await expect(page.locator('.player-heading p')).toHaveText('Northbound · S2 E1');
     await expect.poll(() => page.locator('video').evaluate(v => v.currentTime)).toBeGreaterThan(.1);
     await page.getByRole('button', { name: 'Pause', exact: true }).click();
     await expect(page.locator('#queue .queue-row')).toHaveCount(2);
     await page.getByRole('button', { name: 'Next in queue', exact: true }).click();
     await page.locator('video').evaluate(v => v.dispatchEvent(new Event('ended')));
-    await expect(page.locator('.player-heading h1')).toHaveText(items[2].title);
+    await expect(page.locator('.player-heading h1')).toHaveText('Queue');
+    await expect(page.locator('.player-heading p')).toHaveText('Northbound · S2 E1');
     expect((await page.evaluate(() => window.matro.load())).queue).toEqual([items[0].id, items[2].id]);
   } finally { await app.close(); }
 });
