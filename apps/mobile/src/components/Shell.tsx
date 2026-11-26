@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Image, Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { scanMessage } from '../../../../packages/core/client/scan-status.js';
 import { ThemeRow } from './ThemeRow';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,7 +8,7 @@ import { LANGUAGES, trackDefaults } from '../../../../packages/core/client/track
 import { languageName } from '../../../../packages/core/client/library';
 import type { Library, TrackDefaults } from '../lib/server';
 import { colors, dock as dockSize, fonts, radius, themed } from '../theme';
-import { Brand, Icon, IconButton, Row, SectionLabel, Sheet, styles as t, type Glyph } from './Matro';
+import { Brand, Icon, IconButton, Pill, Row, SectionLabel, Sheet, styles as t, type Glyph } from './Matro';
 import { useReduceMotion } from './Motion';
 
 /** Top of every screen: a fade from the ground colour so headings scrolling up never collide with the corner buttons. */

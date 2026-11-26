@@ -281,6 +281,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     const pending = list.filter(item => !savedIds.has(item.id));
     if (pending.length) setOfflineChoices(pending);
     else Alert.alert('Already saved', 'These titles are saved on this device.');
+  };
   // Marks a season, a whole show or earlier episodes in one request (or one local change when offline).
   const markMany = async (list: Item[], done: boolean) => {
     const current = dataRef.current, todo = list.filter(item => !!current?.progress[item.id]?.completed !== done);
