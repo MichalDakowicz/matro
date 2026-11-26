@@ -24,7 +24,7 @@ function dismissMarker(state, id, marker, legacyOnly = false) {
 function register(app) {
   const { router, db, library, tmdb, scanner } = app;
   const q = {
-    items: db.prepare('SELECT i.id, i.path, i.title, i.group_id, i.group_title, i.kind, i.season, i.episode, i.added, i.size, i.edition_group, i.edition_label, f.path AS folder FROM active_items i JOIN active_folders f ON f.id = i.folder_id ORDER BY i.path'),
+    items: db.prepare('SELECT i.id, i.path, i.title, i.group_id, i.group_title, i.kind, i.season, i.episode, i.added, i.duration, i.size, i.edition_group, i.edition_label, f.path AS folder FROM active_items i JOIN active_folders f ON f.id = i.folder_id ORDER BY i.path'),
     episodes: db.prepare("SELECT id FROM active_items WHERE kind = 'show' AND group_id = ?"),
     folders: db.prepare('SELECT path FROM active_folders ORDER BY path'),
     get: db.prepare('SELECT data, updated FROM user_state WHERE user_id = ?'),
@@ -48,7 +48,7 @@ function register(app) {
     const admin = ctx.user.role === 'admin', label = folder => admin ? folder : path.basename(folder);
     // Viewers see folder names and paths relative to them, never where the files live on the server.
     const items = q.items.all().map(r => ({ id: r.id, path: admin ? r.path : path.relative(r.folder, r.path), root: label(r.folder), title: r.title, group: r.group_title,
-      groupId: r.group_id, titlePath: r.group_id, kind: r.kind, season: r.season, episode: r.episode, format: path.extname(r.path).slice(1).toUpperCase(), added: r.added, ...(r.edition_group ? { editionGroup: r.edition_group, editionLabel: r.edition_label, size: r.size } : {}) }));
+      groupId: r.group_id, titlePath: r.group_id, kind: r.kind, season: r.season, episode: r.episode, format: path.extname(r.path).slice(1).toUpperCase(), added: r.added, duration: r.duration, ...(r.edition_group ? { editionGroup: r.edition_group, editionLabel: r.edition_label, size: r.size } : {}) }));
     const { progressTimes, queueEdited, ...state } = stateOf(ctx.user.id); scanner.refresh();
     return { user: ctx.user, folders: [...new Set(q.folders.all().map(f => label(f.path)))], items, ...state, markers: scanner.markers(state.markers, state.markerDismissals),
       scanStatus: library.scanStatus(admin), scanner: scanner.snapshot(), metadata: tmdb.snapshot(), metadataEnabled: tmdb.enabled, catalogRevision: library.state.revision, movieRequestsEnabled: true,

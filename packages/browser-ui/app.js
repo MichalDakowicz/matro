@@ -1,5 +1,6 @@
 import { savedPlayback as savedDiagnostics } from '../core/client/playback-info.js';
 import { scanMessage } from '../core/client/scan-status.js';
+import { browseTitles } from '../core/client/library-browse.js';
 import icons from './icons.json' with { type: 'json' };
 import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
@@ -52,6 +53,7 @@ $('#ssh-form').addEventListener('submit', async event => {
   } catch (error) { status.textContent = error.message || String(error); }
   finally { button.disabled = false; }
 });
+const browseOptions = new Map();
 let tab = 'home', query = '', view = 'library', selected = null, folderFilter = null, statusFilter = 'all';
 let current = null, info = null, video = null, offset = 0, audio = null, subtitle = null, subtitleText = null, subtitleUrl = null, delay = 0, audioDelay = 0;
 let queueOpen = false, sidePanel = null, generation = 0, lastSave = 0, idleTimer, toastTimer, subtitleGeneration = 0;
@@ -291,9 +293,10 @@ function poster(items) {
   const badge = status === 'done' ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : '';
   return `<button class="card" data-detail="${item.id}" aria-label="Open ${esc(displayName(item))}">${cover(item, badge + bar)}<span class="card-name">${esc(displayName(item))}</span><span class="card-meta">${esc(groupMeta(items))}</span></button>`;
 }
+const hideEpisodeSpoilers = item => library.preferences.spoilerSafe === true && item.kind === 'show' && !completed(item.id);
 function continueCard(i) {
   const p = library.progress[i.id] || { position: 0, duration: 0 }, backdrop = meta(i)?.backdrop;
-  return `<div class="continue-card"><button class="cw" data-play="${i.id}"><span class="cw-art ${artFor(i)}" data-frame="${i.kind === 'audio' ? '' : i.id}" data-time="${Math.max(0, (p.position || 0) - 1)}">${backdrop ? `<img src="${esc(backdrop)}" alt="">` : ''}<span class="cw-play">${icon('play')}</span><span class="cw-text"><span class="cw-line"><span class="card-name">${esc(displayName(i))}${i.kind === 'show' ? ` · ${code(i)}` : ''}</span><span class="card-meta">${p.duration ? `${fmt(p.duration - p.position)} left` : 'Up next'}</span></span>${p.duration ? `<span class="progress-track"><span class="progress-fill" data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}</span></span></button><button class="remove-continue" data-remove-continue="${i.id}" aria-label="Remove ${esc(i.group)} from Continue watching">×</button></div>`;
+  return `<div class="continue-card"><button class="cw" data-play="${i.id}"><span class="cw-art ${artFor(i)}" data-frame="${i.kind === 'audio' || hideEpisodeSpoilers(i) ? '' : i.id}" data-time="${Math.max(0, (p.position || 0) - 1)}">${backdrop ? `<img src="${esc(backdrop)}" alt="">` : ''}<span class="cw-play">${icon('play')}</span><span class="cw-text"><span class="cw-line"><span class="card-name">${esc(displayName(i))}${i.kind === 'show' ? ` · ${code(i)}` : ''}</span><span class="card-meta">${p.duration ? `${fmt(p.duration - p.position)} left` : 'Up next'}</span></span>${p.duration ? `<span class="progress-track"><span class="progress-fill" data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}</span></span></button><button class="remove-continue" data-remove-continue="${i.id}" aria-label="Remove ${esc(i.group)} from Continue watching">×</button></div>`;
 }
 // Real frames from one second before where you stopped (the moment you left, not a frame mid-cut), fetched one at a time (the preview decoder cancels overlapping requests).
 const frames = new Map();
@@ -331,7 +334,7 @@ function setTrackDefaults(change) {
 function footer() {
   const updatesEnabled = library.checkForUpdates === true;
   const updates = api.setUpdateChecks ? `<span class="theme-setting"><span>Check for updates</span><button type="button" class="switch ${updatesEnabled ? 'on' : ''}" data-update-checks role="switch" aria-label="Check for updates" aria-checked="${updatesEnabled}"></button></span>` : '';
-  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span>${library.scanStatus ? `<span data-library-scan-status role="status">${esc(scanMessage(library.scanStatus))}</span>` : ''}<span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span>${trackDefaultsSetting()}${updates}<button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
+  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span>${library.scanStatus ? `<span data-library-scan-status role="status">${esc(scanMessage(library.scanStatus))}</span>` : ''}<span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span>${trackDefaultsSetting()}${updates}<button class="chip spoiler-setting" data-action="spoiler-safe" aria-pressed="${library.preferences.spoilerSafe === true}">Hide episode spoilers</button><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
 }
 const sectionGrid = (title, items, count, more) => items.length ? `<section class="section"><div class="section-heading"><h2>${title}</h2><span>${count}${more ? ` · <button class="text-button" data-tab="${more}">See all</button>` : ''}</span></div><div class="grid">${items.map(poster).join('')}</div></section>` : '';
 const kinds = [['show', 'Shows', 'shows'], ['movie', 'Movies', 'titles'], ['audio', 'Music & audio', 'files']];
@@ -345,9 +348,20 @@ function landingPage() {
     ${kinds.map(([kind, title, noun]) => { const items = groups(kind); return sectionGrid(title, items, count(items.length, noun), folderFilter ? '' : kind); }).join('')}`;
 }
 function browsePage(kind) {
-  const [, title, noun] = kinds.find(([k]) => k === kind), all = groups(kind), items = all.filter(g => statusFilter === 'all' || groupStatus(g) === statusFilter);
+  const [, title, noun] = kinds.find(([k]) => k === kind), all = groups(kind);
+  const options = { sort: 'title', genre: '', short: false, ...browseOptions.get(kind) };
+  const genres = [...new Set(all.flatMap(([item]) => meta(item)?.genres || []))].sort((a, b) => a.localeCompare(b));
+  const items = browseTitles(all.filter(group => statusFilter === 'all' || groupStatus(group) === statusFilter), options, meta, displayName, library.progress);
+  const sorts = [['title', 'Title'], ['added', 'Date added'], ['year', 'Year'], ['rating', 'Rating']];
+  const option = (value, label, current) => `<option value="${esc(value)}"${value === current ? ' selected' : ''}>${esc(label)}</option>`;
+  const filters = `<div class="library-filters">
+    <label>Sort by <select data-browse-option="sort">${sorts.map(([value, label]) => option(value, label, options.sort)).join('')}</select></label>
+    ${genres.length ? `<label>Genre <select data-browse-option="genre">${option('', 'All genres', options.genre)}${genres.map(name => option(name, name, options.genre)).join('')}</select></label>` : ''}
+    ${kind === 'movie' ? `<label class="short-filter"><input type="checkbox" data-browse-option="short"${options.short ? ' checked' : ''}> Under 40 minutes</label>` : ''}
+  </div>`;
   const chips = [['all', 'All'], ['new', kind === 'audio' ? 'Not played' : 'Unwatched'], ['progress', 'In progress'], ['done', kind === 'audio' ? 'Played' : 'Watched']];
-  return `<div class="page-head"><div><h1 class="page-title">${title}</h1><p class="page-sub">${count(all.length, noun)}${statusFilter !== 'all' ? ` · ${items.length} shown` : ''}</p></div><div class="chip-row" role="group" aria-label="Filter by status">${chips.map(([id, label]) => `<button class="chip" data-status-filter="${id}" aria-pressed="${statusFilter === id}">${label}</button>`).join('')}</div></div>
+  return `<div class="page-head"><div><h1 class="page-title">${title}</h1><p class="page-sub">${count(all.length, noun)}${items.length !== all.length ? ` · ${items.length} shown` : ''}</p></div><div class="chip-row" role="group" aria-label="Filter by status">${chips.map(([id, label]) => `<button class="chip" data-status-filter="${id}" aria-pressed="${statusFilter === id}">${label}</button>`).join('')}</div></div>
+    ${filters}
     ${kind === 'show' ? '<section class="shows-scan" id="shows-scan" aria-labelledby="shows-scan-title"><div class="scan-heading"><h2 id="shows-scan-title">Intro &amp; outro scanning</h2><span class="scan-count"></span></div><progress aria-label="Episodes checked for intros and outros" hidden></progress><p class="scan-activity"></p></section>' : ''}
     ${items.length ? `<div class="grid">${items.map(poster).join('')}</div>` : `<div class="empty-results"><h2>Nothing here yet.</h2><p>${all.length ? 'No titles match this filter.' : 'Add a folder or open files to fill this shelf.'}</p></div>`}`;
 }
@@ -391,6 +405,12 @@ function renderLibrary() {
     downloads.openMovieSearch(request.title, request.year);
     goTab('downloads');
   });
+  root.querySelectorAll('[data-browse-option]').forEach(control => control.addEventListener('change', () => {
+    const key = control.dataset.browseOption;
+    browseOptions.set(tab, { ...browseOptions.get(tab), [key]: key === 'short' ? control.checked : control.value });
+    renderLibrary();
+    root.querySelector('[data-browse-option="' + key + '"]')?.focus();
+  }));
   setupReel(); renderScannerStatus(); void loadFrames();
 }
 function rerender() {
@@ -735,10 +755,10 @@ function editionsPanel(items) {
 }
 // Episodes: one season at a time behind season tabs, each episode a card with its TMDB still, summary and progress.
 let detailSeason = null;
-const episodeInfo = item => meta(item)?.episodes?.[item.season]?.[item.episode] || null;
+const episodeInfo = item => hideEpisodeSpoilers(item) ? null : meta(item)?.episodes?.[item.season]?.[item.episode] || null;
 function episodeCard(i, resume) {
   const e = episodeInfo(i), p = library.progress[i.id], done = completed(i.id), now = resume?.id === i.id, pct = p?.duration ? Math.min(100, p.position / p.duration * 100) : 0;
-  const facts = [e?.runtime ? `${e.runtime}m` : null, i.format, now ? `${fmt(p.position)} watched` : done ? 'Watched' : p?.position > 0 ? 'In progress' : null].filter(Boolean);
+  const facts = [e?.runtime ? `${e.runtime}m` : null, i.format, now && p?.position ? `${fmt(p.position)} watched` : done ? 'Watched' : p?.position > 0 ? 'In progress' : null].filter(Boolean);
   return `<div class="episode-entry ${now ? 'current' : ''}"><button class="episode-row" data-play="${i.id}"><span class="episode-still ${artFor(i)}">${e?.still ? `<img src="${esc(e.still)}" alt="" loading="lazy" draggable="false">` : ''}<span class="episode-code">${code(i)}</span>${done ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : ''}${pct && !done ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}<span class="episode-play">${icon('play')}</span></span><span class="episode-text min"><strong>${i.prelude ? '' : `${i.episode}. `}${esc(episodeName(i))}</strong><small>${facts.map(esc).join(' · ')}</small>${e?.overview ? `<span class="episode-overview">${esc(e.overview)}</span>` : ''}</span></button>${menu(menuToggle('icon-button', `More for ${episodeName(i)}`, icon('more')), `${api.offlineSave ? `<button class="text-button" data-offline-save="${i.id}" aria-label="Save ${esc(episodeName(i))} offline">Save offline</button>` : ''}<button class="text-button" data-complete="${i.id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(i.title)}">${done ? 'Completed' : 'Mark complete'}</button>`, 'episode-menu')}</div>`;
 }
 function episodesPanel(selected, items, resume, target) {
@@ -1531,6 +1551,12 @@ const actions = {
   'all-folders': () => { folderFilter = null; renderLibrary(); }, 'close-detail': closeDetail,
   about: () => { footerOpen = !footerOpen; $('#library-footer')?.classList.toggle('open', footerOpen); $('.help-button')?.setAttribute('aria-expanded', String(footerOpen)); },
   'fix-match': () => openMatch(selected), 'open-tmdb': () => openTitlePage('tmdb'), 'open-imdb': () => openTitlePage('imdb'), 'pick-prelude': () => setPrelude(false), 'clear-prelude': () => setPrelude(true), 'close-match': () => { $('#match-dialog')?.close(); matchItem = null; },
+  'spoiler-safe': async () => {
+    library.preferences.spoilerSafe = library.preferences.spoilerSafe !== true;
+    rerender();
+    await save();
+    root.querySelector('[data-action=spoiler-safe]')?.focus();
+  },
   shortcuts: () => $('#shortcuts').showModal(), library: backToLibrary,
   toggle, backward: () => seek(offset + video.currentTime - SKIP), forward: () => seek(offset + video.currentTime + SKIP),
   previous: () => step(-1), next: () => step(1), fullscreen: () => api.window('fullscreen'),

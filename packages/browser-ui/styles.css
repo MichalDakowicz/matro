@@ -250,3 +250,5 @@ body.in-player .desktop-source-button{display:none}
 :root[data-theme=light] .reel-poster:before{content:'';position:absolute;inset:0;z-index:3;pointer-events:none;background:rgb(var(--bg-rgb));opacity:var(--wash,0)}
 .scan-errors{display:grid;gap:6px;color:var(--muted);font-size:13px;margin:8px 0 0;padding-left:22px}.scan-errors:empty{display:none}
 .edition-row{min-height:44px}.edition-row>svg{width:20px;height:20px;flex:none}
+
+.library-filters{display:flex;align-items:center;flex-wrap:wrap;gap:8px 18px;margin:0 0 18px}.library-filters label{display:flex;align-items:center;gap:8px;color:var(--soft);font-size:13px}.library-filters select{min-height:44px;max-width:180px;padding:0 10px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--text)}.short-filter,.library-footer .spoiler-setting,.page-head [data-status-filter]{min-height:44px}
