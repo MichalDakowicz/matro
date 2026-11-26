@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { FlatList, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { FocusInput as TextInput, FocusPressable as Pressable, isAndroidTv } from '../components/TvFocus';
 import { request, type Item, type Library, type ScannerStatus } from '../lib/server';
 import { loadRecents, saveRecents } from '../lib/storage';
 import { plural, rememberQuery } from '../lib/text';
@@ -7,7 +8,7 @@ import { titleShelves } from '../../../../packages/core/client/title-shelves.js'
 import { metadataFor, nameFor, statusOf, titleKey } from '../../../../packages/core/client/library';
 import { colors, fonts, radius, themed } from '../theme';
 import { Chip, Icon, MediaArt, Pill, styles as t } from '../components/Matro';
-import { ContinueRow, FeaturedReel, PosterCard, Shelf, gridCardWidth, gridColumns, type ArtProps } from '../components/LibraryParts';
+import { ContinueRow, FeaturedReel, FeaturedShelf, PosterCard, Shelf, gridCardWidth, gridColumns, type ArtProps } from '../components/LibraryParts';
 
 type Layout = { top: number; bottom: number };
 const content = (insets: Layout) => ({ paddingTop: insets.top + 76, paddingBottom: insets.bottom + 120, paddingHorizontal: 18 });
@@ -30,7 +31,7 @@ export function HomeView({ data, groups, featured, continues, layout, chips, ref
   return <ScrollView contentContainerStyle={content(layout)} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.text} progressViewOffset={layout.top + 70} />}>
     <View style={{ marginBottom: 20 }}>{chips}</View>
     {!data.items.length ? <View style={{ minHeight: 420, justifyContent: 'center', gap: 18 }}><Text style={t.dim}>Matro · your library</Text><Text style={[t.display, { fontSize: 38, lineHeight: 40 }]}>Your collection.{'\n'}Your kind of player.</Text><Text style={t.muted}>All your films, shows and favourite files in one quiet place. Add a folder on your server to build your library.</Text>{data.user.role === 'admin' && <Pill label="Add folder" icon="folder" onPress={onAddFolder} primary />}</View> : <>
-      <FeaturedReel key={`${art.base}:${featured.length}`} {...art} data={data} groups={featured} onPlay={onPlay} onDetail={item => onOpen(groups.find(items => titleKey(items[0]) === titleKey(item)) || [item])} />
+      {isAndroidTv ? <FeaturedShelf {...art} data={data} groups={featured} onDetail={item => onOpen(groups.find(items => titleKey(items[0]) === titleKey(item)) || [item])} /> : <FeaturedReel key={`${art.base}:${featured.length}`} {...art} data={data} groups={featured} onPlay={onPlay} onDetail={item => onOpen(groups.find(items => titleKey(items[0]) === titleKey(item)) || [item])} />}
       <ContinueRow {...art} data={data} items={continues} onPlay={onPlay} onRemove={onRemoveContinue} />
       {titleShelves(groups, data.lists, titleKey, item => metadataFor(data, item)).map(shelf => <Shelf key={shelf.id} title={shelf.name} count={shelf.groups.length} noun="titles" onSeeAll={() => onSeeAll('list:' + shelf.id)}>
         {shelf.groups.slice(0, 8).map(items => <PosterCard key={titleKey(items[0])} {...art} data={data} items={items} width={128} onPress={() => onOpen(items)} />)}
@@ -62,7 +63,7 @@ export function BrowseView({ data, groups, kind, title, layout, chips, refreshin
     return groups.filter(items => filter === 'all' || statusOf(data, items) === filter).sort(order[sort]);
   }, [groups, data, filter, sort]);
   const noun = kind === 'show' ? 'show' : 'title';
-  return <FlatList key={columns} data={shown} numColumns={columns} keyExtractor={items => titleKey(items[0])} contentContainerStyle={content(layout)} columnWrapperStyle={{ gap: 12 }} showsVerticalScrollIndicator={false}
+  return <FlatList removeClippedSubviews={isAndroidTv ? false : undefined} key={columns} data={shown} numColumns={columns} keyExtractor={items => titleKey(items[0])} contentContainerStyle={content(layout)} columnWrapperStyle={{ gap: 12 }} showsVerticalScrollIndicator={false}
     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.text} progressViewOffset={layout.top + 70} />}
     ListHeaderComponent={<View style={{ marginBottom: 18 }}>
       {chips}
@@ -112,7 +113,7 @@ export function SearchView({ data, groups, layout, onOpen, ...art }: ArtProps & 
   const open = (items: Item[]) => { remember(query); onOpen(items); };
   const meta = (items: Item[]) => { const item = items[0], m = metadataFor(data, item); return [item.kind === 'show' ? 'Series' : 'Movie', m.year, item.kind === 'show' ? plural(new Set(items.map(i => i.season)).size, 'season') : ''].filter(Boolean).join(' · '); };
   const tags = (items: Item[]) => [...new Set(items.map(i => i.format))].slice(0, 3).concat(statusOf(data, items) === 'new' ? ['Unwatched'] : statusOf(data, items) === 'done' ? ['Watched'] : ['In progress']);
-  return <FlatList data={results} keyExtractor={items => titleKey(items[0])} contentContainerStyle={content(layout)} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
+  return <FlatList removeClippedSubviews={isAndroidTv ? false : undefined} data={results} keyExtractor={items => titleKey(items[0])} contentContainerStyle={content(layout)} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
     ListHeaderComponent={<View style={{ gap: 16, marginBottom: 14 }}>
       <Text accessibilityRole="header" style={t.heading}>Search</Text>
       <View style={s.search}><Icon name="search" color={colors.muted} />

@@ -1,5 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { IconButton, SkipIcon, styles as t } from '../components/Matro';
+import { isAndroidTv } from '../components/TvFocus';
 import { colors, fonts, themed } from '../theme';
 import { DOUBLE_TAP_SECONDS } from './playerTools';
 import { speedLabel } from './playerView';
@@ -12,7 +13,7 @@ export function Transport({ playing, hasPrevious, hasNext, landscape, onPrevious
   return <View pointerEvents="box-none" style={s.transport}>
     <IconButton name="prev" label="Previous in queue" disabled={!hasPrevious} size={side} onPress={onPrevious} />
     <IconButton label={`Back ${DOUBLE_TAP_SECONDS} seconds`} size={side} onPress={() => onSkip(-DOUBLE_TAP_SECONDS)}><SkipIcon back seconds={DOUBLE_TAP_SECONDS} /></IconButton>
-    <IconButton name={playing ? 'pause' : 'play'} label={playing ? 'Pause' : 'Play'} size={landscape ? 56 : 64} onPress={onToggle} />
+    <IconButton name={playing ? 'pause' : 'play'} label={playing ? 'Pause' : 'Play'} size={landscape ? 56 : 64} preferredFocus={isAndroidTv} onPress={onToggle} />
     <IconButton label={`Forward ${DOUBLE_TAP_SECONDS} seconds`} size={side} onPress={() => onSkip(DOUBLE_TAP_SECONDS)}><SkipIcon seconds={DOUBLE_TAP_SECONDS} /></IconButton>
     <IconButton name="next" label="Next in queue" disabled={!hasNext} size={side} onPress={onNext} />
   </View>;

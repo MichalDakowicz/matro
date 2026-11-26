@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FocusPressable as Pressable, isAndroidTv } from '../components/TvFocus';
 import Slider from '@react-native-community/slider';
 import { Icon, styles as t } from '../components/Matro';
 import type { Track } from '../lib/server';
@@ -57,9 +58,9 @@ export function TracksSheet({ audio, audioIndex, onAudio, subtitles, subtitleInd
         </Section>
         <Section title="Size">
           <View style={s.sizeRow}>
-            <Slider accessibilityLabel="Subtitle size" accessibilityValue={{ text: sizeLabel(shown) }} style={{ flex: 1, height: 44 }} minimumValue={.6} maximumValue={1.8} step={.05} value={size} minimumTrackTintColor={colors.primary} maximumTrackTintColor={chrome.track} thumbTintColor={colors.primary}
+            {isAndroidTv ? <HoldStepper label="Subtitle size" value={sizeLabel(size)} minusLabel="Decrease subtitle size" plusLabel="Increase subtitle size" onStep={direction => onSize(Math.max(.6, Math.min(1.8, size + direction * .1)))} /> : <><Slider accessibilityLabel="Subtitle size" accessibilityValue={{ text: sizeLabel(shown) }} style={{ flex: 1, height: 44 }} minimumValue={.6} maximumValue={1.8} step={.05} value={size} minimumTrackTintColor={colors.primary} maximumTrackTintColor={chrome.track} thumbTintColor={colors.primary}
               onValueChange={setDraft} onSlidingComplete={value => { setDraft(null); onSize(value); }} />
-            <Text style={s.readout}>{sizeLabel(shown)}</Text>
+            <Text style={s.readout}>{sizeLabel(shown)}</Text></>}
           </View>
           <View style={s.preview}><Text style={[s.sample, subtitleTextStyle(style, colors.ground), { fontSize: previewFontSize(shown), lineHeight: Math.round(previewFontSize(shown) * 1.35) }]}>Sample caption</Text></View>
           {size !== 1 ? <ChipRow><Chip label="Reset size" onPress={() => { setDraft(null); onSize(1); }} /></ChipRow> : null}

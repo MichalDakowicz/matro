@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Image, Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Keyboard, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FocusPressable as Pressable } from './TvFocus';
 import { scanMessage } from '../../../../packages/core/client/scan-status.js';
 import { ThemeRow } from './ThemeRow';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';

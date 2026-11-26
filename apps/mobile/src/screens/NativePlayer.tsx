@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, AppState, BackHandler, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Alert, Animated, AppState, BackHandler, Platform, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { FocusPressable as Pressable, isAndroidTv } from '../components/TvFocus';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { isPictureInPictureSupported, VideoView } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -29,7 +30,7 @@ import { useBackgroundAudio } from '../player/useBackgroundAudio';
 import { usePlayerGestures } from '../player/usePlayerGestures';
 import { useSkipEditing } from '../player/useSkipEditing';
 import { useSleepTimer } from '../player/useSleepTimer';
-import { IconButton, Pill } from '../components/Matro';
+import { IconButton, Pill, ProgressBar } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
 import { colors, fonts } from '../theme';
 import type { SavedMedia } from '../lib/offline';
@@ -67,6 +68,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
     return () => { subscription.remove(); setStatusBarHidden(false, 'fade'); if (Platform.OS === 'android') NavigationBar.setHidden(false); };
   }, [landscape]);
   useEffect(() => {
+    if (isAndroidTv) return;
     // Unlocking alone leaves Android in the last forced orientation when the
     // user's system rotation lock is enabled. Restore the entry orientation first.
     const entry = Promise.all([ScreenOrientation.getOrientationAsync(), ScreenOrientation.getOrientationLockAsync()]);
@@ -82,10 +84,10 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
     };
   }, []);
   useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => { if (landscape) toggleFullscreen(); else void leave(); return true; });
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => { if (landscape && !isAndroidTv) toggleFullscreen(); else void leave(); return true; });
     return () => sub.remove();
   }, [landscape, p.persist]);
-  useEffect(() => { if (!p.playing || p.busy || sheet || scrub !== null || !controls) return; const timer = setTimeout(() => setControls(false), 3200); return () => clearTimeout(timer); }, [p.playing, p.busy, controls, sheet, scrub]);
+  useEffect(() => { if (isAndroidTv || !p.playing || p.busy || sheet || scrub !== null || !controls) return; const timer = setTimeout(() => setControls(false), 3200); return () => clearTimeout(timer); }, [p.playing, p.busy, controls, sheet, scrub]);
   useEffect(() => { if (!p.playing || p.busy || p.error) setControls(true); }, [p.playing, p.busy, p.error]);
   const select = async (next: Item) => { setSheet(null); await p.persist().catch(() => {}); p.player.pause(); onSelect(next); };
   const skip = (delta: number) => { setControls(true); p.seek(p.position + delta); };
@@ -127,11 +129,12 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
   const meta = metadataFor(data, item);
   const subtitle = item.kind === 'show' ? `${nameFor(data, item)} · S${item.season} E${item.episode}` : movieFacts({ year: meta.year, runtime: meta.runtime, duration, kind: item.kind });
   return <View style={s.fill}>
-    <VideoView ref={videoView} player={p.player} nativeControls={false} contentFit={fit} fullscreenOptions={{ enable: false }} style={StyleSheet.absoluteFill}
+    <VideoView ref={videoView} player={p.player} nativeControls={false} contentFit={fit} fullscreenOptions={{ enable: false }} focusable={isAndroidTv ? false : undefined} style={StyleSheet.absoluteFill}
       allowsPictureInPicture={p.allowPiP} startsPictureInPictureAutomatically={p.autoPiP}
       onPictureInPictureStart={() => { p.pictureInPicture.started(); setSheet(null); }}
       onPictureInPictureStop={() => { p.pictureInPicture.stopped(); setControls(true); }} />
-    <Pressable style={StyleSheet.absoluteFill} {...gestures.bind} accessibilityLabel="Show or hide playback controls" />
+    {isAndroidTv ? (!controls && <View style={[s.showControls, { bottom: Math.max(16, insets.bottom) }]}><Pill label="Show controls" compact preferredFocus onPress={() => setControls(true)} /></View>)
+      : <Pressable style={StyleSheet.absoluteFill} {...gestures.bind} accessibilityLabel="Show or hide playback controls" />}
     {p.caption && captionHeight >= captionLineHeight + 4 && <Animated.View pointerEvents="none" style={[s.captionArea, { top: captionTop, bottom: captionBottom, left: captionLeft, right: captionRight, transform: [{ translateY: captionShift }] }]}>
       <Text onLayout={({ nativeEvent: { layout } }) => setCaptionSize({ width: layout.width, height: layout.height })}
         numberOfLines={Math.floor((captionHeight - 4) / captionLineHeight)} style={[s.caption, styled, {
@@ -139,23 +142,28 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
           maxWidth: Math.min(captionWidth, width * (landscape ? .8 : .92)), fontSize: captionLineHeight * 20 / 27, lineHeight: captionLineHeight,
         }]}>{p.caption.trim()}</Text>
     </Animated.View>}
-    <Animated.View pointerEvents={controls ? 'box-none' : 'none'} style={[StyleSheet.absoluteFill, { opacity: fade }]}>
+    {(!isAndroidTv || controls) && <Animated.View pointerEvents={controls ? 'box-none' : 'none'} style={[StyleSheet.absoluteFill, { opacity: isAndroidTv ? 1 : fade }]}>
       <LinearGradient pointerEvents="none" colors={[chrome.fadeStart, 'transparent']} style={[s.topFade, { height: insets.top + 120 }]} />
       <View onLayout={({ nativeEvent: { layout } }) => setHeaderEnd(layout.y + layout.height)} style={[s.top, { top: landscape ? 8 : insets.top + 12, left: Math.max(14, insets.left), right: Math.max(14, insets.right) }]}>
         <IconButton name="back" label="Back to library" onPress={() => void leave()} />
         <View style={{ flex: 1, gap: 4 }}><Text numberOfLines={1} style={s.playerTitle}>{title}</Text><Text numberOfLines={1} style={s.playerSubtitle}>{subtitle}</Text></View>
-        <IconButton name="fullscreen" label={landscape ? 'Exit fullscreen' : 'Fullscreen'} onPress={toggleFullscreen} />
+        {isAndroidTv ? <Pill label="Hide controls" compact onPress={() => setControls(false)} />
+          : <IconButton name="fullscreen" label={landscape ? 'Exit fullscreen' : 'Fullscreen'} onPress={toggleFullscreen} />}
       </View>
       {!p.busy && !p.error ? <View pointerEvents="box-none" style={s.center}>
         <Transport playing={p.playing} hasPrevious={hasPrevious} hasNext={hasNext} landscape={landscape} onPrevious={() => void select(queue[queueIndex - 1])} onNext={() => void select(queue[queueIndex + 1])} onSkip={skip} onToggle={() => { setControls(true); p.toggle(); }} />
       </View> : null}
       <LinearGradient pointerEvents="none" colors={['transparent', chrome.fadeEnd]} style={[s.bottomFade, { height: (landscape ? 120 : 150) + insets.bottom }]} />
       <View onLayout={({ nativeEvent }) => setControlsTop(nativeEvent.layout.y)} style={[s.controls, { left: Math.max(14, insets.left), right: Math.max(14, insets.right), bottom: landscape ? Math.max(6, insets.bottom) : insets.bottom + 8 }]}>
-        <SeekBar duration={duration} position={p.position} buffered={p.buffered} scrub={scrub} chapters={p.info?.chapters} markers={p.markers} frames={!offline && p.info?.video ? { base, headers, id: item.id } : null}
-          onScrubStart={() => setControls(true)} onScrub={setScrub} onSeek={p.seek} />
+        {isAndroidTv ? <View style={s.tvSeek}>
+          <Pill label="−30 s" compact disabled={!duration} onPress={() => skip(-30)} />
+          <View style={{ flex: 1 }}><ProgressBar onArt value={duration ? p.position / duration : 0} /></View>
+          <Pill label="+30 s" compact disabled={!duration} onPress={() => skip(30)} />
+        </View> : <SeekBar duration={duration} position={p.position} buffered={p.buffered} scrub={scrub} chapters={p.info?.chapters} markers={p.markers} frames={!offline && p.info?.video ? { base, headers, id: item.id } : null}
+          onScrubStart={() => setControls(true)} onScrub={setScrub} onSeek={p.seek} />}
         <UtilityRow rate={p.rate} panel={sheet} landscape={landscape} onPanel={open} onPiP={p.allowPiP ? enterPictureInPicture : undefined} pipDisabled={p.busy || !!p.error} />
       </View>
-    </Animated.View>
+    </Animated.View>}
     <PlayerStatus busy={p.busy} error={p.error} onRetry={p.retry} onCancel={() => void leave()} />
     {indicator || gestures.label ? <View pointerEvents="none" style={[s.fitIndicator, { top: landscape ? 62 : insets.top + 68 }]}>
       <Text accessibilityLiveRegion="polite" style={s.indicatorLabel}>{indicator || gestures.label}</Text>
@@ -180,6 +188,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
 }
 const s = StyleSheet.create({
   fill: { flex: 1, backgroundColor: chrome.video }, topFade: { position: 'absolute', top: 0, left: 0, right: 0 }, top: { position: 'absolute', flexDirection: 'row', alignItems: 'center', gap: 8 }, playerTitle: { color: colors.text, fontFamily: fonts.medium, fontSize: 15, lineHeight: 21 }, playerSubtitle: { color: colors.dim, fontFamily: fonts.regular, fontSize: 12 },
+  tvSeek: { flexDirection: "row", alignItems: "center", gap: 12 },
   bottomFade: { position: 'absolute', bottom: 0, left: 0, right: 0 }, controls: { position: 'absolute' }, center: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
   fitIndicator: { position: 'absolute', alignSelf: 'center', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: chrome.glass, borderWidth: 1, borderColor: chrome.glassLine }, indicatorLabel: { color: colors.text, fontFamily: fonts.regular, fontSize: 14 },
   captionArea: { position: 'absolute', overflow: 'hidden' }, caption: { position: 'absolute', top: 0, left: 0, color: colors.primary, fontFamily: fonts.medium, backgroundColor: colors.inputFill, textAlign: 'center', includeFontPadding: false, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 3, textShadowColor: colors.ground, textShadowRadius: 3 },

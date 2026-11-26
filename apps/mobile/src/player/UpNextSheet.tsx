@@ -1,4 +1,5 @@
-import { FlatList, Pressable, Text, View } from 'react-native';
+import { FlatList, Text, View } from 'react-native';
+import { FocusPressable as Pressable, isAndroidTv } from '../components/TvFocus';
 import { episodeName, metadataFor, nameFor } from '../../../../packages/core/client/library';
 import { Icon, IconButton, MediaArt, styles as t } from '../components/Matro';
 import type { Item, Library } from '../lib/server';
@@ -14,7 +15,7 @@ export function UpNextSheet({ base, headers, data, item, queue, autoplay, canEdi
   return <View style={{ flexShrink: 1 }}>
     <SwitchRow label="Autoplay next" hint="Plays the next episode when one ends" value={autoplay} onChange={onAutoplay} />
     {canEdit && queue.some(entry => watched(entry) && entry.id !== item.id) ? <Chip label="Clear watched" onPress={onClearWatched} /> : null}
-    <FlatList data={queue} keyExtractor={entry => entry.id} showsVerticalScrollIndicator={false} renderItem={({ item: entry, index }) => {
+    <FlatList removeClippedSubviews={isAndroidTv ? false : undefined} data={queue} keyExtractor={entry => entry.id} showsVerticalScrollIndicator={false} renderItem={({ item: entry, index }) => {
       const label = entry.kind === 'show' ? episodeName(data, entry) : nameFor(data, entry), now = entry.id === item.id;
       return <View>
         {entry.kind === 'show' && (index === 0 || queue[index - 1].season !== entry.season) ? <Text style={{ fontSize: 14, color: colors.text, fontFamily: fonts.semibold, marginTop: 14, marginBottom: 10 }}>Season {entry.season}</Text> : null}

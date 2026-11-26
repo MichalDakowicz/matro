@@ -1,6 +1,7 @@
 import { memo, type ReactNode } from 'react';
-import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Image, Modal, ScrollView, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { FocusPressable as Pressable, isAndroidTv } from './TvFocus';
 import Svg, { Path, Text as SvgText, SvgXml } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import icons from '../../../../packages/browser-ui/icons.json';
@@ -18,16 +19,16 @@ export function SkipIcon({ back, seconds = 10 }: { back?: boolean; seconds?: num
 }
 /** Every control keeps a 44 dp touch area: anything drawn smaller is padded out with hitSlop. */
 const slop = (height: number) => { const extra = Math.max(0, Math.ceil((44 - height) / 2)); return { top: extra, bottom: extra, left: extra, right: extra }; };
-const pressed = (reduce: boolean) => reduce ? { opacity: .68 } : { opacity: .68, transform: [{ scale: .97 }] };
+const pressed = (reduce: boolean) => reduce || isAndroidTv ? { opacity: .68 } : { opacity: .68, transform: [{ scale: .97 }] };
 
-export function IconButton({ name, label, onPress, active, disabled, size = 44, color, children }: { name?: Glyph; label: string; onPress: () => void; active?: boolean; disabled?: boolean; size?: number; color?: string; children?: ReactNode }) {
+export function IconButton({ name, label, onPress, active, disabled, size = 44, color, preferredFocus, children }: { name?: Glyph; label: string; onPress: () => void; active?: boolean; disabled?: boolean; size?: number; color?: string; preferredFocus?: boolean; children?: ReactNode }) {
   const reduce = useReduceMotion();
-  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected: !!active, disabled: !!disabled }} disabled={disabled} onPress={onPress} hitSlop={slop(size)} style={({ pressed: down }) => [styles.iconButton, { width: size, height: size }, active && styles.selected, down && pressed(reduce), disabled && { opacity: .3 }]}>{children || (name && <Icon name={name} color={color} />)}</Pressable>;
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected: !!active, disabled: !!disabled }} hasTVPreferredFocus={preferredFocus} disabled={disabled} onPress={onPress} hitSlop={slop(size)} style={({ pressed: down }) => [styles.iconButton, { width: size, height: size }, active && styles.selected, down && pressed(reduce), disabled && { opacity: .3 }]}>{children || (name && <Icon name={name} color={color} />)}</Pressable>;
 }
-export function Pill({ label, accessibilityLabel = label, icon, onPress, primary, selected, compact, disabled, style }: { label: string; accessibilityLabel?: string; icon?: Glyph; onPress: () => void; primary?: boolean; selected?: boolean; compact?: boolean; disabled?: boolean; style?: StyleProp<ViewStyle> }) {
+export function Pill({ label, accessibilityLabel = label, icon, onPress, primary, selected, compact, disabled, preferredFocus, style }: { label: string; accessibilityLabel?: string; icon?: Glyph; onPress: () => void; primary?: boolean; selected?: boolean; compact?: boolean; disabled?: boolean; preferredFocus?: boolean; style?: StyleProp<ViewStyle> }) {
   primary = primary || selected;
   const reduce = useReduceMotion();
-  return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityState={{ selected, disabled: !!disabled }} disabled={disabled} onPress={onPress} hitSlop={compact ? slop(38) : undefined} style={({ pressed: down }) => [styles.pill, primary && styles.primary, compact && { height: 38, paddingHorizontal: 14 }, style, down && pressed(reduce), disabled && { opacity: .4 }]}>{icon && <Icon name={icon} size={18} color={primary ? colors.onPrimary : colors.text} />}<Text style={[styles.pillLabel, primary && { color: colors.onPrimary }, compact && { fontSize: 12 }]}>{label}</Text></Pressable>;
+  return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityState={{ selected, disabled: !!disabled }} hasTVPreferredFocus={preferredFocus} disabled={disabled} onPress={onPress} hitSlop={compact ? slop(38) : undefined} style={({ pressed: down }) => [styles.pill, primary && styles.primary, compact && { height: 38, paddingHorizontal: 14 }, style, down && pressed(reduce), disabled && { opacity: .4 }]}>{icon && <Icon name={icon} size={18} color={primary ? colors.onPrimary : colors.text} />}<Text style={[styles.pillLabel, primary && { color: colors.onPrimary }, compact && { fontSize: 12 }]}>{label}</Text></Pressable>;
 }
 /** Filter / kind chip: warm white when selected, a quiet fill otherwise. */
 export function Chip({ label, selected, onPress, small }: { label: string; selected?: boolean; onPress: () => void; small?: boolean }) {
@@ -48,11 +49,11 @@ export const ProgressBar = ({ value, onArt }: { value: number; onArt?: boolean }
 /** Bottom sheet on a scrim. Android Back and a tap outside both close it. */
 export function Sheet({ visible, onClose, title, children }: { visible: boolean; onClose: () => void; title: string; children: ReactNode }) {
   const insets = useSafeAreaInsets();
-  return <Modal transparent visible={visible} animationType="fade" statusBarTranslucent onRequestClose={onClose}>
-    <Pressable style={styles.scrim} onPress={onClose} accessibilityLabel={`Close ${title}`} />
+  return <Modal transparent visible={visible} animationType={isAndroidTv ? "none" : "fade"} statusBarTranslucent onRequestClose={onClose}>
+    <Pressable focusable={isAndroidTv ? false : undefined} style={styles.scrim} onPress={onClose} accessibilityLabel={`Close ${title}`} />
     <View style={[styles.sheet, { paddingBottom: insets.bottom + 20 }]}>
       <View style={styles.handle} />
-      <View style={[styles.sectionHeading, { marginBottom: 12 }]}><Text accessibilityRole="header" style={[styles.sheetTitle, { flex: 1 }]}>{title}</Text><IconButton name="close" label={`Close ${title}`} onPress={onClose} /></View>
+      <View style={[styles.sectionHeading, { marginBottom: 12 }]}><Text accessibilityRole="header" style={[styles.sheetTitle, { flex: 1 }]}>{title}</Text><IconButton name="close" preferredFocus={isAndroidTv} label={`Close ${title}`} onPress={onClose} /></View>
       <ScrollView style={{ flexGrow: 0 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">{children}</ScrollView>
     </View>
   </Modal>;

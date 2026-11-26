@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Alert, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, FlatList, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FocusInput as TextInput, FocusPressable as Pressable, isAndroidTv } from '../components/TvFocus';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { File } from 'expo-file-system';
@@ -89,7 +90,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
       <Text style={[t.dim, { marginTop: 12, lineHeight: 20 }]}>{facts}</Text>
       {m.overview ? <Text style={[t.muted, { fontSize: 14, lineHeight: 23, marginTop: 14 }]}>{m.overview}</Text> : null}
       <View style={[t.row, { marginTop: 20 }]}>
-        <Pill label={resume ? `Resume  ${formatTime(p.position)}` : 'Play now'} icon="play" primary onPress={() => onPlay(target)} style={{ flex: 1 }} />
+        <Pill preferredFocus={isAndroidTv} label={resume ? `Resume  ${formatTime(p.position)}` : 'Play now'} icon="play" primary onPress={() => onPlay(target)} style={{ flex: 1 }} />
         {resume && <View style={s.circleAction}><IconButton name="restart" label="Play from start" size={50} onPress={() => onPlay(target, 0)} /></View>}
       </View>
       <View style={[t.row, { marginTop: 10, flexWrap: 'wrap' }]}>
@@ -128,7 +129,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
   // Episodes before the chosen one that are not watched yet (items are in play order).
   const earlier = episode ? items.slice(0, items.indexOf(episode)).filter(i => !data.progress[i.id]?.completed) : [];
   return <View style={s.fill}>
-    <FlatList data={show ? inSeason : []} keyExtractor={i => i.id} contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: insets.bottom + 40 }} ListHeaderComponent={header} ListFooterComponent={footer} showsVerticalScrollIndicator={false}
+    <FlatList removeClippedSubviews={isAndroidTv ? false : undefined} data={show ? inSeason : []} keyExtractor={i => i.id} contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: insets.bottom + 40 }} ListHeaderComponent={header} ListFooterComponent={footer} showsVerticalScrollIndicator={false}
       scrollEventThrottle={64} onScroll={e => { const far = e.nativeEvent.contentOffset.y > 160; if (far !== scrolled) setScrolled(far); }}
       renderItem={({ item: ep }) => {
         const e = metadataFor(data, ep).episodes?.[String(ep.season)]?.[String(ep.episode)], progress = data.progress[ep.id], watched = progress?.completed, label = episodeTitle(ep);

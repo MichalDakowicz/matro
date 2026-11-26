@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { StyleSheet, Switch, Text, View } from 'react-native';
+import { FocusPressable as Pressable } from '../components/TvFocus';
 import { styles as t } from '../components/Matro';
 import { colors, fonts, themed } from '../theme';
 

@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Animated, FlatList, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Animated, FlatList, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { FocusPressable as Pressable, isAndroidTv } from './TvFocus';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { Item, Library } from '../lib/server';
 import { formatTime, metadataFor, nameFor, resumeItem, statusOf } from '../../../../packages/core/client/library';
@@ -12,7 +13,7 @@ import { Lift, useReduceMotion } from './Motion';
 export type ArtProps = { base: string; headers: Record<string, string> };
 
 /** Phones under 380 dp get two columns; wider ones three or more. */
-export const gridColumns = (width: number) => width < 380 ? 2 : Math.max(3, Math.floor((width - 24) / 108));
+export const gridColumns = (width: number) => width < 380 ? 2 : Math.max(3, Math.floor((width - 24) / (isAndroidTv ? 158 : 108)));
 export const gridCardWidth = (width: number, columns: number) => (width - 36 - (columns - 1) * 12) / columns;
 
 export const PosterCard = memo(function PosterCard({ data, items, width, onPress, ...art }: ArtProps & { data: Library; items: Item[]; width: number; onPress: () => void }) {
@@ -27,6 +28,16 @@ export const PosterCard = memo(function PosterCard({ data, items, width, onPress
     {meta ? <Text numberOfLines={1} style={s.cardMeta}>{meta}</Text> : null}
   </Lift>;
 });
+
+export function FeaturedShelf({ data, groups, onDetail, ...art }: ArtProps & { data: Library; groups: Item[][]; onDetail: (item: Item) => void }) {
+  if (!groups.length) return null;
+  return <View style={t.section}>
+    <Text style={[t.sectionTitle, { marginBottom: 16 }]}>Featured from your library</Text>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.shelf} contentContainerStyle={s.shelfContent}>
+      {groups.map(items => <PosterCard key={items[0].id} {...art} data={data} items={items} width={156} onPress={() => onDetail(items[0])} />)}
+    </ScrollView>
+  </View>;
+}
 
 /** One row of posters on Home: a heading with "See all", then a short horizontal shelf. */
 export function Shelf({ title, count, noun, onSeeAll, children }: { title: string; count: number; noun: string; onSeeAll: () => void; children: ReactNode }) {
@@ -102,10 +113,10 @@ export function ContinueRow({ data, items, onPlay, onRemove, ...art }: ArtProps 
   if (!items.length) return null;
   return <View style={t.section}><View style={t.sectionHeading}><Text accessibilityRole="header" style={t.sectionTitle}>Continue watching</Text><Text style={t.dim}>{items.length} in progress</Text></View>
     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -18 }} contentContainerStyle={{ paddingHorizontal: 18, gap: 12 }}>
-      {items.map(item => { const m = metadataFor(data, item), progress = data.progress[item.id], known = progress?.duration > 0; return <View key={item.id} style={{ width: 240 }}><Lift accessibilityRole="button" accessibilityLabel={`Resume ${nameFor(data, item)}`} onPress={() => onPlay(item)}><MediaArt {...art} sheen path={m.backdrop || m.poster} title={nameFor(data, item)} style={{ width: 240, height: 138, borderRadius: radius.panel }}>
+      {items.map((item, index) => { const m = metadataFor(data, item), progress = data.progress[item.id], known = progress?.duration > 0; return <View key={item.id} style={{ width: 240, marginBottom: isAndroidTv ? 30 : 0 }}><Lift hasTVPreferredFocus={isAndroidTv && index === 0} accessibilityRole="button" accessibilityLabel={`Resume ${nameFor(data, item)}`} onPress={() => onPlay(item)}><MediaArt {...art} sheen path={m.backdrop || m.poster} title={nameFor(data, item)} style={{ width: 240, height: 138, borderRadius: radius.panel }}>
         <LinearGradient colors={[colors.clear, overArt.shadeDeep]} style={StyleSheet.absoluteFill} />
         <View style={s.cwPlay}><Icon name="play" size={19} color={overArt.text} /></View><View style={s.cwText}><Text numberOfLines={1} style={[t.text, t.onArt, { fontSize: 13, fontFamily: fonts.medium }]}>{nameFor(data, item)}{item.kind === 'show' ? ` · S${item.season} E${item.episode}` : ''}</Text><Text style={[t.dim, t.onArtDim, { fontSize: 11 }]}>{known ? `${formatTime(progress.duration - progress.position)} left` : 'Up next'}</Text>{known && <ProgressBar onArt value={progress.position / progress.duration} />}</View>
-      </MediaArt></Lift><Pressable accessibilityRole="button" accessibilityLabel={`Remove ${nameFor(data, item)} from Continue watching`} onPress={() => onRemove(item)} hitSlop={8} style={s.remove}><Icon name="close" size={14} color={overArt.text} /></Pressable></View>; })}
+      </MediaArt></Lift><Pressable accessibilityRole="button" accessibilityLabel={`Remove ${nameFor(data, item)} from Continue watching`} onPress={() => onRemove(item)} hitSlop={8} style={[s.remove, isAndroidTv && { top: undefined, bottom: -26 }]}><Icon name="close" size={14} color={overArt.text} /></Pressable></View>; })}
     </ScrollView>
   </View>;
 }
