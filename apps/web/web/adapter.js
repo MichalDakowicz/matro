@@ -6,6 +6,7 @@ import { accountScope, createOffline, networkLost } from './offline.js';
 import { toVtt } from './offline-store.js';
 import { mountMovieRequests } from './movie-requests.js';
 import { dismissedProgress, isContinueDismissed } from '../../../packages/core/client/watch-progress.js';
+import { describePlayback, savedPlayback as savedDiagnostics } from '../../../packages/core/client/playback-info.js';
 
 import { knownQuality, qualityOptions } from '../../../packages/core/client/quality.js';
 
@@ -136,7 +137,7 @@ export function createAdapter(session) {
   }
   async function inspectRemote(id, { signal } = {}) {
     const info = await api('GET', `/api/items/${id}/info`, undefined, { signal });
-    const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay, hdrDirectMime: info.hdrDirectMime, qualities: qualityOptions(info.video),
+    const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay, hdrDirectMime: info.hdrDirectMime, hdrToneMap: info.hdrToneMap, qualities: qualityOptions(info.video),
       subtitles: [...info.embedded.map(({ forced: _f, ...t }) => t), ...info.uploaded.map(u => track(u)), ...(info.files || []).map(f => ({ index: FILE + f.id, language: f.language, title: f.title, codec: f.codec, text: true, bitmap: false, sidecar: true }))] };
     details.set(id, result);
     return result;
@@ -212,7 +213,7 @@ export function createAdapter(session) {
     const local = async (fallback = false) => {
       const saved = await savedPlayback(id);
       if (!saved || (!fallback && (bitmapSubtitle !== null || (audio !== null && audio !== saved.info.audio[0]?.index)))) return null;
-      return { url: preload && offset > 0 ? `${saved.url}#t=${offset}` : saved.url, offset: 0 };
+      return { url: preload && offset > 0 ? `${saved.url}#t=${offset}` : saved.url, offset: 0, diagnostics: savedDiagnostics };
     };
     const saved = await local();
     if (saved) return saved;
@@ -229,14 +230,15 @@ export function createAdapter(session) {
     const q = new URLSearchParams({ session: playerSession });
     if (preload) q.set('preload', '1');
     const directHDR = hdr && !!d.hdrDirectMime;
-    if (!tier && !audioDelay && !forceTranscode && (d.directPlay || directHDR) && bitmapSubtitle === null && (audio === null || !first || audio === first.index)) return { url: `/api/items/${id}/direct?${q}${offset > 0 ? `#t=${offset}` : ''}`, offset: 0, progressive: directHDR };
-    q.set('t', String(Math.floor(offset * 10) / 10));
+    if (!tier && !audioDelay && !forceTranscode && (d.directPlay || directHDR) && bitmapSubtitle === null && (audio === null || !first || audio === first.index)) return { url: `/api/items/${id}/direct?${q}${offset > 0 ? `#t=${offset}` : ''}`, offset: 0, progressive: directHDR, diagnostics: describePlayback(d, { direct: true, audio }) };
+    const start = Math.floor(offset * 10) / 10;
+    q.set('t', String(start));
     if (audio !== null) q.set('audio', audio);
     if (tier) q.set('quality', tier);
     if (audioDelay) q.set('adelay', audioDelay);
     if (channels === 6) q.set('channels', '6');
     if (bitmapSubtitle !== null) { q.set('burn', bitmapSubtitle); q.set('delay', subtitleDelay); }
-    return { url: `/api/items/${id}/transcode?${q}`, offset };
+    return { url: `/api/items/${id}/transcode?${q}`, offset, diagnostics: describePlayback(d, { audio, offset: start, burn: bitmapSubtitle, force: forceTranscode, quality: tier, channels, audioDelay, toneMap: d.hdrToneMap }) };
   }
 
   // Adding media is for the head account: a folder on the server, or files sent from this browser.

@@ -230,6 +230,9 @@ test('desktop library, MKV playback, tracks, seeking, queue and persistence', as
     await page.getByRole('button', { name: 'Play', exact: true }).click();
     await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Audio', exact: true })).toBeVisible();
+    const diagnostics = page.getByText('Playback info · Transcode', { exact: true });
+    await diagnostics.click();
+    await expect(page.getByText(/Video is encoded from the exact start time/)).toBeVisible();
     await expect(page.locator('[data-audio="1"] strong')).toHaveText('English');
     await expect(page.locator('[data-audio="1"] .track-title')).toHaveText('Original mix');
     await expect(page.locator('[data-audio="2"] strong')).toHaveText('Polish');

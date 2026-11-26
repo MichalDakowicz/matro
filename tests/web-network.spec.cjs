@@ -8,7 +8,7 @@ async function withWebPage(respond, run) {
   const server = http.createServer(async (req, res) => {
     if (['/adapter.js', '/http.js', '/dom.js', '/offline.js', '/offline-store.js', '/movie-requests.js'].includes(req.url)) {
       res.writeHead(200, { 'Content-Type': 'text/javascript' }).end(await fs.readFile(path.join(__dirname, '../apps/web/web', req.url.slice(1))));
-    } else if (['/packages/browser-ui/recovery.js', '/packages/core/client/watch-progress.js', '/packages/core/client/quality.js'].includes(req.url)) {
+    } else if (['/packages/browser-ui/recovery.js', '/packages/core/client/watch-progress.js', '/packages/core/client/quality.js', '/packages/core/client/playback-info.js'].includes(req.url)) {
       res.writeHead(200, { 'Content-Type': 'text/javascript' }).end(await fs.readFile(path.join(__dirname, '..', req.url.slice(1))));
     } else if (req.url.startsWith('/api/')) await respond(req, res);
     else res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><title>Network regression</title><div id="toast"></div>');

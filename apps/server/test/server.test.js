@@ -414,6 +414,28 @@ test('track info, direct play ranges, transcode and embedded subtitles', async (
   assert.equal(fs.readdirSync(path.join(dataDir, 'cache', 'subs')).length, 1);
 });
 
+test('the head account sees active sessions, preparation and cache usage', async () => {
+  const { groups } = await catalog('sam');
+  const movie = groups[0][0], episode = groups[1][0];
+  assert.equal((await call(null, 'GET', '/api/admin/activity')).status, 401);
+  assert.equal((await call('sam', 'GET', '/api/admin/activity')).status, 403);
+  await call('sam', 'GET', `/api/items/${movie.id}/direct?session=activity-direct`, undefined, { range: 'bytes=0-99' });
+  const response = await fetch(`${base}/api/items/${episode.id}/transcode?t=0&quality=720p&session=activity-prepared`, { headers: { cookie: jar.sam } });
+  assert.equal(response.status, 200);
+  await response.arrayBuffer();
+  await call('sam', 'POST', '/api/playback/state', { session: 'activity-direct', playing: true });
+  await call('sam', 'POST', '/api/playback/state', { session: 'activity-prepared', playing: true, buffering: true });
+  const { playing, preparation } = (await call('admin', 'GET', '/api/admin/activity')).data;
+  assert.deepEqual(playing.map(entry => [entry.username, entry.mode, entry.buffering]), [['sam', 'Direct play', false], ['sam', 'Transcode', true]]);
+  assert.equal(playing[0].encoder, null);
+  assert.match(playing[1].encoder, /AAC|Cached file/);
+  assert.ok(preparation.bytes > 0 && preparation.capacity > 0);
+  assert.ok(playing.every(entry => !entry.path && !entry.session));
+  await call('sam', 'POST', '/api/playback/stop', { session: 'activity-direct' });
+  await call('sam', 'POST', '/api/playback/stop', { session: 'activity-prepared' });
+  assert.equal((await call('admin', 'GET', '/api/admin/activity')).data.playing.length, 0);
+});
+
 test('an offline range still reads its open generation when the media path is replaced', async t => {
   const { groups } = await catalog('sam');
   const movie = groups[0][0], route = `/api/items/${movie.id}/offline`;

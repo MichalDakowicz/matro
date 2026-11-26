@@ -1,5 +1,6 @@
 const { execFile } = require('node:child_process');
 const { sdrFilters } = require('./color.cjs');
+const { copiesVideo: canCopyVideo, outputChannels } = require('../client/playback-info.js');
 const probes = new Map();
 const filterProbes = new Map();
 function supportsToneMap(ffmpeg) {
@@ -57,14 +58,6 @@ const QUALITIES = Object.assign(Object.create(null), {
 });
 function cappedScale({ width, height }) {
   return `scale=w='min(iw,${width})':h='min(ih,${height})':force_original_aspect_ratio=decrease:force_divisible_by=2`;
-}
-function canCopyVideo(info, burn = null, offset = 0, quality = null) {
-  // Copying at an arbitrary timestamp starts at an earlier keyframe and corrupts resume/subtitle timing.
-  return !QUALITIES[quality] && !info?.video?.hdr && offset === 0 && burn === null && info?.video?.codec === 'h264' && (!info.video.pixelFormat || info.video.pixelFormat === 'yuv420p');
-}
-function outputChannels(info, audio, channels) {
-  const source = audio == null ? info.audio?.[0] : info.audio?.find(track => track.index === audio);
-  return channels === 6 && source?.channels >= 6 ? 6 : 2;
 }
 // Audio offset in seconds, independent of the subtitle delay: positive plays the sound later, negative earlier.
 function audioFilter(seconds) {

@@ -94,7 +94,7 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
     }
     const final = path.join(dir, key + '.mp4');
     if (fs.existsSync(final)) {
-      const entry = { file: final, size: fs.statSync(final).size, done: true, readers: 0, used: Date.now() };
+      const entry = { file: final, size: fs.statSync(final).size, done: true, readers: 0, used: Date.now(), encoder: 'Cached file' };
       entries.set(key, entry); return use(entry);
     }
     assign(owner, null);
@@ -110,6 +110,7 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
       async function attempt(selected) {
         await fsp.rm(entry.file, { force: true }); entry.size = 0; entry.preparedSeconds = 0;
         if (closed || entry.error) throw entry.error || Error('Playback service is closed.');
+        entry.encoder = canCopyVideo(options.info, options.burn, options.offset, options.quality) || !options.info.video ? 'AAC' : `${selected[1]} + AAC`;
         return new Promise((resolve, reject) => {
           const child = spawnProcess(ffmpeg, argumentsFor({ ...options, toneMap }, selected), { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
           entry.child = child;
@@ -211,6 +212,14 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
   }
   return {
     get, serve,
+    encoder(owner) { return owners.get(owner)?.entry.encoder ?? null; },
+    stats() {
+      let bytes = 0;
+      for (const name of fs.readdirSync(dir)) {
+        if (/^[a-f0-9]{64}\.(mp4|part)$/.test(name)) bytes += fs.statSync(path.join(dir, name), { throwIfNoEntry: false })?.size ?? 0;
+      }
+      return { active: [...entries.values()].filter(e => !e.done && !e.error).length, capacity: maxJobs, bytes };
+    },
     release(owner) { assign(owner, null); },
     renew(owner) {
       const lease = owners.get(owner);

@@ -610,6 +610,7 @@ test('Vite production UI signs in, plays through the HTTP adapter and saves prog
     await page.setViewportSize({ width: 375, height: 800 });
     await page.evaluate(() => window.matroTheme.set('light'));
     await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
+    await expect(page.getByText('Playback info · Remux', { exact: true })).toBeVisible();
     const subtitle = page.locator('[data-subtitle="3"]');
     await subtitle.click();
     await expect(subtitle).toHaveAttribute('aria-pressed', 'true');

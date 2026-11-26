@@ -121,6 +121,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
       <View style={[s.sheet, { paddingBottom: Math.max(16, insets.bottom + 12), maxHeight: landscape ? height - 20 : height * .78 }, landscape && { width: 360, left: undefined, top: 0, bottom: 0, maxHeight: height, borderTopRightRadius: 0 }]}>
         <View style={t.sectionHeading}><Text style={t.sectionTitle}>{sheet === 'tracks' ? 'Audio and subtitles' : 'Queue'}</Text><IconButton name="close" label={sheet === 'tracks' ? 'Close audio and subtitles' : 'Close queue'} onPress={() => setSheet(null)} /></View>
         {sheet === 'tracks' ? <ScrollView showsVerticalScrollIndicator={false}>
+          {p.diagnostics && <View style={{ marginBottom: 14 }}><Text style={s.panelLabel}>Playback info · {p.diagnostics.mode}</Text><Text style={t.muted}>{p.diagnostics.reason}</Text></View>}
           {p.qualities.length > 0 && <View style={[t.row, { flexWrap: 'wrap', marginBottom: 12 }]}>
             <Text style={t.muted}>Quality</Text>
             {p.qualities.map(q => <Pill key={q.id} label={q.label} primary={p.quality === q.id} onPress={() => p.chooseQuality(q.id)} />)}
