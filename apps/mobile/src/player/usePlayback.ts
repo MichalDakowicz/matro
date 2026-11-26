@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 import { useVideoPlayer } from 'expo-video';
 import { inspect, mediaHeaders, playbackPath, playbackState, request, saveProgress, stopPlayback, updateWatchOptions, type Info, type Item, type Library, type Preferences, type Progress, type Track, type TrackPreference } from '../lib/server';
-import { initialTracks, subtitleTracks, titleKey, trackKey } from '../../../../packages/core/client/library';
+import { initialTracks, savedServes, subtitleTracks, titleKey, trackKey } from '../../../../packages/core/client/library';
 import { isContinueDismissed, reachedCompletion, reachedPlaybackEnd } from '../../../../packages/core/client/watch-progress.js';
 import { createAutoSkip } from '../../../../packages/core/client/auto-skip.js';
 import { parseVtt, type Cue } from '../../../../packages/core/client/subtitles';
@@ -17,7 +17,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   const initial = initialPosition ?? (data.progress[item.id]?.completed ? 0 : data.progress[item.id]?.position || 0);
   const pref = data.preferences.tracks?.[trackKey(item)];
   const [info, setInfo] = useState<Info | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState(''), [position, setPosition] = useState(initial), [buffered, setBuffered] = useState(initial), [playing, setPlaying] = useState(false), [caption, setCaption] = useState('');
-  const [savedCopy, setSavedCopy] = useState(saved);
+  const [savedCopy, setSavedCopy] = useState(saved), [notice, setNotice] = useState('');
   const [audio, setAudio] = useState<number | null>(null), [subtitle, setSubtitle] = useState<number | null>(null), [delay, setDelayValue] = useState(pref?.delay || 0), [audioDelay, setAudioDelayValue] = useState(pref?.audioDelay || 0), [subtitleSize, setSubtitleSizeValue] = useState(pref?.size || 1), [rate, setRate] = useState(1);
   const [session] = useState(() => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
   const choices = useRef({ audio, subtitle, delay, audioDelay, size: subtitleSize, quality: 'original' }), [quality, setQualityValue] = useState('original'), prefChanges = useRef<TrackPreference>({}), dataRef = useRef(data), infoRef = useRef<Info | null>(null), endRef = useRef(onEnd);
@@ -73,13 +73,21 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     catch { if (mounted.current) setError('Could not save playback recovery on this device. Check available storage.'); }
     if (sync && !offlineRef.current && (await saveProgress(base, item.id, entry, user))?.[item.id]) confirmedEntry.current = entry;
   }, [base, item]);
-  // A download may have finished after playback was opened.
-  const trySavedCopy = useCallback(async (run: number) => {
+  // A download may have finished after playback was opened. A copy without the chosen tracks is used only when the
+  // server cannot be reached, with a notice.
+  const trySavedCopy = useCallback(async (run: number, unreachable = false) => {
     if (savedCopy) return false;
     const copy = await savedTitle(base, dataRef.current.user, item.id).catch(() => undefined);
     if (!mounted.current || run !== generation.current) return true;
     if (!copy) return false;
+    const full = infoRef.current, { preferences } = dataRef.current;
+    const serves = !full || savedServes(copy.info, full, preferences.tracks?.[trackKey(item)], preferences);
+    if (!serves && !unreachable) return false;
     setSavedCopy(copy);
+    if (!serves) {
+      setNotice('The server can’t be reached, so the saved copy is playing. Its audio or subtitles differ from your choice.');
+      setTimeout(() => { if (mounted.current) setNotice(''); }, 8000);
+    }
     return true;
   }, [base, item.id, savedCopy]);
   const flushPreferences = useCallback(() => {
@@ -165,7 +173,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
         // seek/retry instead of interrupting playback when a download finishes.
       });
     } catch (e) {
-      if (mounted.current && run === generation.current && !await trySavedCopy(run)) {
+      if (mounted.current && run === generation.current && !await trySavedCopy(run, true)) {
         replacing.current = false; setBusy(false); setError(e instanceof Error ? e.message : 'Could not play this file.');
       }
     }
@@ -175,7 +183,10 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     recovering.current = true;
     try {
       if (await trySavedCopy(generation.current) || !intent.current) return;
-      if (retries.current++ >= 2) { setBusy(false); setError(savedCopy ? 'Could not play the saved file.' : 'The media service stopped responding. Check the connection, then try again.'); return; }
+      if (retries.current++ >= 2) {
+        if (await trySavedCopy(generation.current, true)) return;
+        setBusy(false); setError(savedCopy ? 'Could not play the saved file.' : 'The media service stopped responding. Check the connection, then try again.'); return;
+      }
       if (player.status === 'error') { forceTranscode.current = true; disk.current = null; cancelDownload.current?.(); cancelDownload.current = null; }
       await load(at.current, true);
     } finally { recovering.current = false; }
@@ -195,7 +206,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
         await loadText(sub).catch(e => { if (mounted.current) setError(e.message); });
         if (mounted.current && run === generation.current) await load(details.duration > 0 ? Math.min(at.current, Math.max(0, details.duration - .1)) : at.current, intent.current);
       } catch (e) {
-        if (mounted.current && run === generation.current && !await trySavedCopy(run)) {
+        if (mounted.current && run === generation.current && !await trySavedCopy(run, true)) {
           setBusy(false); setError(e instanceof Error ? e.message : 'Could not read this file.');
         }
       }
@@ -325,5 +336,5 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     if (!offlineRef.current) void updateWatchOptions(base, dataRef.current.user, { preferences: patch }).catch(() => {});
   };
   const applyMarkers = (next: typeof markers) => { markersRef.current = next; setMarkers(next); };
-  return { player, info, diagnostics, markers, applyMarkers, settings, setPreference, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, audioDelay, subtitleSize, rate, quality, qualities: savedCopy ? [] : qualityOptions(info?.video), chooseQuality, persist, toggle, setPlaybackPlaying, seek, chooseAudio, chooseSubtitle, setDelay, setAudioDelay: savedCopy ? undefined : setAudioDelay, setSubtitleSize, setSpeed, allowPiP, autoPiP, pictureInPicture, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
+  return { player, info, notice, diagnostics, markers, applyMarkers, settings, setPreference, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, audioDelay, subtitleSize, rate, quality, qualities: savedCopy ? [] : qualityOptions(info?.video), chooseQuality, persist, toggle, setPlaybackPlaying, seek, chooseAudio, chooseSubtitle, setDelay, setAudioDelay: savedCopy ? undefined : setAudioDelay, setSubtitleSize, setSpeed, allowPiP, autoPiP, pictureInPicture, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
 }

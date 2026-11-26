@@ -194,7 +194,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
         <UtilityRow rate={p.rate} panel={sheet} landscape={landscape} onPanel={open} onPiP={p.allowPiP ? enterPictureInPicture : undefined} pipDisabled={p.busy || !!p.error} />
       </View>
     </Animated.View>}
-    <PlayerStatus busy={p.busy} error={p.error} onRetry={p.retry} onCancel={() => void leave()} />
+    <PlayerStatus busy={p.busy} error={p.error} notice={p.notice} onRetry={p.retry} onCancel={() => void leave()} />
     {indicator || gestures.label ? <View pointerEvents="none" style={[s.fitIndicator, { top: landscape ? 62 : insets.top + 68 }]}>
       <Text accessibilityLiveRegion="polite" style={s.indicatorLabel}>{indicator || gestures.label}</Text>
     </View> : null}

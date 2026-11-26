@@ -32,14 +32,14 @@ function harness(t: any, directPlay = false, savedAtOpen = false, markers: { typ
   const info = { duration: 200, directPlay, video: { codec: 'h264', height: 1080, width: 1920 }, audio: [{ index: 1 }], embedded: [], uploaded: [{ id: 1, name: 'English', language: 'en' }] };
   const data = { user: {}, preferences: { tracks: {}, ...preferences }, progress: {}, markers: { movie: markers } };
   const localCopy = { uri: 'file:///saved.mp4', info, text: {} };
-  let available = savedAtOpen, inspections = 0;
+  let available = savedAtOpen, inspections = 0, serves = true;
   const modules: Record<string, any> = {
     react: { useCallback: (fn: Function) => fn, useEffect: (fn: any) => effects.push(fn), useMemo: (fn: Function) => fn(), useRef: (current: any) => ({ current }), useState: (initial: any) => { const value = typeof initial === 'function' ? initial() : initial; const i = states.push(value) - 1; return [value, (next: any) => { states[i] = next; }]; } },
     'react-native': { AppState: app, Platform: { OS: 'android' } },
     'expo-video': { useVideoPlayer: () => player },
     '../lib/server': { inspect: async () => { inspections++; return info; }, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: data.markers }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry),
       playbackState: async (_: string, session: string, playing: boolean) => activity.push({ session, playing }), stopPlayback: async () => {}, updateWatchOptions: async () => {} },
-    '../../../../packages/core/client/library': { trackKey: () => 'movie', subtitleTracks: () => [], initialTracks: (details: any) => ({ audio: details.audio[0]?.index ?? null, subtitle: null }) },
+    '../../../../packages/core/client/library': { trackKey: () => 'movie', subtitleTracks: () => [], savedServes: () => serves, initialTracks: (details: any) => ({ audio: details.audio[0]?.index ?? null, subtitle: null }) },
     '../../../../packages/core/client/watch-progress.js': watchProgress,
     '../../../../packages/core/client/quality.js': require('../../../../packages/core/client/quality.js'),
     '../../../../packages/core/client/playback-info.js': require('../../../../packages/core/client/playback-info.js'),
@@ -60,7 +60,7 @@ function harness(t: any, directPlay = false, savedAtOpen = false, markers: { typ
   const cleanups = effects.map(fn => fn());
   t.after(() => { for (const cleanup of cleanups.reverse()) cleanup?.(); });
   return { hook, player, pending, downloads, saved, activity, app, states, localCopy, inspections: () => inspections,
-    finishOfflineSave: () => { available = true; },
+    finishOfflineSave: (servesChoice = true) => { available = true; serves = servesChoice; },
     emit: (name: string, event: any = {}) => listeners.get(name)?.(event), ended: () => ended };
 }
 
@@ -177,6 +177,19 @@ test('a stream failure selects a saved copy that became available during playbac
   h.emit('statusChange', { status: 'error' }); await flush();
   assert.ok(h.states.includes(h.localCopy));
   assert.equal(h.pending.length, 1, 'recovery does not restart the stream');
+});
+
+test('recovery streams again when a new saved copy lacks the chosen tracks, and plays it with a notice once loading fails', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = harness(t, true); await flush(); h.pending[0].resolve(); await flush();
+  h.finishOfflineSave(false);
+  h.player.status = 'error';
+  h.emit('statusChange', { status: 'error' }); await flush();
+  assert.ok(!h.states.includes(h.localCopy));
+  assert.equal(h.pending.length, 2, 'recovery restarts the stream');
+  h.pending[1].reject(new Error('Server unreachable')); await flush();
+  assert.ok(h.states.includes(h.localCopy));
+  assert.ok(h.states.some(value => typeof value === 'string' && /saved copy is playing/.test(value)));
 });
 
 test('pausing during a replacement and backgrounding never resume playback on completion', async t => {

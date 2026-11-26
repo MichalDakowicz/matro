@@ -19,9 +19,9 @@ function useElapsed(active: boolean) {
 }
 
 /** Loading is one glass line with elapsed time and Cancel. An error offers Try again and, quieter, Back. */
-export function PlayerStatus({ busy, error, onRetry, onCancel }: { busy: boolean; error: string; onRetry: () => void; onCancel: () => void }) {
+export function PlayerStatus({ busy, error, notice, onRetry, onCancel }: { busy: boolean; error: string; notice?: string; onRetry: () => void; onCancel: () => void }) {
   const seconds = useElapsed(busy && !error);
-  if (!busy && !error) return null;
+  if (!busy && !error) return notice ? <View pointerEvents="none" style={s.notice}><View accessibilityRole="alert" style={s.line}><Text style={[s.label, { paddingRight: 12 }]}>{notice}</Text></View></View> : null;
   return <View pointerEvents="box-none" style={s.fill}>
     {error ? <View accessibilityRole="alert" style={s.card}>
       <Text style={[t.sectionTitle, { textAlign: 'center' }]}>Couldn’t play this file.</Text>
@@ -38,6 +38,7 @@ export function PlayerStatus({ busy, error, onRetry, onCancel }: { busy: boolean
 
 const s = themed(() => StyleSheet.create({
   fill: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20 },
+  notice: { position: 'absolute', left: 0, right: 0, top: 72, alignItems: 'center', paddingHorizontal: 20 },
   line: { minHeight: 52, maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 12, paddingLeft: 18, paddingRight: 6, borderRadius: 999, backgroundColor: chrome.glass, borderWidth: 1, borderColor: chrome.glassLine },
   label: { flexShrink: 1, color: colors.text, fontFamily: fonts.medium, fontSize: 14 },
   cancel: { minHeight: 44, minWidth: 44, paddingHorizontal: 16, borderRadius: 999, borderWidth: 1, borderColor: chrome.line, alignItems: 'center', justifyContent: 'center' },
