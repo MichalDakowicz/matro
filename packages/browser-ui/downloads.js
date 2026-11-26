@@ -53,6 +53,7 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
   const posters = new Map();
   let previewsDisabled = false;
   const sending = new Set(), sent = new Set(), resolvedSelections = new Map();
+  let requestedEpisode = null;
   let seasonDownload = null, seasonNotice = '', animeSeason = '1';
   const current = () => container?.isConnected;
   function announce(value) { message = value; const node = container?.querySelector('#download-message'); if (node) node.textContent = value; }
@@ -448,7 +449,7 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
     if (data.openShow) {
       const show = seriesShows?.find(item => String(item.id) === data.openShow);
       if (!show) return;
-      resetDetail(); seriesSelected = show; seriesData = null; seriesFilters = noFilters(); open = 'show'; detailOrigin = button;
+      resetDetail(); seriesSelected = show; seriesData = null; seriesFilters = requestedEpisode || noFilters(); requestedEpisode = null; open = 'show'; detailOrigin = button;
       if (show.indexed) void loadSeries(); else drawDetail();
       void loadDetailPreview(); return;
     }
@@ -521,12 +522,21 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
     query = title; results = null; message = ''; searchOnMount = true;
   }
   return {
+    openSeriesSearch(title, season, episode) {
+      upgrade = requestedMovie = null;
+      kind = 'show'; seriesQuery = title; seriesShows = null;
+      requestedEpisode = { ...noFilters(), season, episode };
+      Object.assign(catalogs.show, { mode: 'search', value: '', response: null, pending: false, error: '', aliases: [] });
+      searchOnMount = true;
+    },
     openMovieSearch(title, year) {
+      requestedEpisode = null;
       upgrade = null;
       requestedMovie = { title, year };
       prepareMovieSearch(title);
     },
     async openUpgrade(id) {
+      requestedEpisode = null;
       upgrade = await api.downloadUpgrade(id);
       requestedMovie = null;
       prepareMovieSearch(upgrade.title);
@@ -551,7 +561,7 @@ export function createDownloadBrowser(api, { play = () => {} } = {}) {
         const initialConfig = await api.downloadConfig();
         if (mount !== mountId || !current()) return;
         config = initialConfig;
-        if (!loaded) { if (!config[target]) target = config.local ? 'local' : config.server ? 'server' : target; loaded = true; if (!config[target] && !requestedMovie && !matchMedia(PHONE).matches) settings.open(target); }
+        if (!loaded) { if (!config[target]) target = config.local ? 'local' : config.server ? 'server' : target; loaded = true; if (!config[target] && !requestedMovie && !requestedEpisode && !matchMedia(PHONE).matches) settings.open(target); }
         draw();
         if (searchOnMount) { searchOnMount = false; void search(); }
         await refresh();

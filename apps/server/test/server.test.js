@@ -52,8 +52,13 @@ async function fakeTmdb(url) {
   if (route === '/movie/1') return json({ id: 1, title: 'Heat', release_date: '1995-12-15', genres: [{ name: 'Crime' }], overview: 'A crew and a cop.', belongs_to_collection: { id: 42, name: 'Heat Collection' }, tagline: 'A Los Angeles crime saga', runtime: 170, imdb_id: 'tt0113277',
     vote_count: 100, vote_average: 8.3, poster_path: '/p.jpg', backdrop_path: '/b.jpg', credits: { cast: [{ id: 5, name: 'Al Pacino', character: 'Vincent', profile_path: '/a.jpg' }], crew: [{ job: 'Director', name: 'Michael Mann' }] } });
   if (route === '/search/tv') return json({ results: [{ id: 2, name: 'Show', first_air_date: '2020-01-01' }] });
-  if (route === '/tv/2') return json({ id: 2, name: 'Show', first_air_date: '2020-01-01', genres: [], overview: 'A show.', number_of_seasons: 1, created_by: [{ name: 'Someone' }], poster_path: '/sp.jpg', external_ids: {}, credits: {} });
+  if (route === '/tv/2') return json({ id: 2, name: 'Show', first_air_date: '2020-01-01', genres: [], overview: 'A show.', number_of_seasons: 2, seasons: [{ season_number: 1 }, { season_number: 2 }], created_by: [{ name: 'Someone' }], poster_path: '/sp.jpg', external_ids: {}, credits: {} });
   if (route === '/tv/2/season/1') return json({ episodes: [{ episode_number: 1, name: 'Pilot', runtime: 1, overview: 'It begins.', still_path: '/e1.jpg' }] });
+  if (route === '/tv/2/season/2') return json({ episodes: [
+    { episode_number: 1, name: 'An absent episode', air_date: '2021-01-24' },
+    { episode_number: 2, name: 'A future episode', air_date: '2099-02-24' },
+    { episode_number: 3, name: 'No date' },
+  ] });
   return new Response('{}', { status: 404 });
 }
 
@@ -348,6 +353,22 @@ test('TMDB metadata is matched on the server and artwork is served to signed-in 
   assert.equal((await call('sam', 'GET', '/api/' + localized.poster)).status, 200);
   const none = await call('admin', 'POST', '/api/admin/metadata/assign', { key: film.id, tmdbId: null });
   assert.equal(none.data.metadata[film.id], undefined, 'pinning "no match" falls back to the file name');
+});
+
+test('followed shows and their dated episode gaps belong to the signed-in account', async () => {
+  const { items } = await catalog('sam');
+  const { groupId } = items.find(item => item.kind === 'show');
+  const follow = { groupId, follow: true };
+  const route = '/api/follows/' + encodeURIComponent(groupId) + '/episodes';
+  assert.equal((await call('sam', 'GET', route)).status, 404);
+  assert.deepEqual((await call('sam', 'POST', '/api/follows', follow)).data.followed, [groupId]);
+  assert.deepEqual((await call('admin', 'GET', '/api/library')).data.followed, []);
+  assert.equal((await call('admin', 'GET', route)).status, 404);
+  const schedule = await call('sam', 'GET', route);
+  assert.equal(schedule.status, 200);
+  assert.deepEqual(schedule.data.episodes.filter(episode => episode.season === 2).map(episode => [episode.episode, episode.status]), [[1, 'missing'], [2, 'upcoming']]);
+  assert.deepEqual((await call('sam', 'POST', '/api/follows', { ...follow, follow: false })).data.followed, []);
+  assert.equal((await call('sam', 'GET', route)).status, 404);
 });
 
 test('download activity gets cached artwork without exposing download matches in the library', async () => {

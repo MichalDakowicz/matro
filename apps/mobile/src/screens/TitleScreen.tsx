@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { File } from 'expo-file-system';
-import type { Item, Library, ListChange, Metadata } from '../lib/server';
+import { request, type Item, type Library, type ListChange, type Metadata, type ScheduledEpisode } from '../lib/server';
 import { seasonLabel, seasonNumbers, seasonOf } from '../../../../packages/core/client/watch-progress.js';
 import { episodeName, formatTime, metadataFor, nameFor, resumeItem, titleKey } from '../../../../packages/core/client/library';
 import { listChoices } from '../../../../packages/core/client/title-shelves.js';
@@ -21,11 +21,13 @@ type Props = ArtProps & {
   /** Present when the server can be reached: subtitle upload for everyone, TMDB fixes for the head account when the server has TMDB. */
   online?: { admin: boolean; tmdb: boolean; notify: (text: string) => void; onMetadata: (metadata: Record<string, Metadata>) => void };
   onEditLists?: (change: ListChange) => Promise<void>;
+  onFollow?: (groupId: string, follow: boolean) => Promise<void>;
+  onSearchEpisode?: (item: Item, episode: ScheduledEpisode) => void;
   onSave?: (item: Item) => void; onSaveMany?: (items: Item[]) => void; onRemoveSaved?: (items: Item[]) => void; savedIds?: Set<string>; savingIds?: Set<string>;
 };
-type Menu = null | 'save' | 'watched' | 'metadata' | 'lists' | { episode: Item };
+type Menu = null | 'save' | 'watched' | 'metadata' | 'lists' | 'schedule' | { episode: Item };
 
-export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, onMark, online, onEditLists, onSave, onSaveMany, onRemoveSaved, savedIds, savingIds, ...art }: Props) {
+export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, onMark, online, onEditLists, onFollow, onSearchEpisode, onSave, onSaveMany, onRemoveSaved, savedIds, savingIds, ...art }: Props) {
   const item = items[0], m = metadataFor(data, item), target = resumeItem(data, items), p = data.progress[target.id], name = nameFor(data, item);
   const insets = useSafeAreaInsets(), seasons = seasonNumbers(items);
   const [season, setSeason] = useState(seasonOf(target)), [menu, setMenu] = useState<Menu>(null), [scrolled, setScrolled] = useState(false), [picked, setPicked] = useState<{ item: Item; file: File } | null>(null);
@@ -38,6 +40,25 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
     try { await onEditLists(change); if (change.action === 'create') setListName(''); }
     catch (error) { setListError(error instanceof Error ? error.message : 'Could not update the list.'); }
     finally { setEditingList(false); }
+  };
+  const groupId = titleId, following = data.followed?.includes(groupId) === true;
+  const [scheduled, setScheduled] = useState<ScheduledEpisode[] | null>(null), [scheduleError, setScheduleError] = useState(''), [followBusy, setFollowBusy] = useState(false);
+  const [followError, setFollowError] = useState('');
+  useEffect(() => {
+    if (menu !== 'schedule' || !following) return;
+    let live = true;
+    setScheduled(null); setScheduleError('');
+    void request(art.base, '/api/follows/' + encodeURIComponent(groupId) + '/episodes', {}, 120000)
+      .then(({ episodes }) => { if (live) setScheduled(episodes); })
+      .catch(error => { if (live) setScheduleError(error.message); });
+    return () => { live = false; };
+  }, [art.base, groupId, menu, following]);
+  const toggleFollow = async () => {
+    if (!onFollow || followBusy) return;
+    setFollowBusy(true); setFollowError('');
+    try { await onFollow(groupId, !following); if (!following) setMenu('schedule'); }
+    catch (error) { setFollowError(error instanceof Error ? error.message : 'Could not update followed shows.'); }
+    finally { setFollowBusy(false); }
   };
   const resume = p?.position > 0 && !p.completed, show = item.kind === 'show';
   const done = (list: Item[]) => list.length > 0 && list.every(i => data.progress[i.id]?.completed);
@@ -71,6 +92,8 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
       <View style={[t.row, { marginTop: 10, flexWrap: 'wrap' }]}>
         <Pill label="Add to queue" icon="plus" style={s.action} onPress={() => onEnqueue(show ? items : [target])} />
         {onEditLists && <Pill label="Add to list" icon="plus" style={s.action} onPress={() => { setListError(''); setMenu('lists'); }} />}
+        {show && onFollow && <Pill label={following ? 'Unfollow show' : 'Follow show'} icon={following ? 'check' : 'plus'} style={s.action} disabled={followBusy} onPress={() => void toggleFollow()} />}
+        {show && following && onFollow && <Pill label="Episode schedule" style={s.action} onPress={() => setMenu('schedule')} />}
         {show ? <Pill label="Mark watched" icon="check" style={s.action} onPress={() => setMenu('watched')} />
           : <Pill label={done([target]) ? 'Mark unwatched' : 'Mark watched'} icon="check" style={s.action} onPress={() => onMark([target], !done([target]))} />}
         {onSave && (show ? onSaveMany && <Pill label="Save offline" icon="download" style={s.action} onPress={() => setMenu('save')} />
@@ -79,6 +102,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
         {online?.admin && online.tmdb && <Pill label="Fix metadata" icon="search" style={s.action} onPress={() => setMenu('metadata')} />}
         {onRemoveSaved && <Pill label="Remove from this device" icon="trash" style={s.action} onPress={() => onRemoveSaved(items)} />}
       </View>
+      {followError ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={t.muted}>{followError}</Text> : null}
       {m.rating ? <View style={s.ratings}><Text style={[t.mono, { marginBottom: 6 }]}>TMDB</Text><View style={[t.row, { alignItems: 'baseline', gap: 5 }]}><Text style={s.score}>{m.rating.toFixed(1)}</Text><Text style={t.dim}>/10{m.votes ? ` · ${m.votes.toLocaleString()} votes` : ''}</Text></View></View> : null}
       {show && <View style={{ marginTop: 28 }}><View style={t.sectionHeading}><Text accessibilityRole="header" style={t.sectionTitle}>Episodes</Text><Text style={t.dim}>{items.filter(i => data.progress[i.id]?.completed).length} / {items.length} watched</Text></View><ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -18 }} contentContainerStyle={{ gap: 8, paddingHorizontal: 18, paddingBottom: 14 }}>{seasons.map(value => <Chip key={value} small label={seasonLabel(value)} selected={season === value} onPress={() => setSeason(value)} />)}</ScrollView></View>}
     </View>
@@ -130,6 +154,19 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
         value={listName} onChangeText={setListName} style={s.listInput} />
       <Pill label="Create and add" disabled={!listName.trim() || editingList} onPress={() => void editList({ action: 'create', name: listName, titleId })} />
       {listError ? <Text accessibilityLiveRegion="polite" style={t.muted}>{listError}</Text> : null}
+    </Sheet>
+    <Sheet visible={menu === 'schedule'} onClose={() => setMenu(null)} title="Episode schedule">
+      {scheduled?.length ? (['upcoming', 'missing'] as const).map(status => {
+        const episodes = scheduled.filter(episode => episode.status === status);
+        return episodes.length ? <View key={status}>
+          <Text accessibilityRole="header" style={[t.sectionTitle, { marginTop: 12 }]}>{status === 'upcoming' ? 'Upcoming' : 'Missing'}</Text>
+          {episodes.map(episode => <View key={episode.season + ':' + episode.episode} style={{ paddingVertical: 8, gap: 4 }}>
+            <Text style={t.text}>S{episode.season} E{episode.episode} {episode.title}</Text>
+            <Text style={t.dim}>{episode.airDate}</Text>
+            {status === 'missing' && onSearchEpisode && <Pill label="Search releases" onPress={() => close(() => onSearchEpisode(item, episode))} />}
+          </View>)}
+        </View> : null;
+      }) : <Text accessibilityLiveRegion="polite" style={t.muted}>{scheduleError || (scheduled ? 'No missing or upcoming episodes with announced dates.' : 'Loading episode schedule…')}</Text>}
     </Sheet>
     <Sheet visible={menu === 'watched'} onClose={() => setMenu(null)} title="Mark as watched">
       <Row icon="check" label={done(inSeason) ? `${seasonLabel(season)} as unwatched` : seasonLabel(season)} detail={plural(inSeason.length, 'episode')} onPress={() => close(() => onMark(inSeason, !done(inSeason)))} />

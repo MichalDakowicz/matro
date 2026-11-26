@@ -328,6 +328,13 @@ export function createAdapter(session) {
       const { lists } = await stateRequest('POST', '/api/lists', change);
       if (latest) latest.lists = lists;
       return lists;
+    get canFollowShows() { return !session.offline && Array.isArray(latest?.followed); },
+    async followShow(change) {
+      const { followed } = await stateRequest('POST', '/api/follows', change);
+      if (latest) latest.followed = followed;
+      return followed;
+    },
+    async showSchedule(key) { return (await get('/api/follows/' + encodeURIComponent(key) + '/episodes')).episodes; },
     },
     quality: () => quality, setQuality: id => { quality = knownQuality(id); try { localStorage.setItem('matro-quality', quality); } catch { /* The choice only lasts for this visit. */ } },
     get subtitleSearchStatus() { return session.offline ? null : () => get('/api/subtitle-search'); },

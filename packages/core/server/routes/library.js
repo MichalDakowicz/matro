@@ -51,7 +51,7 @@ function register(app) {
       groupId: r.group_id, titlePath: r.group_id, kind: r.kind, season: r.season, episode: r.episode, format: path.extname(r.path).slice(1).toUpperCase(), added: r.added, duration: r.duration, ...(r.edition_group ? { editionGroup: r.edition_group, editionLabel: r.edition_label, size: r.size } : {}) }));
     const { progressTimes, queueEdited, ...state } = stateOf(ctx.user.id); scanner.refresh();
     return { user: ctx.user, folders: [...new Set(q.folders.all().map(f => label(f.path)))], items, ...state, markers: scanner.markers(state.markers, state.markerDismissals),
-      lists: app.titleLists.read(ctx.user.id), scanStatus: library.scanStatus(admin), scanner: scanner.snapshot(), metadata: tmdb.snapshot(), metadataEnabled: tmdb.enabled, catalogRevision: library.state.revision, movieRequestsEnabled: true,
+      lists: app.titleLists.read(ctx.user.id), followed: tmdb.enabled ? app.followedShows(ctx.user.id) : [], scanStatus: library.scanStatus(admin), scanner: scanner.snapshot(), metadata: tmdb.snapshot(), metadataEnabled: tmdb.enabled, catalogRevision: library.state.revision, movieRequestsEnabled: true,
       movieRequestPushEnabled: app.movieRequests.push.enabled, requestUpdates: app.movieRequests.updates(ctx.user) };
   });
   router.add('GET', '/api/library/revision', ctx => ({ catalogRevision: library.state.revision, scanStatus: library.scanStatus(ctx.user.role === 'admin') }));
