@@ -1,39 +1,45 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, BackHandler, FlatList, Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Alert, AppState, BackHandler, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { accountChanged, changeProgress, inspect, library, mediaHeaders, request, ServerError, syncDismissal, updateWatchOptions, type Item, type Library, type MovieRequest, type ScannerStatus } from '../lib/server';
 import { progressRecovery, recoveryScope, rememberProgress } from '../lib/storage';
-import { continueItems, groupLibrary, metadataFor, nameFor, savedServes, statusOf, titleKey, trackKey } from '../../../../packages/core/client/library';
+import { continueItems, groupLibrary, metadataFor, nameFor, savedServes, titleKey, trackKey } from '../../../../packages/core/client/library';
 import { normalizeProgress, queueChange } from '../../../../packages/core/client/watch-progress.js';
 import { applyDismissals } from '../../../../packages/core/client/recovery';
-import { colors, fonts } from '../theme';
-import { Icon, Pill, styles as t } from '../components/Matro';
-import { AccountSheet, ContinueRow, Corner, Dock, FeaturedReel, PosterCard } from '../components/LibraryParts';
+import { colors, dock } from '../theme';
+import { Pill, styles as t } from '../components/Matro';
+import { AboutSheet, AccountSheet, Corner, Dock, Grain, OfflinePill, Toast, useKeyboardOpen, useNotice, type DockTab } from '../components/Shell';
+import { plural } from '../lib/text';
 import NativePlayer from './NativePlayer';
 import TitleScreen from './TitleScreen';
 import DownloadsScreen from './DownloadsScreen';
 import FoldersScreen from './FoldersScreen';
 import OfflineScreen from './OfflineScreen';
 import MovieRequestsScreen from './MovieRequestsScreen';
+import QueueScreen from './QueueScreen';
+import ServerPage from './ServerPage';
+import { BrowseView, HomeView, LibraryChips, SearchView } from './LibraryScreens';
 import { useMovieRequestAlerts } from '../lib/movie-request-alerts';
-import { useKeyboardVisible } from '../lib/keyboard';
-import { isSaved, offlineLibrary, removeOffline, resumeInterrupted, retryInterrupted, savedTitle, savedTitles, saveOffline, saveOfflineBatch, watchOffline, type SavedMedia } from '../lib/offline';
+import { activeDownloads, isSaved, offlineLibrary, removeOffline, resumeInterrupted, retryInterrupted, savedTitle, savedTitles, saveOffline, saveOfflineBatch, watchOffline, type SavedMedia } from '../lib/offline';
 
 type Props = { base: string; onSignedOut: () => void; onChangeServer: () => void };
-const kinds = [{ kind: 'show', title: 'Shows', noun: 'shows' }, { kind: 'movie', title: 'Movies', noun: 'titles' }];
+type Nav = { tab: string; folder: string | null };
+const friendly = (message: string) => /network request failed|failed to fetch|timed out/i.test(message) ? 'Can’t reach your server right now.' : message;
 export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Props) {
   const [data, setData] = useState<(Library & { catalogIds?: string[] }) | null>(null), [headers, setHeaders] = useState<Record<string, string>>({});
   const dataRef = useRef(data); dataRef.current = data;
-  const [error, setError] = useState(''), [query, setQuery] = useState(''), [tab, setTab] = useState('home'), [filter, setFilter] = useState('all');
+  const [error, setError] = useState('');
+  // Dock tabs and chips replace each other; screens opened from them (Saved, Downloads, a folder) push onto `trail` so Back returns.
+  const [nav, setNav] = useState<Nav>({ tab: 'home', folder: null }), [trail, setTrail] = useState<Nav[]>([]), { tab, folder } = nav;
+  const { notice, show: notify, dismiss } = useNotice(), keyboard = useKeyboardOpen(), [about, setAbout] = useState(false);
   const [requestSearch, setRequestSearch] = useState<MovieRequest | null>(null);
   const [selected, setSelected] = useState<string | null>(null), [playing, setPlaying] = useState<{ item: Item; start?: number; queue: Item[]; saved?: SavedMedia } | null>(null);
   const [offline, setOffline] = useState(false), playRun = useRef(0);
-  const [refreshing, setRefreshing] = useState(false), [account, setAccount] = useState(false), [folder, setFolder] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false), [account, setAccount] = useState(false);
   const revision = useRef<string | undefined>(undefined), loading = useRef(false);
   const alerts = useMovieRequestAlerts(base, !offline && data?.user.role === 'admin' && data.movieRequestPushEnabled === true);
   const openedAlerts = useRef(0);
-  const keyboard = useKeyboardVisible();
-  const { width } = useWindowDimensions(), insets = useSafeAreaInsets(), columns = Math.max(3, Math.floor((width - 24) / 108)), cardWidth = (width - 36 - (columns - 1) * 12) / columns;
+  const insets = useSafeAreaInsets();
   const load = useCallback(async () => {
     if (loading.current) return;
     loading.current = true;
@@ -89,25 +95,33 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (playing) return false;
       if (selected) { setSelected(null); return true; }
-      if (folder || tab !== 'home') { setFolder(null); setTab('home'); return true; }
+      if (back()) return true;
+      if (folder || tab !== 'home') { jump('home'); return true; }
       return false;
     }); return () => sub.remove();
-  }, [playing, selected, tab, folder, load]);
+  }, [playing, selected, tab, folder, trail, load]);
+  // Errors raised after the library is on screen (progress, queue, saves) become a short toast instead of a stuck banner.
+  useEffect(() => { if (error && data) { notify(friendly(error)); setError(''); } }, [error, data]);
   const allGroups = useMemo(() => groupLibrary(data?.items || []), [data?.items]);
-  const groups = useMemo(() => allGroups.filter(items => !folder || items[0].root === folder), [allGroups, folder]);
+  const folderGroups = useMemo(() => allGroups.filter(items => items[0].root === folder), [allGroups, folder]);
   const featured = useMemo(() => data ? [...allGroups].sort((a, b) => {
     const recent = (items: Item[]) => Math.max(0, ...items.map(i => data.progress[i.id]?.hidden ? 0 : data.progress[i.id]?.updated || 0));
     return recent(b) - recent(a) || (b[0].added || 0) - (a[0].added || 0);
   }) : [], [allGroups, data?.progress]);
   const continues = useMemo(() => data ? continueItems(data, allGroups) : [], [data, allGroups]);
   // Titles opened from the Saved tab show only the episodes that are on this device.
-  const [savedIds, setSavedIds] = useState<Set<string>>(new Set()), [savedOnly, setSavedOnly] = useState(false);
+  const [savedIds, setSavedIds] = useState<Set<string>>(new Set()), [savingIds, setSavingIds] = useState<Set<string>>(new Set()), [savedOnly, setSavedOnly] = useState(false);
   useEffect(() => {
     if (!data) return;
     let run = 0;
     const refresh = () => {
       const current = ++run;
-      void savedTitles(base, data.user).then(list => { if (current === run) setSavedIds(new Set(list.filter(isSaved).map(record => record.id))); }).catch(() => {});
+      void savedTitles(base, data.user).then(list => {
+        if (current !== run) return;
+        setSavedIds(new Set(list.filter(isSaved).map(record => record.id)));
+        // Downloads that are running, waiting or paused: their pills read "Saving…".
+        setSavingIds(new Set([...list.filter(record => !record.complete).map(record => record.id), ...activeDownloads(base, data.user).map(job => job.id)]));
+      }).catch(() => {});
     };
     refresh();
     const stop = watchOffline(refresh);
@@ -152,7 +166,6 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       else setError(e instanceof Error ? e.message : 'Could not save progress.');
     }
   };
-  const complete = (item: Item) => void updateProgress(item, false);
   const removeContinue = (item: Item) => void updateProgress(item, true);
   const updateQueue = (queue: string[], change: ReturnType<typeof queueChange>) => {
     if (!data) return;
@@ -162,8 +175,10 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   };
   const enqueue = (items: Item[]) => {
     if (!data) return;
-    const add = items.map(i => i.id);
-    updateQueue([...new Set([...data.queue, ...add])], { add, remove: [] });
+    const add = items.map(i => i.id), queue = [...new Set([...data.queue, ...add])];
+    updateQueue(queue, { add, remove: [] });
+    const added = queue.length - data.queue.length;
+    notify(!added ? 'Already in your queue.' : added === 1 ? `Added “${items.length === 1 ? nameFor(data, items[0]) : 'one item'}” to the queue.` : `Added ${plural(added, 'item')} to the queue.`, { label: 'View queue', run: () => jump('queue') });
   };
   const startPlayback = async (item: Item, queue: Item[], start?: number) => {
     if (!data) return;
@@ -195,29 +210,41 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     resume();
     const subscription = AppState.addEventListener('change', state => { if (state === 'active') resume(); });
     return () => subscription.remove();
-  }, [base, offline, data?.user.id, data?.user.username]);
+  }, [base, offline, data?.user.id, data?.items]);
+  const savedLink = { label: 'View', run: () => push('offline') };
   const save = (item: Item) => {
-    if (!data || offline) return;
-    void saveOffline(base, data.user, item, saveName(item))
-      .then(() => Alert.alert('Save offline', 'Follow preparation and download progress under Saved.'))
-      .catch(error => Alert.alert('Could not save title', error.message));
+    if (!data) return;
+    if (offline) return notify('Reconnect to save titles for offline.');
+    void saveOffline(base, data.user, item, saveName(item)).catch(error => notify(`Couldn’t save “${saveName(item)}”. ${friendly(error.message)}`));
+    notify(`Saving “${saveName(item)}”. Follow it under Saved.`, savedLink);
   };
   const saveMany = (list: Item[]) => {
-    if (!data || offline || !list.length) return;
-    void saveOfflineBatch(base, data.user, list, saveName)
-      .then(() => Alert.alert('Saving offline', 'Matro prepares two titles at a time. Follow progress under Saved.'))
-      .catch(error => Alert.alert('Could not save everything', error.message));
+    if (!data || !list.length) return;
+    if (offline) return notify('Reconnect to save titles for offline.');
+    void saveOfflineBatch(base, data.user, list, saveName).catch(error => notify(`Couldn’t save everything. ${friendly(error.message)}`));
+    notify(`Saving ${plural(list.length, 'episode')}, two at a time. Follow them under Saved.`, savedLink);
+  };
+  // Marks a whole season or show: one request per episode whose state changes.
+  const markMany = async (list: Item[], done: boolean) => {
+    const todo = list.filter(item => !!dataRef.current?.progress[item.id]?.completed !== done);
+    if (!todo.length) return;
+    for (const item of todo) await updateProgress(item, false);
+    notify(todo.length === 1 ? (done ? 'Marked as watched.' : 'Marked as unwatched.') : `Marked ${plural(todo.length, 'episode')} ${done ? 'watched' : 'unwatched'}.`);
   };
   const removeSaved = (list: Item[]) => Alert.alert('Remove from this device?', 'The saved files are deleted. They stay in your library on the server.', [
     { text: 'Cancel', style: 'cancel' },
     { text: 'Remove', style: 'destructive', onPress: () => void Promise.all(list.map(item => removeOffline(base, data!.user, item.id))).then(() => { setSelected(null); setSavedOnly(false); }).catch(e => setError(e.message)) },
   ]);
-  const changeTab = (value: string) => { setSavedOnly(false); setTab(value); setSelected(null); setFolder(null); setFilter('all'); setRequestSearch(null); };
+  const resetView = () => { setSavedOnly(false); setSelected(null); setRequestSearch(null); };
+  const jump = (value: string) => { resetView(); setTrail([]); setNav({ tab: value, folder: null }); };
+  const push = (value: string, next: string | null = null) => { resetView(); setTrail(list => [...list, nav]); setNav({ tab: value, folder: next }); };
+  const back = () => { const previous = trail[trail.length - 1]; if (!previous) return false; resetView(); setTrail(list => list.slice(0, -1)); setNav(previous); return true; };
+  const go = (value: string) => value === 'folders' ? jump(value) : push(value);
   useEffect(() => {
     if (playing || !alerts.supported || alerts.opened === openedAlerts.current) return;
     openedAlerts.current = alerts.opened;
     setAccount(false);
-    changeTab('movie-requests');
+    push('movie-requests');
   }, [alerts.opened, alerts.supported, playing]);
   if (playing && data) return <NativePlayer key={`${playing.item.id}:${playing.start ?? 'resume'}`} {...art} item={playing.item} data={data} initialPosition={playing.start} queue={playing.queue}
     saved={playing.saved} offline={offline} onBack={() => { playRun.current++; setPlaying(null); void load(); }} onSelect={item => void startPlayback(item, playing.queue)} onNext={() => {
@@ -225,64 +252,54 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       if (next && data.preferences.autoplay !== false) void startPlayback(next, playing.queue);
       else { setPlaying(null); void load(); }
     }} />;
-  if (detail && data) return <TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onComplete={complete} onEnqueue={enqueue} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} />;
-  const contentStyle = { paddingTop: insets.top + 76, paddingBottom: insets.bottom + 104, paddingHorizontal: 18 };
-  const search = tab === 'search';
-  const matches = (items: Item[]) => !search || `${nameFor(data!, items[0])} ${metadataFor(data!, items[0]).people?.join(' ')} ${items.map(i => i.title + ' ' + i.path).join(' ')}`.toLowerCase().includes(query.toLowerCase().trim());
-  const sections = data ? kinds.map(kind => {
-    const found = groups.filter(items => items[0].kind === kind.kind && matches(items));
-    return { ...kind, total: found.length, data: Array.from({ length: Math.ceil(found.length / columns) }, (_, i) => found.slice(i * columns, (i + 1) * columns)) };
-  }).filter(section => section.total) : [];
-  const header = data ? <>
-    {folder ? <View style={{ marginBottom: 22 }}><Text style={t.heading}>{folder.split(/[\\/]/).filter(Boolean).pop()}</Text><Pressable onPress={() => { setFolder(null); setTab('folders'); }}><Text style={[t.muted, { marginTop: 10 }]}>Show all folders</Text></Pressable></View> : null}
-    {search ? <View style={{ marginBottom: 28 }}><Text style={[t.dim, { marginBottom: 12 }]}>Search movies, shows, people and file names</Text><View style={s.search}><Icon name="search" /><TextInput autoFocus value={query} onChangeText={setQuery} accessibilityLabel="Search library" placeholder="Try a title or a file name" placeholderTextColor={colors.dim} style={s.searchInput} returnKeyType="search" clearButtonMode="while-editing" /></View><Text style={[t.dim, { marginTop: 12 }]}>{query ? `${sections.reduce((sum, section) => sum + section.total, 0)} results across ${data.items.length} files` : 'Searching your whole library — titles, people and file names'}</Text></View> : null}
-    {tab === 'home' && !folder && <><ContinueRow {...art} data={data} items={continues} onPlay={play} onRemove={removeContinue} /><FeaturedReel key={`${base}:${featured.length}`} {...art} data={data} groups={featured} onPlay={play} onDetail={item => setSelected(titleKey(item))} /></>}
-    {!data.items.length && <View style={{ minHeight: 500, justifyContent: 'center', gap: 18 }}><Text style={t.dim}>Matro · your library</Text><Text style={[t.heading, { fontSize: 38, lineHeight: 40 }]}>Your collection.{"\n"}Your kind of player.</Text><Text style={t.muted}>All your films, shows and favourite files in one quiet place. Add a folder on your server to build your library.</Text>{data.user.role === 'admin' && <Pill label="Add folder" icon="folder" onPress={() => changeTab('folders')} primary />}</View>}
-  </> : null;
-  const browse = data && kinds.some(kind => kind.kind === tab), allBrowse = browse ? groups.filter(items => items[0].kind === tab) : [];
-  const browseItems = browse ? allBrowse.filter(items => filter === 'all' || statusOf(data!, items) === filter) : [];
-  return <View style={s.fill}>
-    {tab === 'offline' && data ? <OfflineScreen {...art} data={data} offline={offline}
+  const admin = !offline && data?.user.role === 'admin', layout = { top: insets.top + (offline ? 44 : 0), bottom: insets.bottom };
+  const libraryTab = ['home', 'movie', 'show', 'folders'].includes(tab);
+  const requestsLabel = !offline && data?.movieRequestsEnabled ? (data.user.role === 'admin' ? 'Movie requests' : 'Request a movie') : undefined;
+  const dockTab: DockTab = tab === 'search' ? 'search' : tab === 'queue' ? 'queue' : ['server', 'offline', 'downloads', 'movie-requests'].includes(tab) ? 'server' : 'home';
+  const chips = data && libraryTab && !folder ? <LibraryChips tab={tab} admin={admin} onPick={jump} /> : null;
+  const open = (items: Item[]) => setSelected(titleKey(items[0]));
+  // From the Queue screen the player gets the queue itself, not the show's episode list.
+  const playFromQueue = (item: Item) => { if (data) void startPlayback(item, data.queue.flatMap(id => data.items.find(i => i.id === id) || [])); };
+  const setQueue = (queue: string[]) => {
+    if (!data) return;
+    updateQueue(queue, queueChange(data.queue, queue));
+  };
+  const setAutoplay = (autoplay: boolean) => {
+    if (!data) return;
+    const preferences = { ...data.preferences, autoplay };
+    setData({ ...data, preferences });
+    if (!offline) void updateWatchOptions(base, data.user, { preferences: { autoplay } }).catch(error => { if (accountChanged(error)) onSignedOut(); else notify('Couldn’t save the autoplay setting.'); });
+  };
+  const top = (node: React.ReactNode) => <View style={{ flex: 1, paddingTop: layout.top + 76 }}>{node}</View>;
+  const common = { ...art, layout, refreshing, onRefresh: () => void load(), onOpen: open };
+  const screen = !data ? <View style={[s.center, { padding: 24 }]}>{refreshing ? <ActivityIndicator color={colors.text} /> : <><Text style={t.heading}>Your library</Text><Text style={[t.muted, { marginVertical: 16 }]}>{error || 'Could not load your library.'}</Text><Pill label="Try again" onPress={() => void load()} /></>}</View>
+    : tab === 'offline' ? <View style={{ flex: 1, paddingTop: offline ? 44 : 0 }}><OfflineScreen {...art} data={data} offline={offline}
       onOpenTitle={items => { setSavedOnly(true); setSelected(titleKey(items[0])); }}
       onResume={id => { const item = data.items.find(item => item.id === id); if (item) save(item); }}
-      onRemoved={() => { if (offline) void load(); }} /> :
-    !data ? <View style={[s.center, { padding: 24 }]}>{refreshing ? <ActivityIndicator color={colors.text} /> : <><Text style={t.heading}>Your library</Text><Text style={[t.muted, { marginVertical: 16 }]}>{error || 'Could not load your library.'}</Text><Pill label="Try again" onPress={() => void load()} /></>}</View> :
-    tab === 'movie-requests' && !offline && data.movieRequestsEnabled ? <View style={{ flex: 1, paddingTop: insets.top + 76 }}><MovieRequestsScreen key={alerts.opened} base={base} admin={data.user.role === 'admin'} alerts={alerts} onSearch={request => { changeTab('downloads'); setRequestSearch(request); }} /></View> :
-    tab === 'downloads' && !offline && data.user.role === 'admin' ? <View style={{ flex: 1, paddingTop: insets.top + 76 }}><DownloadsScreen {...art} initialRequest={requestSearch} /></View> : tab === 'folders' && !offline ? <View style={{ flex: 1, paddingTop: insets.top + 76 }}><FoldersScreen base={base} data={data} onRefresh={load} onBrowse={path => { setFolder(path); setTab('home'); }} /></View> : browse ? <FlatList key={`${tab}:${columns}`} data={browseItems} numColumns={columns} keyExtractor={items => titleKey(items[0])} contentContainerStyle={contentStyle} columnWrapperStyle={{ gap: 12 }} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} tintColor={colors.text} />}
-      ListHeaderComponent={<View style={{ marginBottom: 22 }}><Text style={t.heading}>{kinds.find(kind => kind.kind === tab)?.title}</Text><Text style={[t.muted, { marginTop: 8 }]}>{allBrowse.length} {tab === 'show' ? 'shows' : 'titles'}</Text><View style={[t.row, { flexWrap: 'wrap', marginTop: 18, gap: 7 }]}>{[['all', 'All'], ['new', 'Unwatched'], ['progress', 'In progress'], ['done', 'Watched']].map(([value, label]) => <Pill key={value} label={label} compact style={filter === value ? { backgroundColor: '#ffffff18' } : undefined} onPress={() => setFilter(value)} />)}</View>{tab === 'show' && <ShowScanStatus key={base} base={base} initial={data.scanner} />}</View>}
-      ListEmptyComponent={<Text style={t.muted}>No titles match this filter.</Text>} renderItem={({ item: items }) => <PosterCard {...art} data={data} items={items} width={cardWidth} onPress={() => setSelected(titleKey(items[0]))} />} /> : <SectionList sections={sections} keyExtractor={(row, index) => row[0][0].id + ':' + index} stickySectionHeadersEnabled={false} contentContainerStyle={contentStyle} showsVerticalScrollIndicator={false} initialNumToRender={5} windowSize={5} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} tintColor={colors.text} />} ListHeaderComponent={header}
-      renderSectionHeader={({ section }) => <View style={[t.sectionHeading, { marginTop: 8 }]}><Text style={t.sectionTitle}>{section.title}</Text><Pressable onPress={() => changeTab(section.kind)}><Text style={t.dim}>{section.total} {section.noun}{search ? '' : ' · See all'}</Text></Pressable></View>}
-      renderItem={({ item: row }) => <View style={{ flexDirection: 'row', gap: 12 }}>{row.map(items => <PosterCard key={titleKey(items[0])} {...art} data={data} items={items} width={cardWidth} onPress={() => setSelected(titleKey(items[0]))} />)}</View>}
-      ListFooterComponent={search && !sections.length ? <Text style={t.muted}>No matches. Check the spelling, or try part of a title or file name.</Text> : <View style={{ height: 12 }} />} />}
-    {data && error ? <Pressable onPress={() => setError('')} style={[s.toast, { bottom: insets.bottom + 86 }]}><Text style={t.text}>{error}</Text></Pressable> : null}
-    <Corner username={data?.user.username} onHome={() => changeTab('home')} onProfile={() => setAccount(true)} onHelp={() => Alert.alert('Matro', `${data?.items.length || 0} files in your library.\n\nMetadata and artwork from TMDB.\n\nMovies are prepared on your Matro server and played natively on this device.`, [{ text: 'Refresh', onPress: () => void load() }, { text: 'Close' }])} />
-    {!keyboard && <Dock tab={tab} onChange={changeTab} requests={!offline && data?.movieRequestsEnabled ? (data.user.role === 'admin' ? 'Movie requests' : 'Request a movie') : undefined} />}
-    <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} onGo={changeTab} onRefresh={() => void load()} onServer={onChangeServer} onSignOut={onSignedOut} />
+      onRemoved={() => { if (offline) void load(); }} /></View>
+    : tab === 'movie-requests' && !offline && data.movieRequestsEnabled ? top(<MovieRequestsScreen key={alerts.opened} base={base} admin={data.user.role === 'admin'} alerts={alerts} onSearch={request => { push('downloads'); setRequestSearch(request); }} />)
+    : tab === 'downloads' && admin ? top(<DownloadsScreen {...art} initialRequest={requestSearch} />)
+    : tab === 'folders' && !offline ? top(<FoldersScreen base={base} data={data} header={chips} onRefresh={load} onBrowse={path => push('home', path)} />)
+    : tab === 'search' ? <SearchView {...common} data={data} groups={allGroups} />
+    : tab === 'queue' ? <QueueScreen {...art} data={data} layout={layout} onPlay={playFromQueue} onQueue={setQueue} onAutoplay={setAutoplay} onBrowse={() => jump('home')} />
+    : tab === 'server' ? <ServerPage base={base} data={data} offline={offline} layout={layout} requests={requestsLabel} onGo={go} onBrowseFolder={path => push('home', path)} onRefresh={load} onChangeServer={onChangeServer} notify={notify} />
+    : folder ? <BrowseView {...common} data={data} groups={folderGroups} title={folder.split(/[\/]/).filter(Boolean).pop()} chips={null} />
+    : ['movie', 'show'].includes(tab) ? <BrowseView {...common} data={data} kind={tab} groups={allGroups.filter(items => items[0].kind === tab)} chips={chips} />
+    : <HomeView {...common} data={data} groups={allGroups} featured={featured} continues={continues} chips={chips} onPlay={play} onRemoveContinue={removeContinue} onSeeAll={jump} onAddFolder={() => jump('folders')} />;
+  const overlay = !!(detail && data), toastBottom = overlay || keyboard ? insets.bottom + 24 : insets.bottom + dock.bottom + dock.height + 18;
+  return <View style={s.fill}>
+    <View style={s.fill} importantForAccessibility={overlay ? 'no-hide-descendants' : 'auto'} accessibilityElementsHidden={overlay}>
+      {screen}
+      {offline && data && <OfflinePill onReconnect={() => void load()} />}
+      <Corner username={data?.user.username} canBack={trail.length > 0} onBack={back} onHome={() => jump('home')} onProfile={() => setAccount(true)} />
+      <Dock active={dockTab} onChange={jump} queued={data?.queue.length || 0} hidden={keyboard} />
+    </View>
+    {/* The title page is an overlay, so the list underneath stays mounted and keeps its scroll position. */}
+    {detail && data && <View style={s.overlay}><TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onEnqueue={enqueue} onMark={(list, done) => void markMany(list, done)} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} savingIds={savingIds} /></View>}
+    <Grain />
+    <Toast notice={notice} bottom={toastBottom} onDismiss={dismiss} />
+    <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} requests={requestsLabel} onGo={go} onRefresh={() => void load()} onAbout={() => setAbout(true)} onServer={onChangeServer} onSignOut={onSignedOut} />
+    <AboutSheet visible={about} onClose={() => setAbout(false)} files={data?.items.length || 0} />
   </View>;
 }
-function ShowScanStatus({ base, initial }: { base: string; initial?: ScannerStatus }) {
-  const [scan, setScan] = useState(initial);
-  useEffect(() => {
-    let active = true, timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try { const { scanner } = await request(base, '/api/segments'); if (active) setScan(scanner); }
-      catch { /* Keep the last known status when offline. */ }
-      if (active) timer = setTimeout(poll, 5000);
-    };
-    void poll();
-    return () => { active = false; clearTimeout(timer); };
-  }, [base]);
-  if (!scan || (scan.complete ?? (scan.message === 'Background scan complete'))) return null;
-  const { ready, total, message } = scan;
-  return <View style={{ marginTop: 16, gap: 8, padding: 12, borderRadius: 12, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.hairline }}>
-    <Text style={t.text}>Intro &amp; outro scanning</Text>
-    {total > 0 && <>
-      <Text style={t.muted}>{ready} of {total} episodes checked</Text>
-      <View accessibilityRole="progressbar" accessibilityLabel="Episodes checked for intros and outros" accessibilityValue={{ min: 0, now: ready, max: total }} style={{ height: 5, borderRadius: 5, backgroundColor: colors.hairline }}>
-        <View style={{ height: 5, borderRadius: 5, backgroundColor: colors.text, width: `${100 * ready / total}%` }} />
-      </View>
-    </>}
-    <Text style={t.muted}>{message}</Text>
-  </View>;
-}
-const s = StyleSheet.create({ fill: { flex: 1, backgroundColor: colors.ground }, center: { flex: 1, justifyContent: 'center' }, search: { height: 54, borderRadius: 999, borderWidth: 1, borderColor: '#ffffff24', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, gap: 12, backgroundColor: '#ffffff05' }, searchInput: { flex: 1, color: colors.text, fontSize: 17, fontFamily: fonts.regular, paddingVertical: 0 }, toast: { position: 'absolute', left: 18, right: 18, padding: 16, borderRadius: 14, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.hairline, zIndex: 40 } });
+const s = StyleSheet.create({ fill: { flex: 1, backgroundColor: colors.ground }, center: { flex: 1, justifyContent: 'center' }, overlay: { ...StyleSheet.absoluteFill, zIndex: 50, elevation: 24, backgroundColor: colors.ground } });

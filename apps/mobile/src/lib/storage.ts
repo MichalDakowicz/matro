@@ -46,3 +46,10 @@ export async function cachedLibrary(base: string) {
   const data = scope ? await readStored<Library>(libraryKey(scope)) : null;
   return data && scope === offlineAccount(base, data.user) ? data : null;
 }
+
+const RECENT = 'matro.recent-searches';
+export const loadRecents = async (): Promise<string[]> => {
+  try { const list = JSON.parse((await AsyncStorage.getItem(RECENT)) || '[]'); return Array.isArray(list) ? list.filter((entry): entry is string => typeof entry === 'string').slice(0, 6) : []; }
+  catch { return []; }
+};
+export const saveRecents = (list: string[]) => AsyncStorage.setItem(RECENT, JSON.stringify(list.slice(0, 6))).catch(() => {});

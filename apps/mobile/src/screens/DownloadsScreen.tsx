@@ -7,7 +7,7 @@ import { request, type MovieRequest } from '../lib/server';
 import { releaseName, transferLabel } from '../lib/release-name';
 import { Icon, IconButton, MediaArt, Pill, ProgressBar, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
-import { colors, fonts } from '../theme';
+import { colors, fonts, radius } from '../theme';
 
 type Job = { id: string; hash: string; title: string; phase: string; season?: number; episode?: number; error?: string; banner?: string; finalRoot?: string };
 type Transfer = { hash: string; name: string; progress: number; state: string; speed: number; banner?: string; savePath: string };
@@ -114,13 +114,13 @@ export default function DownloadsScreen({ base, headers, initialRequest }: ArtPr
       const state = { error: 'Error', reconnecting: 'Reconnecting', queued: 'Queued' }[job.phase] || 'Preparing';
       const note = job.error || (job.phase === 'queued' ? 'Waiting for a season download slot.' : 'Fetching metadata, selecting media and arranging files…');
       return <MediaArt key={job.id} base={base} headers={headers} path={job.banner} style={s.transfer}>
-        <LinearGradient colors={['#15151999', '#0a0a0bf5']} style={StyleSheet.absoluteFill} /><View style={s.transferTop}><Text style={[t.dim, { color: colors.text }]}>{state}</Text><IconButton name="close" label={`Remove ${title}`} size={44} onPress={() => remove(job.hash)} /></View><View style={s.transferBody}><Text style={t.text}>{title}</Text><Text style={[t.dim, { lineHeight: 18, marginTop: 8, color: job.phase === 'error' ? colors.warn : colors.muted }]}>{note}</Text>{job.phase === 'error' && <Pill label="Retry preparation" compact style={{ alignSelf: 'flex-start', marginTop: 12 }} onPress={() => void run(async () => { await call('retry', { id: job.id }); await refresh(); })} />}</View>
+        <LinearGradient colors={[colors.panel, colors.fade]} style={StyleSheet.absoluteFill} /><View style={s.transferTop}><Text style={[t.dim, { color: colors.text }]}>{state}</Text><IconButton name="close" label={`Remove ${title}`} size={44} onPress={() => remove(job.hash)} /></View><View style={s.transferBody}><Text style={t.text}>{title}</Text><Text style={[t.dim, { lineHeight: 18, marginTop: 8, color: job.phase === 'error' ? colors.warn : colors.muted }]}>{note}</Text>{job.phase === 'error' && <Pill label="Retry preparation" compact style={{ alignSelf: 'flex-start', marginTop: 12 }} onPress={() => void run(async () => { await call('retry', { id: job.id }); await refresh(); })} />}</View>
       </MediaArt>;
     })}
     {active.map(tr => {
       const name = releaseName(tr.name), line = [transferLabel(tr.state), name.detail, tr.speed ? `${(tr.speed / 1048576).toFixed(1)} MB/s` : ''].filter(Boolean).join(' · ');
       return <MediaArt key={tr.hash} base={base} headers={headers} path={tr.banner} style={s.transfer}>
-        <LinearGradient colors={['#15151999', '#0a0a0bf5']} style={StyleSheet.absoluteFill} /><View style={s.transferTop}><Text style={[t.dim, { color: colors.text }]}>{line}</Text><IconButton name="close" label={`Remove ${name.title}`} size={44} onPress={() => remove(tr.hash)} /></View><View style={s.transferBody}><View style={[t.row, { justifyContent: 'space-between', marginBottom: 12 }]}><Text numberOfLines={2} style={[t.text, { flex: 1 }]}>{name.title}</Text><Text style={t.mono}>{Math.round(tr.progress * 100)}%</Text></View><ProgressBar value={tr.progress} /></View>
+        <LinearGradient colors={[colors.panel, colors.fade]} style={StyleSheet.absoluteFill} /><View style={s.transferTop}><Text style={[t.dim, { color: colors.text }]}>{line}</Text><IconButton name="close" label={`Remove ${name.title}`} size={44} onPress={() => remove(tr.hash)} /></View><View style={s.transferBody}><View style={[t.row, { justifyContent: 'space-between', marginBottom: 12 }]}><Text numberOfLines={2} style={[t.text, { flex: 1 }]}>{name.title}</Text><Text style={t.mono}>{Math.round(tr.progress * 100)}%</Text></View><ProgressBar value={tr.progress} /></View>
       </MediaArt>;
     })}
     {done.length ? <View style={s.doneBlock}>
@@ -184,9 +184,9 @@ export default function DownloadsScreen({ base, headers, initialRequest }: ArtPr
   </KeyboardAvoidingView>;
 }
 const s = StyleSheet.create({
-  search: { height: 54, borderRadius: 999, borderWidth: 1, borderColor: '#ffffff24', flexDirection: 'row', alignItems: 'center', gap: 12, paddingLeft: 18, paddingRight: 5, backgroundColor: '#ffffff05' },
+  search: { height: 54, borderRadius: 999, borderWidth: 1, borderColor: colors.hairlineStrong, flexDirection: 'row', alignItems: 'center', gap: 12, paddingLeft: 18, paddingRight: 5, backgroundColor: colors.fill },
   input: { flex: 1, color: colors.text, fontFamily: fonts.regular, fontSize: 17, paddingVertical: 0 },
-  field: { minHeight: 48, paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1, borderColor: '#ffffff30', borderRadius: 8, color: colors.text, fontFamily: fonts.regular, fontSize: 14, backgroundColor: '#ffffff05' },
+  field: { minHeight: 48, paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1, borderColor: colors.track, borderRadius: 8, color: colors.text, fontFamily: fonts.regular, fontSize: 14, backgroundColor: colors.fill },
   cardTitle: { color: colors.text, fontFamily: fonts.medium, fontSize: 12.5, marginTop: 8 },
   empty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 42, paddingHorizontal: 12 },
   transfer: { borderRadius: 16, marginBottom: 14, minHeight: 160 },
@@ -197,7 +197,7 @@ const s = StyleSheet.create({
   doneRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.hairline },
   switchRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 4 },
   modalRoot: { flex: 1, justifyContent: 'flex-end' },
-  scrim: { ...StyleSheet.absoluteFill, backgroundColor: '#0009' },
+  scrim: { ...StyleSheet.absoluteFill, backgroundColor: colors.scrim },
   sheet: { maxHeight: '85%', borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.hairline, paddingHorizontal: 22, paddingTop: 12 },
   release: { flexDirection: 'row', gap: 12, alignItems: 'center', paddingVertical: 16, borderTopWidth: 1, borderTopColor: colors.hairline },
 });
