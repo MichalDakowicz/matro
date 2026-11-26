@@ -46,6 +46,48 @@ From then on it is all in the browser:
   You can revoke unused codes, reset a viewer's password or remove a viewer. `node packages/core/server/cli.js invite`
   makes a code from the server's terminal too. Viewers cannot add or remove titles or see server paths.
 
+## Back up and restore server data
+
+From the repository root, run these commands with the server's `MATRO_DATA` setting and
+as the same OS user that runs Matro:
+
+```sh
+node packages/core/server/cli.js backup
+node packages/core/server/cli.js backup /path/to/new-backup-folder
+# Stop the server before restoring.
+node packages/core/server/cli.js restore /path/to/backup-folder
+```
+
+With no folder argument, `backup` creates a timestamped folder under `MATRO_DATA/backups`.
+SQLite snapshots accounts, sessions, library records, watch history, queues, manual markers,
+uploaded subtitle text and account settings while the server is running. The command also copies
+automatic markers, download settings and their encryption key, download job records, the data
+folder's `.env`, and saved TMDB matches when present. Stop the server before backup if you need
+the database and these separate files from the same point in time.
+
+Keep the backup private and copy it to another disk. It contains password hashes and may contain
+credentials and keys. Back up media files, including uploaded videos and subtitle sidecars kept
+alongside media, plus any configuration outside `MATRO_DATA`, separately. Generated playback
+and preview caches can be rebuilt.
+
+`restore` refuses to run while Matro is using the data folder. It replaces the saved state and keeps
+the previous database and settings in `MATRO_DATA/backups/before-restore-*`. To migrate to a new
+host, mount media at the original paths, restore into the new data folder, and start the server.
+Portable export and path remapping for desktop standalone libraries are follow-up work.
+
+For Docker Compose, run the backup inside the running container. Run the restore in a one-off
+container with the same data volume, while the service is stopped:
+
+```sh
+docker compose -f apps/server/docker-compose.yml exec matro node packages/core/server/cli.js backup /data/backups/my-backup
+docker compose -f apps/server/docker-compose.yml stop matro
+docker compose -f apps/server/docker-compose.yml run --rm matro node packages/core/server/cli.js restore /data/backups/my-backup
+docker compose -f apps/server/docker-compose.yml start matro
+```
+
+The example assumes `/data/backups/my-backup` is a new directory for the backup and is already
+available on the data volume at restore time. Copy the backup out of that volume for safekeeping.
+
 ## The interface
 
 The Vite web app imports the browser UI from `packages/browser-ui` directly. Its HTTP/authentication/profile adapters live in `apps/web/web`. Server services live under `packages/core/server` and import shared download and metadata modules from the same core package. There are no vendored copies or synchronization scripts. Run `npm run build:web` after changing the browser UI; the server serves `apps/web/dist`.

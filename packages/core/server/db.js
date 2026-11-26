@@ -105,10 +105,27 @@ function open(file) {
   }, 'BEGIN IMMEDIATE');
   return db;
 }
+
+// Keep server startup and restores mutually exclusive for this data directory.
+// SQLite releases the lock even if the process is killed.
+function lockData(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  const lock = new DatabaseSync(path.join(dir, '.matro.lock'));
+  try {
+    lock.exec('BEGIN IMMEDIATE');
+  } catch (error) {
+    lock.close();
+    if ([5, 6].includes(error.errcode & 0xff)) {
+      throw new Error('This data directory is in use by a Matro server or restore. Stop the server and wait for any restore to finish.');
+    }
+    throw error;
+  }
+  return () => lock.close();
+}
 // node:sqlite rejects undefined and booleans as bind values.
 const bind = value => value === undefined ? null : typeof value === 'boolean' ? Number(value) : value;
 function tx(db, fn, begin = 'BEGIN') {
   db.exec(begin);
   try { const result = fn(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; }
 }
-module.exports = { open, bind, tx };
+module.exports = { open, bind, tx, lockData };
