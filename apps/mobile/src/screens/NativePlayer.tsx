@@ -130,7 +130,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
       Alert.alert('Picture-in-picture unavailable', 'Check the picture-in-picture permission in Android settings.');
     }
   };
-  const gestures = usePlayerGestures({ stage: stageTouches, width, onTap: () => setControls(visible => !visible), seekBy: delta => p.seek(p.position + delta), volume: () => p.player.volume, setVolume: value => { p.player.volume = value; } });
+  const gestures = usePlayerGestures({ stage: stageTouches, width, onTap: () => setControls(visible => !visible), seekBy: delta => p.seek(p.position + delta), volume: () => playback.current.volume, setVolume: value => { playback.current.setVolume(value); }, maxVolume: p.maxVolume });
   tapRef.current = gestures.tap;
   useEffect(() => { sleep.check(); }, [p.position, sleep.check]);
   const editing = useSkipEditing({ base, item, queue, markers: p.markers, position: p.position, duration: p.info?.duration || 0, applyMarkers: p.applyMarkers });
@@ -208,6 +208,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
       {sheet === 'speed' ? <ChipRow>{speeds.map(rate => <Chip key={rate} label={speedLabel(rate)} accessibilityLabel={`Speed ${speedLabel(rate)}`} selected={p.rate === rate} onPress={() => { p.setSpeed(rate); setSheet(null); }} />)}</ChipRow>
         : sheet === 'tracks' ? <TracksSheet audio={p.info?.audio || []} audioIndex={p.audio} onAudio={p.chooseAudio} subtitles={allSubs} subtitleIndex={p.subtitle} onSubtitle={p.chooseSubtitle}
           diagnostics={p.diagnostics} qualities={p.qualities} quality={p.quality} onQuality={p.chooseQuality} audioDelay={p.audioDelay} onAudioDelay={p.setAudioDelay}
+          volume={p.volume} maxVolume={p.maxVolume} onVolume={(value, save) => { const volume = p.setVolume(value); if (save) setPreference({ volume }); }}
           delay={p.delay} onDelay={p.setDelay} size={p.subtitleSize} onSize={p.setSubtitleSize} bitmap={bitmap} position={subtitlePosition} onPosition={setSubtitlePosition} style={subStyle} onStyle={changeSubtitleStyle} />
         : sheet === 'more' ? <PlaybackSheet chapters={p.info?.chapters} markers={p.markers} position={p.position} isShow={item.kind === 'show'} canEdit={!offline} editing={editing}
           autoSkip={p.settings.autoSkip === true} onAutoSkip={value => setPreference({ autoSkip: value })} sleep={sleep.mode} onSleep={sleep.choose} background={background} onBackground={setBackground} onSeek={time => { setSheet(null); p.seek(time); }} />

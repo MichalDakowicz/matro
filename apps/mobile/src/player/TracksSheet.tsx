@@ -14,6 +14,7 @@ import { SubtitlePositionControls } from './SubtitlePositionControls';
 import { SubtitleStyleControls } from './SubtitleStyleControls';
 import { subtitleTextStyle, type SubtitleStyle } from './subtitleStyle';
 import type { SubtitlePosition } from './subtitlePosition';
+import { isBoosted, volumeLabel } from './volume';
 
 type Row = Pick<Track, 'index' | 'language' | 'title' | 'codec' | 'channels'>;
 type Props = {
@@ -23,6 +24,7 @@ type Props = {
   diagnostics?: { mode: string; reason: string } | null;
   qualities: { id: string; label: string }[]; quality: string; onQuality: (id: string) => void;
   audioDelay: number; onAudioDelay?: (delay: number) => void;
+  volume: number; maxVolume: number; onVolume: (volume: number, save: boolean) => void;
   position: SubtitlePosition; onPosition: (position: SubtitlePosition) => void; style: SubtitleStyle; onStyle: (change: Partial<SubtitleStyle>) => void;
 };
 
@@ -35,7 +37,7 @@ function TrackRow({ track, position, selected, onPress }: { track: Row; position
 }
 
 /** Audio and Subtitles on their own tabs; delay, size, position and style sit under Subtitles, away from the audio list. */
-export function TracksSheet({ audio, audioIndex, onAudio, subtitles, subtitleIndex, onSubtitle, delay, onDelay, size, onSize, bitmap, diagnostics, qualities, quality, onQuality, audioDelay, onAudioDelay, position, onPosition, style, onStyle }: Props) {
+export function TracksSheet({ audio, audioIndex, onAudio, subtitles, subtitleIndex, onSubtitle, delay, onDelay, size, onSize, bitmap, diagnostics, qualities, quality, onQuality, audioDelay, onAudioDelay, volume, maxVolume, onVolume, position, onPosition, style, onStyle }: Props) {
   const [tab, setTab] = useState<'audio' | 'subtitles'>('audio'), [draft, setDraft] = useState<number | null>(null);
   const shown = draft ?? size;
   return <View style={{ flexShrink: 1 }}>
@@ -49,6 +51,7 @@ export function TracksSheet({ audio, audioIndex, onAudio, subtitles, subtitleInd
         {diagnostics && <Section title={`Playback info · ${diagnostics.mode}`}><Text style={t.muted}>{diagnostics.reason}</Text></Section>}
         {qualities.length > 0 && <Section title="Quality"><ChipRow>{qualities.map(tier => <Chip key={tier.id} label={tier.label} selected={tier.id === quality} onPress={() => onQuality(tier.id)} />)}</ChipRow></Section>}
         {audio.length ? audio.map((track, index) => <TrackRow key={track.index} track={track} position={index + 1} selected={audioIndex === track.index} onPress={() => onAudio(track.index)} />) : <Text style={t.dim}>No audio tracks available.</Text>}
+        <Section title="Volume"><VolumeControl volume={volume} max={maxVolume} onChange={onVolume} /></Section>
         {onAudioDelay && <Section title="Audio timing"><HoldStepper label="Audio delay" value={delayLabel(audioDelay)} minusLabel="Audio earlier" plusLabel="Audio later" onStep={direction => onAudioDelay(audioDelay + direction * .1)} onReset={audioDelay ? () => onAudioDelay(0) : undefined} /></Section>}
       </> : <>
         <Pressable onPress={() => onSubtitle(null)} accessibilityRole="radio" accessibilityState={{ checked: subtitleIndex === null }} style={[s.track, subtitleIndex === null && s.selected]}><Text style={[t.text, { flex: 1 }]}>Off</Text>{subtitleIndex === null && <Icon name="check" size={18} />}</Pressable>
@@ -73,11 +76,30 @@ export function TracksSheet({ audio, audioIndex, onAudio, subtitles, subtitleInd
   </View>;
 }
 
+/** 0–100% is the player's own volume; on Android the last stretch to 150% is a marked Boost segment. */
+function VolumeControl({ volume, max, onChange }: { volume: number; max: number; onChange: (volume: number, save: boolean) => void }) {
+  const boosted = isBoosted(volume), readout = `${volumeLabel(volume)}${boosted ? ' · Boost' : ''}`;
+  return <View>
+    <View style={s.sizeRow}>
+      {isAndroidTv ? <HoldStepper label="Volume" value={readout} minusLabel="Lower volume" plusLabel="Raise volume" onStep={direction => onChange(volume + direction * .05, true)} onReset={boosted ? () => onChange(1, true) : undefined} /> : <><Slider accessibilityLabel="Volume" accessibilityValue={{ text: readout }} style={{ flex: 1, height: 44 }} minimumValue={0} maximumValue={max} step={.05} value={volume} minimumTrackTintColor={colors.primary} maximumTrackTintColor={chrome.track} thumbTintColor={colors.primary}
+        onValueChange={value => onChange(value, false)} onSlidingComplete={value => onChange(value, true)} />
+      <Text style={s.readout}>{volumeLabel(volume)}</Text></>}
+    </View>
+    {max > 1 && <View style={s.boostScale} importantForAccessibility="no-hide-descendants">
+      <View style={{ flex: 1 / (max - 1) }} />
+      <View style={[s.boostSegment, boosted && s.boostOn]}><Text style={[s.boostLabel, boosted && { color: colors.text }]}>Boost</Text></View>
+    </View>}
+    {max > 1 && <Text style={[t.dim, { marginTop: 6 }]}>Above 100% lifts quiet dialogue. Peaks are limited, so loud scenes may sound compressed.</Text>}
+  </View>;
+}
+
 const s = themed(() => StyleSheet.create({
   tabs: { flexDirection: 'row', gap: 8, marginBottom: 12 },
   tab: { flex: 1, minHeight: 44, borderRadius: 999, borderWidth: 1, borderColor: chrome.line, alignItems: 'center', justifyContent: 'center' },
   tabOn: { backgroundColor: colors.primary, borderColor: colors.primary }, tabLabel: { color: colors.text, fontFamily: fonts.medium, fontSize: 14 },
   track: { minHeight: 52, borderRadius: 9, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 4 }, selected: { backgroundColor: chrome.fill },
+  boostScale: { flexDirection: 'row', marginRight: 56 }, boostSegment: { flex: 1, borderTopWidth: 2, borderTopColor: chrome.track, paddingTop: 4 }, boostOn: { borderTopColor: colors.primary },
+  boostLabel: { color: colors.dim, fontFamily: fonts.medium, fontSize: 11, letterSpacing: .3 },
   sizeRow: { flexDirection: 'row', alignItems: 'center', gap: 8 }, readout: { width: 48, textAlign: 'right', color: colors.text, fontFamily: fonts.mono, fontSize: 13 },
   preview: { minHeight: 76, borderRadius: 12, backgroundColor: chrome.video, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, overflow: 'hidden' },
   sample: { color: colors.primary, fontFamily: fonts.medium, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 3, textAlign: 'center' },

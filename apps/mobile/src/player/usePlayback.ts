@@ -12,6 +12,8 @@ import { loadQuality, progressRecovery, recoveryScope, saveQuality } from '../li
 import { qualityOptions } from '../../../../packages/core/client/quality.js';
 import { savedTitle, type SavedMedia } from '../lib/offline';
 import { describePlayback, savedPlayback } from '../../../../packages/core/client/playback-info.js';
+import { clampVolume } from './volume';
+import { maxVolume, releaseBoost, setBoost } from './volumeBoost';
 
 export function usePlayback({ base, data, item, initialPosition, saved, offline = false, background = false, supportsPiP, onEnd }: { base: string; data: Library; item: Item; initialPosition?: number; saved?: SavedMedia; offline?: boolean; background?: boolean; supportsPiP?: boolean; onEnd: () => void }) {
   const initial = initialPosition ?? (data.progress[item.id]?.completed ? 0 : data.progress[item.id]?.position || 0);
@@ -19,6 +21,8 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   const [info, setInfo] = useState<Info | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState(''), [position, setPosition] = useState(initial), [buffered, setBuffered] = useState(initial), [playing, setPlaying] = useState(false), [caption, setCaption] = useState('');
   const [savedCopy, setSavedCopy] = useState(saved), [notice, setNotice] = useState('');
   const [audio, setAudio] = useState<number | null>(null), [subtitle, setSubtitle] = useState<number | null>(null), [delay, setDelayValue] = useState(pref?.delay || 0), [audioDelay, setAudioDelayValue] = useState(pref?.audioDelay || 0), [subtitleSize, setSubtitleSizeValue] = useState(pref?.size || 1), [rate, setRate] = useState(1);
+  // A saved 0 still opens audible: the phone player has no mute to undo it.
+  const [volume, setVolumeValue] = useState(() => clampVolume(Number(data.preferences.volume) || .72, maxVolume));
   const [session] = useState(() => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
   const choices = useRef({ audio, subtitle, delay, audioDelay, size: subtitleSize, quality: 'original' }), [quality, setQualityValue] = useState('original'), prefChanges = useRef<TrackPreference>({}), dataRef = useRef(data), infoRef = useRef<Info | null>(null), endRef = useRef(onEnd);
   const sourceReady = useRef(false), advanced = useRef(false), sampledPlayback = useRef(false), playbackStart = useRef<number | null>(null);
@@ -33,7 +37,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     p.keepScreenOnWhilePlaying = true;
     p.staysActiveInBackground = false;
     p.bufferOptions = { preferredForwardBufferDuration: 60, minBufferForPlayback: 2, maxBufferBytes: 64 * 1024 * 1024, waitsToMinimizeStalling: true };
-    p.volume = Math.min(1, Number(data.preferences.volume) || .72);
+    p.volume = Math.min(1, volume);
   });
   const lastLocal = useRef(0), rewatching = useRef(!!data.progress[item.id]?.completed);
   const [markers, setMarkers] = useState(data.markers?.[item.id] || []);
@@ -42,6 +46,8 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   autoSkip.current ??= createAutoSkip();
   markersRef.current = markers; backgroundRef.current = background;
   const [settings, setSettings] = useState<Preferences>(data.preferences), settingsRef = useRef(settings);
+  useEffect(() => { setBoost(player, volume * 100); }, [player, volume]);
+  useEffect(() => releaseBoost, [player]);
   // Background audio keeps the decoder alive with the screen off and shows a media notification. Both need the expo-video plugin option.
   useEffect(() => { player.staysActiveInBackground = background; player.showNowPlayingNotification = background; }, [player, background]);
   useEffect(() => {
@@ -329,6 +335,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     choices.current.quality = id; setQualityValue(id); void saveQuality(id); void load(at.current);
   };
   const setSubtitleSize = (value: number) => { choices.current.size = value; setSubtitleSizeValue(value); remember({ size: value }); };
+  const setVolume = (value: number) => { const next = clampVolume(value, maxVolume); player.volume = Math.min(1, next); setVolumeValue(next); return next; };
   const setSpeed = (next: number) => { rateRef.current = next; player.playbackRate = next; setRate(next); };
   const setPreference = (patch: Partial<Preferences>) => {
     settingsRef.current = { ...settingsRef.current, ...patch };
@@ -336,5 +343,5 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     if (!offlineRef.current) void updateWatchOptions(base, dataRef.current.user, { preferences: patch }).catch(() => {});
   };
   const applyMarkers = (next: typeof markers) => { markersRef.current = next; setMarkers(next); };
-  return { player, info, notice, diagnostics, markers, applyMarkers, settings, setPreference, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, audioDelay, subtitleSize, rate, quality, qualities: savedCopy ? [] : qualityOptions(info?.video), chooseQuality, persist, toggle, setPlaybackPlaying, seek, chooseAudio, chooseSubtitle, setDelay, setAudioDelay: savedCopy ? undefined : setAudioDelay, setSubtitleSize, setSpeed, allowPiP, autoPiP, pictureInPicture, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
+  return { player, info, notice, diagnostics, markers, applyMarkers, settings, setPreference, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, audioDelay, subtitleSize, volume, maxVolume, setVolume, rate, quality, qualities: savedCopy ? [] : qualityOptions(info?.video), chooseQuality, persist, toggle, setPlaybackPlaying, seek, chooseAudio, chooseSubtitle, setDelay, setAudioDelay: savedCopy ? undefined : setAudioDelay, setSubtitleSize, setSpeed, allowPiP, autoPiP, pictureInPicture, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
 }

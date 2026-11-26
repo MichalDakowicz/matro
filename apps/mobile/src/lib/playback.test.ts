@@ -8,6 +8,7 @@ import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
 import { createAutoSkip } from '../../../../packages/core/client/auto-skip.js';
 import * as watchProgress from '../../../../packages/core/client/watch-progress.js';
 import { createPictureInPictureLifecycle } from '../player/pictureInPicture.ts';
+import * as volume from '../player/volume.ts';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -21,7 +22,7 @@ const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(resolv
 function harness(t: any, directPlay = false, savedAtOpen = false, markers: { type: string; start: number; end: number; source?: string }[] = [], preferences: Record<string, unknown> = {}) {
   const effects: (() => (() => void) | void)[] = [], states: any[] = [], listeners = new Map<string, Function>();
   const pending: { source: any; resolve: () => void; reject: (error: Error) => void }[] = [], downloads: { ready: (uri: string) => void; cancelled: boolean }[] = [];
-  const saved: any[] = [], activity: { session: string; playing: boolean }[] = [];
+  const saved: any[] = [], activity: { session: string; playing: boolean }[] = [], boosts: number[] = [];
   const app = { currentState: 'active', addEventListener: (_: string, callback: Function) => { listeners.set('appState', callback); return { remove() {} }; } };
   const player = {
     currentTime: 0, playbackRate: 1, playing: false, status: 'readyToPlay', bufferedPosition: 20,
@@ -36,7 +37,7 @@ function harness(t: any, directPlay = false, savedAtOpen = false, markers: { typ
   const modules: Record<string, any> = {
     react: { useCallback: (fn: Function) => fn, useEffect: (fn: any) => effects.push(fn), useMemo: (fn: Function) => fn(), useRef: (current: any) => ({ current }), useState: (initial: any) => { const value = typeof initial === 'function' ? initial() : initial; const i = states.push(value) - 1; return [value, (next: any) => { states[i] = next; }]; } },
     'react-native': { AppState: app, Platform: { OS: 'android' } },
-    'expo-video': { useVideoPlayer: () => player },
+    'expo-video': { useVideoPlayer: (_: unknown, setup: (target: unknown) => void) => { setup(player); return player; } },
     '../lib/server': { inspect: async () => { inspections++; return info; }, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: data.markers }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry),
       playbackState: async (_: string, session: string, playing: boolean) => activity.push({ session, playing }), stopPlayback: async () => {}, updateWatchOptions: async () => {} },
     '../../../../packages/core/client/library': { trackKey: () => 'movie', subtitleTracks: () => [], savedServes: () => serves, initialTracks: (details: any) => ({ audio: details.audio[0]?.index ?? null, subtitle: null }) },
@@ -47,6 +48,8 @@ function harness(t: any, directPlay = false, savedAtOpen = false, markers: { typ
     '../../../../packages/core/client/auto-skip.js': { createAutoSkip },
     './diskBuffer': { downloadPlayback: (_: any, __: any, ready: any) => { const job = { ready, cancelled: false }; downloads.push(job); return () => { job.cancelled = true; }; } },
     './pictureInPicture': { createPictureInPictureLifecycle },
+    './volume': volume,
+    './volumeBoost': { maxVolume: 1.5, setBoost: (_: any, percent: number) => boosts.push(percent), releaseBoost: () => boosts.push(0) },
     '../lib/storage': { recoveryScope: () => 'test', progressRecovery: { write: async () => {} }, loadQuality: async () => 'original', saveQuality: async () => {} },
     '../lib/offline': { savedTitle: async () => available ? localCopy : undefined },
   };
@@ -59,7 +62,7 @@ function harness(t: any, directPlay = false, savedAtOpen = false, markers: { typ
   const hook = context.exports.usePlayback({ base: 'http://server', data, item: { id: 'movie', kind: 'movie', format: 'MKV' }, saved: savedAtOpen ? localCopy : undefined, onEnd: () => { ended++; } });
   const cleanups = effects.map(fn => fn());
   t.after(() => { for (const cleanup of cleanups.reverse()) cleanup?.(); });
-  return { hook, player, pending, downloads, saved, activity, app, states, localCopy, inspections: () => inspections,
+  return { hook, player, pending, downloads, saved, activity, boosts, app, states, localCopy, inspections: () => inspections,
     finishOfflineSave: (servesChoice = true) => { available = true; serves = servesChoice; },
     emit: (name: string, event: any = {}) => listeners.get(name)?.(event), ended: () => ended };
 }
@@ -231,4 +234,15 @@ test('a floating player keeps recording progress after a background source chang
   h.player.currentTime = .5; h.emit('timeUpdate');
   h.hook.pictureInPicture.stopped(); await flush();
   assert.equal(h.saved.at(-1).position, 30.5);
+});
+
+test('a saved volume above 100% plays at full player volume with the rest as boost', t => {
+  const { hook, player, boosts } = harness(t, false, false, [], { volume: 1.3 });
+  assert.equal((player as any).volume, 1);
+  assert.equal(hook.volume, 1.3);
+  assert.deepEqual(boosts, [130]);
+  assert.equal(hook.setVolume(2), 1.5);
+  assert.equal((player as any).volume, 1);
+  assert.equal(hook.setVolume(.4), .4);
+  assert.equal((player as any).volume, .4);
 });

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { GestureResponderEvent } from 'react-native';
+import { isBoosted, volumeLabel } from './volume';
 import { DOUBLE_TAP_MS, DOUBLE_TAP_SECONDS, tapZone, type TapZone } from './playerTools';
 
 type Touches = GestureResponderEvent['nativeEvent']['touches'];
@@ -10,7 +11,7 @@ type Stage = { onTouchStart: (event: GestureResponderEvent) => void; onTouchMove
  * It wraps the pinch handlers instead of replacing them: a second finger cancels both gestures, so pinch-to-fill is untouched.
  * Brightness needs a native module, so it is not offered here.
  */
-export function usePlayerGestures({ stage, width, onTap, seekBy, volume, setVolume }: { stage: Stage; width: number; onTap: () => void; seekBy: (seconds: number) => void; volume: () => number; setVolume: (value: number) => void }) {
+export function usePlayerGestures({ stage, width, onTap, seekBy, volume, setVolume, maxVolume = 1 }: { stage: Stage; width: number; onTap: () => void; seekBy: (seconds: number) => void; volume: () => number; setVolume: (value: number) => void; maxVolume?: number }) {
   const [label, setLabel] = useState('');
   const touch = useRef({ x: 0, y: 0, volume: 0, multi: false, swiped: false });
   const last = useRef<{ at: number; zone: TapZone } | null>(null);
@@ -48,8 +49,8 @@ export function usePlayerGestures({ stage, width, onTap, seekBy, volume, setVolu
         const dy = state.y - point.pageY;
         if (state.swiped || (Math.abs(dy) > 28 && Math.abs(dy) > Math.abs(point.pageX - state.x) * 1.5)) {
           state.swiped = true;
-          const next = Math.max(0, Math.min(1, state.volume + dy / 320));
-          setVolume(next); show(`Volume ${Math.round(next * 100)}%`);
+          const next = Math.max(0, Math.min(maxVolume, state.volume + dy / 320));
+          setVolume(next); show(`Volume ${volumeLabel(next)}${isBoosted(next) ? ' · Boost' : ''}`);
         }
       }
       stage.onTouchMove(event);

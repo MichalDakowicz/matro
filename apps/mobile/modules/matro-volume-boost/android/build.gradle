@@ -1,0 +1,28 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.matrovolumeboost'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.matrovolumeboost"
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+}
+
+// The gain attaches to expo-video's own player, which the app already ships. Expo links expo-video as a
+// prebuilt AAR unless it is set to build from source, so compile against whichever form is present.
+def expoVideo = rootProject.findProject(':expo-video') ?: "host.exp.exponent:expo.modules.video:" + providers.exec {
+  workingDir(projectDir)
+  commandLine("node", "--print", "require('expo-video/package.json').version")
+}.standardOutput.asText.get().trim()
+
+dependencies {
+  compileOnly expoVideo
+  // Keep in step with the media3 version in expo-video's build.gradle.
+  compileOnly "androidx.media3:media3-exoplayer:1.9.0"
+}
