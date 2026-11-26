@@ -89,11 +89,11 @@ export async function prepareDownload(signal, load, report, { lastProgress, adva
     }
     if (status?.state !== 'preparing') throw new Error('Invalid preparation status.');
     const progress = typeof status.progress === 'number' && Number.isFinite(status.progress) ? status.progress : undefined;
-    if (progress !== undefined && (lastProgress === undefined || progress > lastProgress)) {
-      advancedAt = Date.now();
+    if (progress !== undefined) {
+      if (lastProgress === undefined || progress > lastProgress) advancedAt = Date.now();
       lastProgress = progress;
     }
-    await report(progress === undefined ? undefined : lastProgress, advancedAt);
+    await report(progress, advancedAt);
     if ((progress !== undefined || stallWithoutProgress) && Date.now() - advancedAt >= PREPARATION_IDLE_MS) {
       throw new RetryableDownloadError('Server preparation has not advanced for 30 minutes. Resume to check again.');
     }
