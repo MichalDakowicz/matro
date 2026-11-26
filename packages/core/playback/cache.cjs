@@ -6,53 +6,96 @@ const { createHash } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { pipeline } = require('node:stream');
 const { once } = require('node:events');
-const { argumentsFor, selectEncoder, canCopyVideo, SOFTWARE } = require('./encoding.cjs');
+const { argumentsFor, selectEncoder, canCopyVideo, QUALITIES, outputChannels, supportsToneMap, SOFTWARE } = require('./encoding.cjs');
 
 // FFmpeg writes ahead to disk independently of the network/player. Slow clients, pauses and
 // disconnected requests never block encoding. Only complete files survive a process restart.
-function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(), 'matro-playback-')), maxJobs = 2, maxBytes = Math.max(1, Number(process.env.MATRO_PLAYBACK_CACHE_GB) || 32) * 1024 ** 3, stallMs = 45000, startupSeconds = 8, stat = fsp.stat, spawnProcess = spawn } = {}) {
+function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(), 'matro-playback-')), maxJobs = 2, maxBytes = Math.max(1, Number(process.env.MATRO_PLAYBACK_CACHE_GB) || 32) * 1024 ** 3, stallMs = 45000, startupSeconds = 8, recentMs = 120000, ownerTtlMs = 0, stat = fsp.stat, spawnProcess = spawn } = {}) {
   fs.mkdirSync(dir, { recursive: true });
   const entries = new Map();
   const owners = new Map();
   const hardwareFailures = new Set();
-  let closed = false;
+  let closed = false, overLimit = false;
   function prune() {
-    const files = fs.readdirSync(dir).filter(n => /^[a-f0-9]{64}\.mp4$/.test(n)).map(name => ({ name, ...fs.statSync(path.join(dir, name)) })).sort((a, b) => a.mtimeMs - b.mtimeMs);
+    const now = Date.now(), files = [];
+    for (const name of fs.readdirSync(dir)) {
+      if (!/^[a-f0-9]{64}\.mp4$/.test(name)) continue;
+      const key = name.slice(0, -4), file = path.join(dir, name);
+      const stat = fs.statSync(file, { throwIfNoEntry: false });
+      if (!stat) continue;
+      const entry = entries.get(key);
+      files.push({ key, file, size: stat.size, entry, used: entry?.used ?? stat.mtimeMs });
+    }
+    files.sort((a, b) => a.used - b.used);
     let total = files.reduce((n, f) => n + f.size, 0);
     for (const f of files) {
       if (total <= maxBytes) break;
-      const entry = entries.get(f.name.slice(0, -4));
-      if (entry?.readers || entry?.owners?.size || (entry && !entry.done)) continue;
-      fs.unlinkSync(path.join(dir, f.name)); entries.delete(f.name.slice(0, -4)); total -= f.size;
+      const { entry } = f;
+      if (now - f.used < recentMs || entry?.readers || entry?.owners?.size || entry?.pinnedUntil > now || (entry && !entry.done)) continue;
+      try { fs.unlinkSync(f.file); } catch (error) { if (error.code !== 'ENOENT') continue; }
+      entries.delete(f.key); total -= f.size;
+    }
+    overLimit = total > maxBytes;
+  }
+  function cancelUnused(entry) {
+    if (!entry.done && !entry.error && !entry.readers && !entry.owners?.size && !entry.keepPreparing) {
+      entry.error = Error('Playback preparation was replaced by a new position.');
+      entry.child?.kill();
     }
   }
   function assign(owner, entry) {
     if (!owner) return entry;
-    const previous = owners.get(owner);
+    const previous = owners.get(owner)?.entry;
     if (previous && previous !== entry) {
       previous.owners?.delete(owner);
-      if (!previous.done && !previous.error && !previous.owners?.size && !previous.keepPreparing) {
-        previous.error = Error('Playback preparation was replaced by a new position.'); previous.child?.kill();
-      }
+      cancelUnused(previous);
     }
-    if (entry) { (entry.owners ||= new Set()).add(owner); owners.set(owner, entry); }
-    else owners.delete(owner);
+    if (entry) {
+      (entry.owners ||= new Set()).add(owner);
+      owners.set(owner, { entry, expires: ownerTtlMs ? Date.now() + ownerTtlMs : Infinity });
+    } else {
+      owners.delete(owner);
+    }
     return entry;
   }
-  async function get(options, owner) {
+  const sweep = setInterval(() => {
+    const now = Date.now();
+    for (const [owner, lease] of owners) if (lease.expires <= now) assign(owner, null);
+    if (overLimit) prune();
+  }, 30000);
+  sweep.unref();
+
+  async function get(options, owner, { pinMs = 0, read = false } = {}) {
     if (closed) throw Error('Playback service is closed.');
     const source = await stat(options.file);
-    const key = createHash('sha256').update(JSON.stringify([3, options.file, source.size, source.mtimeMs, options.offset, options.audio, options.burn, options.delay, options.info.video])).digest('hex');
-    if (entries.has(key)) {
+    const toneMap = !!options.info.video?.hdr && await supportsToneMap(ffmpeg);
+    if (closed) throw Error('Playback service is closed.');
+    const use = entry => {
+      entry.used = Date.now();
+      if (pinMs) {
+        entry.keepPreparing = true;
+        entry.pinnedUntil = Math.max(entry.pinnedUntil || 0, entry.used + pinMs);
+      }
+      if (read) entry.readers++;
+      return assign(owner, entry);
+    };
+    const identity = [3, options.file, source.size, source.mtimeMs, options.offset, options.audio, options.burn, options.delay, options.info.video];
+    if (QUALITIES[options.quality]) identity.push(options.quality);
+    if (outputChannels(options.info, options.audio, options.channels) === 6) identity.push('aac-5.1');
+    if (toneMap) identity.push('hdr-sdr');
+    if (options.audioDelay) identity.push(options.audioDelay);
+    const key = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
+    while (entries.has(key)) {
       const existing = entries.get(key);
-      if (!existing.error) return assign(owner, existing);
-      if (!existing.readers) { await existing.finished; entries.delete(key); await fsp.rm(existing.file, { force: true }); }
-      else throw existing.error;
+      if (!existing.error) return use(existing);
+      if (existing.readers) throw existing.error;
+      await existing.finished;
+      if (entries.get(key) === existing) entries.delete(key);
     }
     const final = path.join(dir, key + '.mp4');
     if (fs.existsSync(final)) {
       const entry = { file: final, size: fs.statSync(final).size, done: true, readers: 0, used: Date.now() };
-      entries.set(key, entry); return assign(owner, entry);
+      entries.set(key, entry); return use(entry);
     }
     assign(owner, null);
     if ([...entries.values()].filter(e => !e.done && !e.error).length >= maxJobs) {
@@ -62,13 +105,13 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
     const entry = { file: path.join(dir, key + '.part'), size: 0, done: false, readers: 0, used: Date.now(), error: null, child: null };
     entries.set(key, entry);
     const render = async () => {
-      const encoder = canCopyVideo(options.info, options.burn, options.offset) || !options.info.video || hardwareFailures.has(key) ? SOFTWARE : await selectEncoder(ffmpeg);
+      const encoder = canCopyVideo(options.info, options.burn, options.offset, options.quality) || !options.info.video || hardwareFailures.has(key) ? SOFTWARE : await selectEncoder(ffmpeg);
       if (closed || entry.error) return;
       async function attempt(selected) {
         await fsp.rm(entry.file, { force: true }); entry.size = 0; entry.preparedSeconds = 0;
         if (closed || entry.error) throw entry.error || Error('Playback service is closed.');
         return new Promise((resolve, reject) => {
-          const child = spawnProcess(ffmpeg, argumentsFor(options, selected), { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+          const child = spawnProcess(ffmpeg, argumentsFor({ ...options, toneMap }, selected), { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
           entry.child = child;
           let lastOutput = Date.now(), errorText = '', progressText = '', failed;
           const timeout = setInterval(() => {
@@ -112,15 +155,15 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
         if (encoder !== SOFTWARE && !entry.exposed && !closed && !entry.error) await attempt(SOFTWARE);
         else throw error;
       }
-      await fsp.rename(entry.file, final); entry.file = final; entry.size = (await fsp.stat(final)).size; entry.done = true; prune();
+      await fsp.rename(entry.file, final); entry.file = final; entry.size = (await fsp.stat(final)).size; entry.done = true; entry.used = Date.now(); prune();
     };
     entry.finished = render().catch(error => { entry.error = error; entry.child?.kill(); }).finally(async () => {
       if (entry.error && !entry.readers) await fsp.rm(entry.file, { force: true }).catch(() => {});
     });
-    return assign(owner, entry);
+    return use(entry);
   }
   async function serve(req, res, options, headers = {}, owner) {
-    const entry = await get(options, owner); entry.readers++; entry.used = Date.now();
+    const entry = await get(options, owner, { read: true });
     try {
       let position = 0, handle;
       try {
@@ -146,7 +189,7 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
             entry.exposed = true;
             const buffer = Buffer.allocUnsafe(Math.min(256 * 1024, size - position));
             const { bytesRead } = await handle.read(buffer, 0, buffer.length, position); position += bytesRead;
-            if (!res.write(buffer.subarray(0, bytesRead))) {
+            if (!res.write(buffer.subarray(0, bytesRead)) && !res.destroyed) {
               await new Promise(resolve => { const done = () => { res.off('drain', done); res.off('close', done); resolve(); }; res.once('drain', done); res.once('close', done); });
             }
           } else if (entry.done) { res.end(); return; }
@@ -157,19 +200,28 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
       if (res.headersSent) res.destroy(error);
       else { res.writeHead(error.status || 502, { 'Content-Type': 'text/plain', ...headers }).end('Playback preparation failed. Retry playback.'); }
     } finally {
+      entry.used = Date.now();
+      if (entry.readers === 1 && entry.error) {
+        await entry.finished;
+        if (entry.readers === 1) await fsp.rm(entry.file, { force: true }).catch(() => {});
+      }
       entry.readers--;
-      if (entry.error && !entry.readers) { await entry.finished; await fsp.rm(entry.file, { force: true }).catch(() => {}); }
+      if (entry.owners) cancelUnused(entry);
     }
   }
   return {
     get, serve,
     release(owner) { assign(owner, null); },
+    renew(owner) {
+      const lease = owners.get(owner);
+      if (lease && ownerTtlMs) lease.expires = Date.now() + ownerTtlMs;
+    },
     promote(from, to) {
-      const entry = owners.get(from);
+      const entry = owners.get(from)?.entry;
       assign(to, entry);
       entry?.owners?.delete(from); owners.delete(from);
     },
-    close() { closed = true; for (const entry of entries.values()) { entry.child?.kill(); if (!entry.done) void fsp.rm(entry.file, { force: true }).catch(() => {}); } }
+    close() { closed = true; clearInterval(sweep); for (const entry of entries.values()) { entry.child?.kill(); if (!entry.done) void fsp.rm(entry.file, { force: true }).catch(() => {}); } }
   };
 }
 async function serveFile(req, res, file, size, extra = {}) {
