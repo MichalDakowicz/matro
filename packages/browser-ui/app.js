@@ -6,8 +6,9 @@ import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
 import { randomReelStart } from '../core/client/reel-start.js';
-import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, normalizeProgress, queueChange, resumeTarget, seasonLabel } from '../core/client/watch-progress.js';
+import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, normalizeProgress, queueChange, reachedCompletion, reachedOutro, reachedPlaybackEnd, resumeTarget, seasonLabel } from '../core/client/watch-progress.js';
 import { initialTracks, LANGUAGES, SUBTITLE_MODES, trackDefaults } from '../core/client/track-preferences.js';
+import { createAutoSkip } from '../core/client/auto-skip.js';
 const api = window.matro;
 if (api?.chooseSource && !document.querySelector('.desktop-source-button')) {
   const button = document.createElement('button'); button.className = 'pill desktop-source-button'; button.textContent = 'Server'; button.setAttribute('aria-label', 'Playback source');
@@ -59,6 +60,7 @@ let current = null, info = null, video = null, offset = 0, audio = null, subtitl
 let queueOpen = false, sidePanel = null, generation = 0, lastSave = 0, idleTimer, toastTimer, subtitleGeneration = 0;
 let loading = false, playbackError = '', trackCues = [];
 let audioDelayTimer, playIntent = true, streamId = null, pendingStream = null, diagnostics = null, playerEvents;
+let sleepMode = 'off', sleepTimer, sleepDeadline = 0;
 let showPlaybackAdvanced = false, rewatchingShow = false, dismissedShow = false;
 let segmentStatus = '', markerDraft = null;
 let scannerSummary = null;
@@ -125,7 +127,6 @@ function hoverSeek(event) {
     if (version > previewShown && previewHovered && current?.id === id) show(frame);
   }, 50);
 }
-const finishMargin = duration => Math.min(10, duration * .05);
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 5000); }
 async function attempt(fn) { try { return await fn(); } catch (error) { toast(error.message || String(error)); return null; } }
 const pendingProgress = new Map();
@@ -240,10 +241,7 @@ function remember() {
   if (waitingForPlayback && (rewatchingShow || position === old.position)) return;
   // Paused seeks can save a new position without overriding a dismissal on the server.
   const hidden = waitingForPlayback ? (old.hidden || dismissedShow || undefined) : false;
-  // Reaching an outro (skipping it, or leaving during the credits) counts as watched, so Continue watching moves to the next episode.
-  // Only outros in the second half count, so a mis-detected early marker can't complete an episode.
-  const pastOutro = info.duration > 0 && (library.markers?.[current.id] || []).some(s => s.type === 'outro' && s.start > info.duration / 2 && position >= s.start);
-  const reachedEnd = !waitingForPlayback && (pastOutro || position >= info.duration - finishMargin(info.duration));
+  const reachedEnd = !waitingForPlayback && reachedCompletion(position, info.duration, library.markers?.[current.id]);
   const entry = { ...old, position, duration: info.duration, completed: (!rewatchingShow && !!old.completed) || (!hidden && reachedEnd), hidden, updated: Date.now() };
   rewatchingShow = false;
   const sameVisibility = current.kind === 'show' ? old.hidden === hidden : !!old.hidden === hidden;
@@ -885,6 +883,7 @@ async function play(id, keepQueue = false, compareEdition = false) {
   if (favorite) id = editions.favorite;
   const item = library.items.find(i => i.id === id); if (!item) return;
   const token = ++generation; subtitleGeneration++;
+  if (sleepMode === 'episode' && current?.id !== id) setSleepTimer('off');
   // Starting playback from the library always opens with the queue closed; next, previous and autoplay keep it as it was.
   if (view !== 'player') queueOpen = false;
   hidePreview(); remember();
@@ -897,7 +896,7 @@ async function play(id, keepQueue = false, compareEdition = false) {
   const fresh = prepared?.id === id && (!saved || prepared.url.split('#')[0] === saved.url)
     && (({ audio: a, subtitle: s, delay: d, audioDelay: x }) => a === prepared.audio && s === prepared.subtitle && d === prepared.delay && x === prepared.audioDelay)(chooseTracks(item, prepared.info));
   const ready = fresh ? prepared : null; if (ready) prepared = null; discardPrepared();
-  resetPlayer();
+  resetPlayer(); playIntent = true;
   await stopPlayback(token, saved?.url || ready?.url, saved ? { background: true } : undefined);
   if (token !== generation) { if (ready) releaseBuffer(ready.element); return; }
   current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; audioDelay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
@@ -937,7 +936,7 @@ async function play(id, keepQueue = false, compareEdition = false) {
       const entry = library.progress[id];
       applyProgress({ [id]: { ...entry, ...(completed(id) && !start ? { position: 0, completed: false } : {}), hidden: false, updated: Date.now() } }, true);
     }
-    if (ready) await adoptStream(ready, token); else await loadStream(start, true, token, saved?.url);
+    if (ready) await adoptStream(ready, token); else await loadStream(start, playIntent, token, saved?.url);
     if (token !== generation) return;
     if (saved) void attempt(save);
     else await save();
@@ -952,7 +951,7 @@ function startAt(item, duration) {
   const progress = library.progress[item.id];
   if (!progress || completed(item.id)) return 0;
   if (item.kind === 'show') return Math.min(progress.position, Math.max(0, duration - .1));
-  return progress.position < duration - finishMargin(duration) ? progress.position : 0;
+  return reachedPlaybackEnd(progress.position, duration) ? 0 : progress.position;
 }
 // Near the end of an episode (the last 45 seconds, or once its outro starts) the next queue item is prepared: tracks are
 // chosen as play() would and its stream opens in a detached video element, so the first seconds are already buffered
@@ -963,7 +962,7 @@ function discardPrepared() { preparing = null; if (!prepared) return; releaseBuf
 async function prepareNext(position) {
   if (!current || !info?.duration || preparing || loading) return;
   const id = nextInQueue(1); if (!id || prepared?.id === id) return;
-  const inOutro = (library.markers?.[current.id] || []).some(s => s.type === 'outro' && s.start > info.duration / 2 && position >= s.start);
+  const inOutro = reachedOutro(position, info.duration, library.markers?.[current.id] || []);
   if (info.duration - position > PRELOAD_LEAD && !inOutro) return;
   discardPrepared();
   const run = preparing = { id }, from = current.id, stale = () => preparing !== run || current?.id !== from;
@@ -983,10 +982,12 @@ async function prepareNext(position) {
 }
 async function adoptStream(ready, token) {
   diagnostics = ready.diagnostics; renderTracks();
-  playIntent = true; offset = ready.offset; streamId = current.id; pendingStream = null; applySubtitle(); updateTime(); showMessage(); updateToggle();
-  try { await video.play(); } catch (error) { if (token === generation && error.name !== 'AbortError') { loading = false; playbackError = error.message; showMessage(); } }
+  offset = ready.offset; streamId = current.id; pendingStream = null; applySubtitle(); updateTime(); showMessage(); updateToggle();
+  if (playIntent) try { await video.play(); } catch (error) { if (token === generation && error.name !== 'AbortError') { loading = false; playbackError = error.message; showMessage(); } }
 }
+let autoSkip;
 function renderPlayer(adopt = null) {
+  autoSkip = createAutoSkip();
   document.body.classList.add('in-player');
   const heading = current.kind === 'show' ? `${displayName(current)} · ${code(current)}` : current.kind === 'movie' ? [meta(current)?.year, meta(current)?.runtime ? `${meta(current).runtime}m` : null].filter(Boolean).join(' · ') || current.format : itemMeta(current);
   root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div id="subtitle-overlay" class="subtitle-overlay"><div id="subtitle-caption" class="subtitle-caption"></div></div><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
@@ -994,6 +995,8 @@ function renderPlayer(adopt = null) {
   video = $('#video'); applyVolume(library.preferences.volume); updateVolume(); applySubStyle();
   const player = video, events = playerEvents = new AbortController();
   setupSubtitleOverlay(events.signal);
+  startMediaSession();
+  let skipping = false;
   let recoveryTimer, recoveryAttempts = 0;
   const recover = () => {
     clearTimeout(recoveryTimer);
@@ -1007,8 +1010,19 @@ function renderPlayer(adopt = null) {
   };
   const watchBuffering = () => { clearTimeout(recoveryTimer); const token = generation; recoveryTimer = setTimeout(() => { if (token === generation) recover(); }, 25000); };
   const listen = (name, callback) => player.addEventListener(name, event => { if (video === player && view === 'player') callback(event); }, { signal: events.signal });
-  listen('timeupdate', () => { checkpoint(); updateTime(); void prepareNext(offset + video.currentTime); });
+  listen('timeupdate', () => {
+    if (sleepDeadline && Date.now() >= sleepDeadline) expireSleepTimer();
+    checkpoint(); updateTime();
+    const position = offset + player.currentTime;
+    void prepareNext(position);
+    if (skipping || !playIntent || player.paused || player.seeking || loading || pendingStream || library.preferences.autoSkip !== true) return;
+    const target = autoSkip.target(library.markers?.[current.id] || [], position, info.duration);
+    if (target === null) return;
+    skipping = true;
+    void attempt(() => seek(target, true)).finally(() => { skipping = false; });
+  });
   listen('progress', updateTime);
+  listen('ratechange', updateTime);
   listen('playing', () => { clearTimeout(recoveryTimer); if (playIntent && !video.paused) void api.playbackState(true); loading = false; playbackError = ''; showMessage(); updateToggle(); scheduleIdle(); });
   listen('pause', () => { if (!playIntent) void api.playbackState(false); loading = false; showMessage(); updateToggle(); $('.stage')?.classList.remove('idle'); if (remember()) void attempt(save); });
   listen('waiting', () => { loading = playIntent && !video.paused; if (loading) { void api.playbackState({ playing: true, buffering: true }); watchBuffering(); } showMessage(); });
@@ -1017,8 +1031,11 @@ function renderPlayer(adopt = null) {
     // A truncated response is not the end of the movie. Keep the queue and
     // resume position intact and recover from the original media timeline.
     if (loading || !info?.duration) return;
-    if (offset + player.currentTime < info.duration - finishMargin(info.duration)) { recover(); return; }
-    playIntent = false; void api.playbackState(false); remember(); void attempt(save); if (library.preferences.autoplay) void step(1); updateToggle();
+    if (!reachedPlaybackEnd(offset + player.currentTime, info.duration)) { recover(); return; }
+    const stop = sleepMode === 'episode' || (sleepDeadline && Date.now() >= sleepDeadline);
+    if (stop) expireSleepTimer();
+    else setPlaying(false);
+    remember(); void attempt(save); if (!stop && library.preferences.autoplay) void step(1);
   });
   listen('error', recover);
   listen('click', () => toggle());
@@ -1096,9 +1113,10 @@ async function loadStream(position, shouldPlay = true, token = generation, saved
   // A paused stream only gets its first frame now; re-apply cue timings so the subtitle for this moment appears without pressing play.
   else { video.addEventListener('loadeddata', () => { loading = false; showMessage(); adjustCues(); }, { once: true }); }
 }
-async function seek(position) {
+async function seek(position, automatic = false) {
   if (!info.duration || !current) return;
   const target = Math.max(0, Math.min(info.duration - .1, position));
+  if (!automatic) autoSkip.seek(target);
   const shouldPlay = playIntent;
   const relative = target - offset;
   // Fragmented streams can buffer frames before Chromium exposes a seekable range.
@@ -1119,9 +1137,65 @@ function updateTime() {
   const loaded = video.dataset.bufferComplete === 'true' ? info.duration : offset + (video.buffered.length ? video.buffered.end(video.buffered.length - 1) : 0);
   seek.style.setProperty('--buffered', `${info.duration ? Math.min(100, loaded / info.duration * 100) : 0}%`);
   fillRange(seek); updateSkip(position);
+  if (Number.isFinite(info.duration) && info.duration > 0) navigator.mediaSession?.setPositionState?.({
+    duration: info.duration, position: Math.min(info.duration, Math.max(0, pendingStream?.position ?? position)), playbackRate: video.playbackRate
+  });
 }
-function updateToggle() { const btn = $('#play-toggle'); if (!btn) return; btn.innerHTML = icon(playIntent ? 'pause' : 'play'); btn.setAttribute('aria-label', playIntent ? 'Pause' : 'Play'); }
-function toggle() { if (!video || !video.getAttribute('src')) return; playIntent = !playIntent; void api.playbackState(playIntent); if (playIntent) void attempt(() => video.play()); else video.pause(); updateToggle(); }
+function updateToggle() {
+  const btn = $('#play-toggle'); if (!btn) return;
+  btn.innerHTML = icon(playIntent ? 'pause' : 'play'); btn.setAttribute('aria-label', playIntent ? 'Pause' : 'Play');
+  if (navigator.mediaSession) navigator.mediaSession.playbackState = video.paused ? 'paused' : 'playing';
+}
+function setPlaying(value) {
+  if (!video) return;
+  playIntent = value; void api.playbackState(value);
+  if (!value) video.pause();
+  else if (video.getAttribute('src')) void attempt(() => video.play());
+  updateToggle();
+}
+function toggle() { if (video?.getAttribute('src')) setPlaying(!playIntent); }
+function setSleepTimer(mode) {
+  clearTimeout(sleepTimer); sleepMode = mode;
+  const delayMs = Number(mode) * 60_000;
+  sleepDeadline = delayMs > 0 ? Date.now() + delayMs : 0;
+  if (sleepDeadline) sleepTimer = setTimeout(expireSleepTimer, delayMs);
+  const select = $('#sleep-timer'); if (select) select.value = mode;
+}
+function expireSleepTimer() {
+  setSleepTimer('off'); setPlaying(false); toast('Sleep timer ended.');
+}
+const mediaActions = ['play', 'pause', 'seekbackward', 'seekforward', 'seekto', 'previoustrack', 'nexttrack'];
+function startMediaSession() {
+  const session = navigator.mediaSession; if (!session) return;
+  if (typeof MediaMetadata === 'function') {
+    const show = current.kind === 'show', artwork = meta(current)?.poster;
+    session.metadata = new MediaMetadata({
+      title: show ? episodeName(current) : displayName(current),
+      artist: show ? displayName(current) : 'Matro',
+      album: show ? `Season ${current.season}` : '',
+      artwork: artwork ? [{ src: new URL(artwork, document.baseURI).href }] : []
+    });
+  }
+  const jump = (by) => seek(offset + video.currentTime + by);
+  const handlers = {
+    play: () => setPlaying(true), pause: () => setPlaying(false),
+    seekbackward: ({ seekOffset = SKIP }) => jump(-seekOffset),
+    seekforward: ({ seekOffset = SKIP }) => jump(seekOffset),
+    seekto: ({ seekTime }) => { if (Number.isFinite(seekTime)) return seek(seekTime); },
+    previoustrack: () => step(-1), nexttrack: () => step(1)
+  };
+  for (const action of mediaActions) {
+    try { session.setActionHandler(action, detail => void attempt(() => handlers[action](detail))); }
+    catch { /* Browser support varies by action. */ }
+  }
+}
+function stopMediaSession() {
+  const session = navigator.mediaSession; if (!session) return;
+  for (const action of mediaActions) {
+    try { session.setActionHandler(action, null); } catch { /* Unsupported action. */ }
+  }
+  session.setPositionState?.(); session.playbackState = 'none'; session.metadata = null;
+}
 function setVolume(value) { if (!video) return; const volume = Math.round(Math.max(0, Math.min(MAX_VOLUME, value)) * 100) / 100; applyVolume(volume); video.muted = false; library.preferences.volume = volume; updateVolume(); const btn = document.querySelector('[data-action="mute"]'); if (btn) btn.innerHTML = icon('volume'); void attempt(() => savePreferences({ volume })); }
 function showMessage() {
   const message = $('#stage-message'); if (!message) return;
@@ -1141,7 +1215,7 @@ function renderQueue() {
     return `${heading}<div class="queue-row ${now ? 'current' : ''} ${done ? 'done' : ''}"><button class="qplay" data-play="${id}" aria-label="Play ${esc(item.title)}"><span class="queue-thumb ${artFor(item)}">${still ? `<img src="${esc(still)}" alt="" draggable="false">` : ''}<span class="queue-code ${item.kind === 'show' ? '' : 'queue-format'}">${item.kind === 'show' ? (item.prelude ? 'Pre' : `E${item.episode}`) : esc(item.format)}</span>${pct ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}</span><span class="queue-info"><small class="kicker">${now ? '<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>Now playing' : done ? 'Watched' : item.kind === 'show' ? (item.prelude ? 'Prelude' : `S${item.season} · E${item.episode}`) : 'Movie'}</small><strong>${esc(item.kind === 'show' ? episodeName(item) : displayName(item))}</strong><small>${esc([runtime ? `${runtime}m` : null, item.format].filter(Boolean).join(' · '))}</small></span></button><span class="queue-actions"><button class="icon-button" data-complete="${id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(item.title)}" title="${done ? 'Mark incomplete' : 'Mark complete'}">${icon('check')}</button><button class="icon-button" data-remove-queue="${id}" aria-label="Remove ${esc(item.title)} from queue" title="Remove from queue">${icon('close')}</button></span></div>`;
   };
   panel.innerHTML = `<div class="queue-header"><div><h2>Up next</h2><p>${left} to go · ${items.length} in queue</p></div><button class="text-button" data-action="clear-watched">Clear watched</button></div><div class="queue-items">${items.map(row).join('') || '<p class="queue-empty">Nothing queued. Add titles from a title page.</p>'}</div><div class="autoplay"><div><strong>Autoplay next</strong><small>Plays the next ${current?.kind === 'show' ? 'episode' : 'item'} when one ends</small></div><button class="switch ${library.preferences.autoplay ? 'on' : ''}" data-action="autoplay" aria-label="Autoplay next" aria-pressed="${library.preferences.autoplay}"></button></div>`;
-  applyStyles(panel);
+  applyStyles(panel); updateSkip(offset + (video?.currentTime || 0));
 }
 function nextInQueue(direction) {
   const queue = current?.kind === 'show' ? library.queue.filter(id => { const item = library.items.find(i => i.id === id); return item?.kind === 'show' && sameTitle(item, current); }) : library.queue;
@@ -1184,7 +1258,7 @@ async function detectMarkers(id, force = false) {
 function renderSegments() {
   const actionsPanel = $('#player-actions'), tools = $('#segment-tools'); if (!actionsPanel || !tools || !current) return;
   actionsPanel.innerHTML = `<button class="pill" data-action="complete-current">${completed(current.id) ? 'Completed ✓' : 'Mark complete'}</button><button class="pill ${sidePanel === 'segments' ? 'active' : ''}" id="segments-button" data-action="segments" aria-label="Skip segment settings" aria-expanded="${sidePanel === 'segments'}">Skip segments${isScanning(current.id) ? ' · Scanning…' : ''}</button>`;
-  tools.innerHTML = '<button class="pill" id="skip-segment" data-action="skip-segment" aria-keyshortcuts="Enter" hidden></button>';
+  if (!$('#skip-segment')) tools.innerHTML = '<button class="pill" id="skip-segment" data-action="skip-segment" aria-keyshortcuts="Enter" hidden></button><button class="pill" id="credits-next" data-action="next" hidden>Next episode</button>';
   renderSeekMarks(); updateSkip(offset + (video?.currentTime || 0));
 }
 // Seek bar sections: skip ranges are drawn and labelled on the bar, chapters get a tick at each start. Hovering names the
@@ -1205,8 +1279,14 @@ function renderSeekMarks() {
 }
 function updateSkip(position) {
   const button = $('#skip-segment'); if (!button || !current) return;
-  const marker = (library.markers?.[current.id] || []).find(s => position >= s.start && position < s.end);
-  button.hidden = !marker; if (marker) button.innerHTML = `Skip ${esc(marker.type)}<kbd class="key-hint" aria-hidden="true">Enter</kbd>`;
+  const marker = activeMarker(position);
+  const next = $('#credits-next');
+  next.hidden = current.kind !== 'show' || !nextInQueue(1) || !reachedOutro(position, info?.duration, library.markers?.[current.id] || []);
+  button.hidden = !marker;
+  if (!button.hidden) button.innerHTML = `Skip ${esc(marker.type)}<kbd class="key-hint" aria-hidden="true">Enter</kbd>`;
+}
+function activeMarker(position) {
+  return (library.markers?.[current?.id] || []).find(s => position >= s.start && position < s.end);
 }
 function openPanel(name) {
   sidePanel = sidePanel === name ? null : name;
@@ -1216,6 +1296,7 @@ function segmentsPanel() {
   const markers = library.markers?.[current.id] || [];
   const rows = markers.map((s, index) => `<div class="marker-row"><span class="marker-type">${esc(s.type)}</span><span class="mono">${fmt(s.start)} – ${fmt(s.end)}</span><span class="dim">${s.source === 'automatic' ? 'Detected' : 'Manual'}</span><button class="text-button" data-marker-seek="${index}">Jump</button><button class="text-button" data-marker-remove="${index}" aria-label="Remove ${esc(s.type)} marker">Remove</button></div>`).join('');
   return `<section class="tracks-panel segments-panel" aria-label="Skip segments"><div class="tracks-heading"><h3>Skip segments</h3><button class="icon-button" data-action="segments" aria-label="Close skip segments">×</button></div>
+    <label class="player-setting"><span>Auto-skip intros and recaps</span><input id="auto-skip" type="checkbox" ${library.preferences.autoSkip === true ? 'checked' : ''}></label>
     <p class="scan-note">A skip button appears while playback is inside one of these ranges.${current.kind === 'show' ? ' Matro compares episodes of this season to find intros, recaps and outros.' : ''}</p>
     <div class="marker-list">${rows || '<p class="scan-note">No skip ranges for this file yet.</p>'}</div>
     <div class="marker-actions">${markerDraft ? `<span>${esc(markerDraft.type)} starts at ${fmt(markerDraft.start)} — seek to its end</span><button class="pill" data-action="marker-end">Save end here</button><button class="text-button" data-action="marker-cancel">Cancel</button>` : ['intro', 'outro', 'recap'].map(type => `<button class="text-button" data-marker-start="${type}">Mark ${type} start</button>`).join('')}</div>
@@ -1228,7 +1309,11 @@ function renderTracks() {
   const segments = $('#segments-button'); if (segments) { segments.classList.toggle('active', sidePanel === 'segments'); segments.setAttribute('aria-expanded', String(sidePanel === 'segments')); }
   if (!sidePanel) { panel.innerHTML = ''; return; }
   $('.stage').classList.remove('idle');
-  if (sidePanel === 'segments') { panel.innerHTML = segmentsPanel(); return; }
+  if (sidePanel === 'segments') {
+    panel.innerHTML = segmentsPanel();
+    $('#auto-skip').addEventListener('change', event => { library.preferences.autoSkip = event.target.checked; void attempt(() => savePreferences({ autoSkip: library.preferences.autoSkip })); });
+    return;
+  }
   const bitmap = !!bitmapTrack();
   const audioRows = info.audio.map(a => `<button class="track-option ${a.index === audio ? 'selected' : ''}" data-audio="${a.index}" aria-pressed="${a.index === audio}"><span class="radio"></span><span class="track-copy">${trackHeading(a)}<small>${esc(a.codec.toUpperCase())} · ${a.channels} ch${a.default ? ' · Default' : ''}</small></span></button>`).join('');
   const subtitleRows = info.subtitles.map(s => `<button class="track-option ${s.index === subtitle ? 'selected' : ''}" data-subtitle="${s.index}" aria-pressed="${s.index === subtitle}" ${s.text || s.bitmap ? '' : 'disabled'}><span class="radio"></span><span class="track-copy">${trackHeading(s)}<small>${esc(s.codec.toUpperCase())} · ${s.sidecar ? 'File next to video' : s.bitmap ? 'Bitmap' : s.text ? 'Text' : 'Unsupported format'}</small></span></button>`).join('');
@@ -1244,7 +1329,10 @@ function renderTracks() {
     <div class="track-bottom"><div class="audio-delay"><span>Audio delay</span><button class="icon-button" data-action="audio-delay-down" aria-label="Audio earlier by 0.1 seconds">−</button><output>${audioDelay > 0 ? '+' : ''}${audioDelay.toFixed(1)} s</output><button class="icon-button" data-action="audio-delay-up" aria-label="Audio later by 0.1 seconds">+</button></div>${audioDelay ? '<button class="text-button" data-action="audio-delay-reset">Reset</button>' : ''}</div>
     ${subStylePanel(bitmap)}
     ${bitmap ? '<p class="bitmap-note">Bitmap subtitles are part of the picture. Track or delay changes briefly reload playback.</p>' : ''}
+    <label class="player-setting"><span>Sleep timer</span><select id="sleep-timer"><option value="off">Off</option><option value="episode">End of episode</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option></select></label>
     ${info.chapters.length ? `<div class="player-chapters">${info.chapters.map((c, index) => `<button class="chapter-button" data-chapter="${index}">${esc(c.title)} · ${fmt(c.start)}</button>`).join('')}</div>` : ''}</section>`;
+  const timer = $('#sleep-timer'); timer.value = sleepMode;
+  timer.addEventListener('change', () => setSleepTimer(timer.value));
 }
 let onlineSubtitles = false;
 async function openTracks() {
@@ -1489,10 +1577,12 @@ function resetPlayer() {
   streamId = null; pendingStream = null; settlePending = null;
   showPlaybackAdvanced = false; rewatchingShow = false; dismissedShow = false;
   playerEvents?.abort();
+  stopMediaSession();
   clearTimeout(saveTimer); saveTimer = null;
   if (video) { video.pause(); releaseBuffer(video); video.removeAttribute('src'); video.load(); }
 }
 async function backToLibrary() {
+  setSleepTimer('off');
   const token = ++generation; ++subtitleGeneration;
   hidePreview(); discardPrepared(); if (fullscreenActive) await api.window('fullscreen');
   if (token !== generation) return;
@@ -1600,7 +1690,7 @@ const actions = {
     await saveManualMarkers(copies, true); toast(`Manual marks saved for ${copies.length + 1} episodes in this season.`);
   },
   'marker-cancel': () => { markerDraft = null; renderTracks(); },
-  'skip-segment': () => { const position = offset + video.currentTime; const marker = (library.markers?.[current.id] || []).find(s => position >= s.start && position < s.end); if (marker) return seek(marker.end); },
+  'skip-segment': () => { const marker = activeMarker(offset + video.currentTime); if (marker) return seek(marker.end); },
   'complete-current': () => markComplete(current.id),
   'detect-segments': () => detectMarkers(current.id, true),
   retry: () => loadStream(offset + video.currentTime)

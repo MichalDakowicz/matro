@@ -828,6 +828,29 @@ test('receiver saves manual episode sections, maps the season and removes marker
     await seek(2); await expect(page.locator('#skip-segment')).toBeVisible();
     await page.locator('#skip-segment').click(); await expect(page.locator('#position')).toHaveText('0:03');
     await page.getByRole('button', { name: 'Skip segment settings' }).click();
+    const autoSkip = page.getByLabel('Auto-skip intros and recaps');
+    await expect(autoSkip).not.toBeChecked();
+    await autoSkip.check();
+    await expect.poll(() => JSON.parse(db.prepare('SELECT data FROM user_state WHERE user_id = ?').get(userId).data).preferences.autoSkip).toBe(true);
+    // Keep play intent on and sample the real media clock as soon as it reaches the marker.
+    const playUntil = time => page.locator('video').evaluate((v, time) => new Promise((resolve, reject) => {
+      const sample = () => {
+        if (v.currentTime < time) return;
+        v.removeEventListener('timeupdate', sample);
+        v.pause();
+        resolve(v.currentTime);
+      };
+      v.addEventListener('timeupdate', sample);
+      v.play().catch(reject);
+    }), time);
+    await seek(2);
+    expect(await playUntil(2.2)).toBeLessThan(3);
+    await expect(page.locator('#skip-segment')).toBeVisible();
+    await seek(0);
+    expect(await playUntil(1.2)).toBeGreaterThanOrEqual(3);
+    await expect(page.locator('#skip-segment')).toBeHidden();
+    await seek(0);
+    expect(await playUntil(1.2)).toBeLessThan(3);
     const removal = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/segments/remove'));
     await page.getByRole('button', { name: 'Remove intro marker', exact: true }).click();
     const removed = await removal;

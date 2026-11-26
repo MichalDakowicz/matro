@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import vm from 'node:vm';
 import { playbackPath } from '../../../../packages/core/client/server.ts';
 import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
-import { isContinueDismissed } from '../../../../packages/core/client/watch-progress.js';
+import * as watchProgress from '../../../../packages/core/client/watch-progress.js';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -16,7 +16,7 @@ const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(resolv
 
 // Exercise the real hook with asynchronous native replacements and events. The
 // platform boundary is fake; playback URLs, subtitles and hook logic are real.
-function harness(t: any, directPlay = false, savedAtOpen = false) {
+function harness(t: any, directPlay = false, savedAtOpen = false, markers: { type: string; start: number; end: number }[] = []) {
   const effects: (() => (() => void) | void)[] = [], states: any[] = [], listeners = new Map<string, Function>();
   const pending: { source: any; resolve: () => void; reject: (error: Error) => void }[] = [], downloads: { ready: (uri: string) => void; cancelled: boolean }[] = [];
   const saved: any[] = [], activity: { session: string; playing: boolean }[] = [];
@@ -28,17 +28,17 @@ function harness(t: any, directPlay = false, savedAtOpen = false) {
     addListener(name: string, callback: Function) { listeners.set(name, callback); return { remove() {} }; },
   };
   const info = { duration: 200, directPlay, video: { codec: 'h264', height: 1080, width: 1920 }, audio: [{ index: 1 }], embedded: [], uploaded: [{ id: 1, name: 'English', language: 'en' }] };
-  const data = { user: {}, preferences: { tracks: {} }, progress: {}, markers: {} };
+  const data = { user: {}, preferences: { tracks: {} }, progress: {}, markers: { movie: markers } };
   const localCopy = { uri: 'file:///saved.mp4', info, text: {} };
   let available = savedAtOpen, inspections = 0;
   const modules: Record<string, any> = {
     react: { useCallback: (fn: Function) => fn, useEffect: (fn: any) => effects.push(fn), useRef: (current: any) => ({ current }), useState: (initial: any) => { const value = typeof initial === 'function' ? initial() : initial; const i = states.push(value) - 1; return [value, (next: any) => { states[i] = next; }]; } },
     'react-native': { AppState: app, Platform: { OS: 'android' } },
     'expo-video': { useVideoPlayer: () => player },
-    '../lib/server': { inspect: async () => { inspections++; return info; }, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: {} }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry),
+    '../lib/server': { inspect: async () => { inspections++; return info; }, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: data.markers }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry),
       playbackState: async (_: string, session: string, playing: boolean) => activity.push({ session, playing }), stopPlayback: async () => {}, updateWatchOptions: async () => {} },
     '../../../../packages/core/client/library': { trackKey: () => 'movie', subtitleTracks: () => [], initialTracks: (details: any) => ({ audio: details.audio[0]?.index ?? null, subtitle: null }) },
-    '../../../../packages/core/client/watch-progress.js': { isContinueDismissed },
+    '../../../../packages/core/client/watch-progress.js': watchProgress,
     '../../../../packages/core/client/quality.js': require('../../../../packages/core/client/quality.js'),
     '../../../../packages/core/client/playback-info.js': require('../../../../packages/core/client/playback-info.js'),
     '../../../../packages/core/client/subtitles': { parseVtt },
@@ -84,6 +84,18 @@ test('changing quality replaces the source at the current position while paused'
   assert.match(h.pending[1].source.uri, /\/transcode\?.*t=40.*quality=480p/);
   h.pending[1].resolve(); await flush();
   assert.equal(h.player.playing, false);
+});
+
+test('outro completion does not make a truncated stream eligible for autoplay', async t => {
+  const h = harness(t, true, false, [{ type: 'outro', start: 60, end: 70 }, { type: 'outro', start: 160, end: 200 }]);
+  await flush(); h.pending[0].resolve(); await flush();
+  h.player.currentTime = 0; h.emit('timeUpdate'); h.player.currentTime = 70; h.emit('timeUpdate', { currentTime: 70 }); await h.hook.persist();
+  assert.equal(h.saved.at(-1).completed, false);
+  h.player.currentTime = 160; h.emit('timeUpdate', { currentTime: 160 }); await h.hook.persist();
+  assert.equal(h.saved.at(-1).completed, true);
+  h.emit('playToEnd'); await flush();
+  assert.equal(h.pending.length, 2);
+  assert.equal(h.ended(), 0);
 });
 
 test('rapid seeks serialize native loads and skip superseded requests', async t => {
