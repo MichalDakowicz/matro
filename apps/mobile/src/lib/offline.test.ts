@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { setImmediate } from 'node:timers/promises';
 import vm from 'node:vm';
+import * as smartPlan from './smart-plan.ts';
 import * as client from '../../../../packages/core/client/server.ts';
 import * as offlineStorage from './offline-storage.ts';
 
@@ -62,6 +63,7 @@ function setup(entries = new Map<string, string>(), files = new Map<string, numb
     Paths: { document: '/documents', cache: { list: () => new fixture.Directory('/cache').list(), uri: '/cache' }, get availableDiskSpace() { return fixture.free; } },
   };
   const modules: Record<string, unknown> = {
+    './smart-plan': smartPlan,
     '@react-native-async-storage/async-storage': fixture.storage,
     'expo-file-system': fixture,
     'expo/fetch': { fetch: (...args: Parameters<typeof fixture.fetch>) => fixture.fetch(...args) },
@@ -121,6 +123,26 @@ test('relaunch restores queued and preparing records and respects a pause', asyn
   const saved = (await next.offline.savedTitle(base, user, 'one'))!;
   next.files.set(saved.uri, saved.size - 1);
   assert.equal(await next.offline.savedTitle(base, user, 'one'), undefined);
+});
+
+test('smart cleanup keeps manual saves and does not stop an active smart download', async () => {
+  const { offline, fixture, records } = setup();
+  const [manual, smart, active] = items('manual', 'smart', 'active');
+  const batch = { id: 'smart:show', label: 'Show' };
+  await offline.saveOffline(base, user, manual, manual.title);
+  await offline.saveOfflineBatch(base, user, [smart], nameOf, batch);
+  await until(async () => (await records()).filter(record => record.complete).length === 2 && !fixture.holds);
+  fixture.request = (_, { signal } = {}) => new Promise((_, reject) => {
+    signal!.addEventListener('abort', () => reject(new Error('Cancelled.')));
+  });
+  await offline.saveOfflineBatch(base, user, [active], nameOf, batch);
+  await offline.removeOffline(base, user, manual.id, { smartOnly: true });
+  await offline.removeOffline(base, user, active.id, { smartOnly: true });
+  await offline.removeOffline(base, user, smart.id, { smartOnly: true });
+  assert.ok(await offline.savedTitle(base, user, manual.id));
+  assert.equal(offline.activeDownloads(base, user)[0]?.id, active.id);
+  assert.equal(await offline.savedTitle(base, user, smart.id), undefined);
+  await offline.removeOffline(base, user, active.id);
 });
 
 test('a stalled caption and a 502 or stalled range retry before completing', async t => {

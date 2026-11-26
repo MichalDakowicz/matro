@@ -24,6 +24,8 @@ import ServerPage from './ServerPage';
 import AccountScreen from './AccountScreen';
 import { BrowseView, HomeView, LibraryChips, SearchView } from './LibraryScreens';
 import { useMovieRequestAlerts } from '../lib/movie-request-alerts';
+import { loadSmart, reconcileSmart, saveSmart } from '../lib/smart-offline';
+import { NO_SMART, type SmartRule, type SmartSettings } from '../lib/smart-plan';
 import { activeDownloads, isSaved, offlineLibrary, removeOffline, resumeInterrupted, retryInterrupted, savedTitle, savedTitles, saveOffline, saveOfflineBatch, watchOffline, type SavedMedia } from '../lib/offline';
 
 type Props = { base: string; onSignedOut: () => void; onChangeServer: () => void };
@@ -134,6 +136,45 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     const stop = watchOffline(refresh);
     return () => { run++; stop(); };
   }, [base, data?.user.id]);
+  // "Keep the next episodes saved": settings per account, applied whenever the server's library arrives or something is watched.
+  const user = data?.user;
+  const smartScope = user ? recoveryScope(base, user) : null;
+  const [loadedSmart, setLoadedSmart] = useState<{ scope: string; settings: SmartSettings } | null>(null);
+  const [smartResult, setSmartResult] = useState<{ scope: string; capped: number } | null>(null);
+  const smartReady = loadedSmart !== null && loadedSmart.scope === smartScope;
+  const smart = smartReady ? loadedSmart.settings : NO_SMART;
+  const capped = smartResult?.scope === smartScope ? smartResult?.capped ?? 0 : 0;
+  useEffect(() => {
+    setLoadedSmart(null);
+    setSmartResult(null);
+    const currentUser = dataRef.current?.user;
+    if (!currentUser || !smartScope) return;
+    let active = true;
+    void loadSmart(base, currentUser).then(settings => {
+      if (active) setLoadedSmart({ scope: smartScope, settings });
+    });
+    return () => { active = false; };
+  }, [base, smartScope]);
+  const watchedMarker = data ? JSON.stringify(Object.entries(data.progress).filter(([, entry]) => entry.completed).map(([key]) => key).sort()) : '';
+  useEffect(() => {
+    const current = dataRef.current;
+    if (!current || !smartScope || offline || !Object.keys(smart.rules).length) { setSmartResult(null); return; }
+    let active = true;
+    void reconcileSmart(base, current, smart, () => active).then(result => {
+      if (active) setSmartResult({ scope: smartScope, capped: result.capped });
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [base, smartScope, data?.items, watchedMarker, offline, smart]);
+  const changeSmart = (next: SmartSettings) => {
+    if (!user || !smartReady || !smartScope) return;
+    setLoadedSmart({ scope: smartScope, settings: next });
+    void saveSmart(base, user, next).catch(() => {});
+  };
+  const keepRule = (items: Item[], rule: SmartRule | null) => {
+    const rules = { ...smart.rules }, key = titleKey(items[0]);
+    if (rule) rules[key] = rule; else delete rules[key];
+    changeSmart({ ...smart, rules });
+  };
   const found = allGroups.find(items => titleKey(items[0]) === selected);
   const detail = savedOnly ? found?.filter(item => savedIds.has(item.id)) : found;
   const art = { base, headers };
@@ -319,7 +360,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const top = (node: React.ReactNode) => <View style={{ flex: 1, paddingTop: layout.top + 76 }}>{node}</View>;
   const common = { ...art, layout, refreshing, onRefresh: () => void load(), onOpen: open };
   const screen = !data ? <View style={[s.center, { padding: 24 }]}>{refreshing ? <ActivityIndicator color={colors.text} /> : <><Text style={t.heading}>Your library</Text><Text style={[t.muted, { marginVertical: 16 }]}>{error || 'Could not load your library.'}</Text><Pill label="Try again" onPress={() => void load()} /></>}</View>
-    : tab === 'offline' ? <View style={{ flex: 1, paddingTop: offline ? 44 : 0 }}><OfflineScreen {...art} data={data} offline={offline}
+    : tab === 'offline' ? <View style={{ flex: 1, paddingTop: offline ? 44 : 0 }}><OfflineScreen {...art} data={data} offline={offline} smart={{ settings: smart, capped, onCap: capBytes => changeSmart({ ...smart, capBytes }), onStop: key => { const rules = { ...smart.rules }; delete rules[key]; changeSmart({ ...smart, rules }); } }}
       onOpenTitle={items => { setSavedOnly(true); setSelected(titleKey(items[0])); }}
       onResume={id => { const item = data.items.find(item => item.id === id); if (item) save(item); }}
       onRemoved={() => { if (offline) void load(); }} /></View>
@@ -345,7 +386,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       <Dock active={dockTab} onChange={jump} queued={data?.queue.length || 0} hidden={keyboard} />
     </View>
     {/* The title page is an overlay, so the list underneath stays mounted and keeps its scroll position. */}
-    {detail && data && <View style={s.overlay}><TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onFollow={!offline && !savedOnly && data.metadataEnabled && data.followed && metadataFor(data, detail[0]).tmdbId ? followShow : undefined} onSearchEpisode={admin ? searchEpisode : undefined} onEditLists={!offline && !savedOnly && data.lists ? editLists : undefined} onEnqueue={enqueue} onMark={(list, done) => void markMany(list, done)} online={offline || savedOnly ? undefined : { admin, tmdb: data.metadataEnabled === true, notify, onMetadata: metadata => setData(latest => latest && { ...latest, metadata }) }} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} savingIds={savingIds} /></View>}
+    {detail && data && <View style={s.overlay}><TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} smart={offline || savedOnly || !smartReady ? undefined : { rule: smart.rules[titleKey(detail[0])], onChange: rule => keepRule(detail, rule) }} onFollow={!offline && !savedOnly && data.metadataEnabled && data.followed && metadataFor(data, detail[0]).tmdbId ? followShow : undefined} onSearchEpisode={admin ? searchEpisode : undefined} onEditLists={!offline && !savedOnly && data.lists ? editLists : undefined} onEnqueue={enqueue} onMark={(list, done) => void markMany(list, done)} online={offline || savedOnly ? undefined : { admin, tmdb: data.metadataEnabled === true, notify, onMetadata: metadata => setData(latest => latest && { ...latest, metadata }) }} onSave={offline || savedOnly ? undefined : save} onSaveMany={offline || savedOnly ? undefined : saveMany} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} savingIds={savingIds} /></View>}
     <Grain />
     <Toast notice={notice} bottom={toastBottom} onDismiss={dismiss} />
     <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} requests={requestsLabel} onGo={go} onRefresh={() => void load()} onAbout={() => setAbout(true)} onServer={onChangeServer} onSignOut={onSignedOut} onTrackDefaults={changeTrackDefaults} />

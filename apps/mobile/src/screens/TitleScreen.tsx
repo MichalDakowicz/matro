@@ -10,6 +10,8 @@ import { listChoices } from '../../../../packages/core/client/title-shelves.js';
 import { cleanEpisodeName, plural, runtimeText } from '../lib/text';
 import { Chip, Icon, IconButton, MediaArt, Pill, ProgressBar, Row, Sheet, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
+import { SmartKeep } from '../components/SmartSaves';
+import type { SmartRule } from '../lib/smart-plan';
 import { TopFade } from '../components/Shell';
 import { MetadataSheet, SubtitleSheet } from '../components/TitleSheets';
 import { colors, fonts, overArt, radius, themed } from '../theme';
@@ -23,11 +25,12 @@ type Props = ArtProps & {
   onEditLists?: (change: ListChange) => Promise<void>;
   onFollow?: (groupId: string, follow: boolean) => Promise<void>;
   onSearchEpisode?: (item: Item, episode: ScheduledEpisode) => void;
+  smart?: { rule?: SmartRule; onChange: (rule: SmartRule | null) => void };
   onSave?: (item: Item) => void; onSaveMany?: (items: Item[]) => void; onRemoveSaved?: (items: Item[]) => void; savedIds?: Set<string>; savingIds?: Set<string>;
 };
 type Menu = null | 'save' | 'watched' | 'metadata' | 'lists' | 'schedule' | { episode: Item };
 
-export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, onMark, online, onEditLists, onFollow, onSearchEpisode, onSave, onSaveMany, onRemoveSaved, savedIds, savingIds, ...art }: Props) {
+export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, onMark, online, onEditLists, onFollow, onSearchEpisode, onSave, onSaveMany, onRemoveSaved, savedIds, savingIds, smart, ...art }: Props) {
   const item = items[0], m = metadataFor(data, item), target = resumeItem(data, items), p = data.progress[target.id], name = nameFor(data, item);
   const insets = useSafeAreaInsets(), seasons = seasonNumbers(items);
   const [season, setSeason] = useState(seasonOf(target)), [menu, setMenu] = useState<Menu>(null), [scrolled, setScrolled] = useState(false), [picked, setPicked] = useState<{ item: Item; file: File } | null>(null);
@@ -173,6 +176,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
       <Row icon="check" label={done(items) ? 'Whole show as unwatched' : 'Whole show'} detail={plural(items.length, 'episode')} last onPress={() => close(() => onMark(items, !done(items)))} />
     </Sheet>
     <Sheet visible={menu === 'save'} onClose={() => setMenu(null)} title="Save offline">
+      {smart && <SmartKeep rule={smart.rule} onChange={smart.onChange} />}
       <Row icon="download" label={seasonLabel(season)} detail={`${plural(inSeason.length, 'episode')} · saved two at a time`} last={rest.length <= 1} onPress={() => close(() => onSaveMany?.(inSeason))} />
       {rest.length > 1 && <Row icon="download" label={`From S${seasonOf(target)} E${target.episode} to season end`} detail={plural(rest.length, 'episode')} last onPress={() => close(() => onSaveMany?.(rest))} />}
     </Sheet>

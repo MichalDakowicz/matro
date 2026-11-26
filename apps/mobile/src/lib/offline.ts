@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { isSmartBatch } from './smart-plan';
 import { Directory, File, Paths } from 'expo-file-system';
 import { fetch } from 'expo/fetch';
 import { fetchWithDeadline, inspect, mediaHeaders, request, ServerError, type Info, type Item, type Library, type MatroUser } from './server';
@@ -22,6 +23,8 @@ type Media = { uri: string; version: string; info: Info; text: Record<string, st
 type RecordState = {
   id: string; title: string; size: number; have: number; complete: boolean; paused?: boolean;
   state?: 'queued' | 'preparing' | 'downloading'; prepared?: number; progressAt?: number; error?: string; retryAt?: number;
+  /** Saves started together share a batch, so the whole group can be paused, resumed or cancelled. */
+  batch?: string; batchLabel?: string;
 };
 export type OfflineRecord = RecordState & Partial<Media>;
 export type SavedMedia = RecordState & Media;
@@ -133,17 +136,21 @@ export function retryInterrupted(base: string, user: MatroUser) {
   }
 }
 
-export function saveOfflineBatch(base: string, user: MatroUser, items: Item[], nameOf: (item: Item) => string) {
-  const scope = account(base, user), release = holdService();
+export type Batch = { id: string; label: string };
+export function saveOfflineBatch(base: string, user: MatroUser, items: Item[], nameOf: (item: Item) => string, batch?: Batch) {
+  const scope = account(base, user);
+  const batchInfo = batch ?? (items.length > 1 ? { id: `b${Date.now().toString(36)}`, label: items[0].group } : undefined);
+  const smart = isSmartBatch(batchInfo?.id), release = holdService();
   return editQueue(async () => {
     const records = new Map((await recordsFor(scope)).map(record => [record.id, record]));
     const entries = new Map<string, string>();
     for (const item of items) {
       const key = recordKey(scope, item.id), previous = records.get(item.id);
-      if (jobs.has(key) || previous && isSaved(previous)) continue;
+      if (jobs.has(key) || previous && (smart || isSaved(previous))) continue;
       const record: OfflineRecord = {
         have: 0, size: 0, ...previous, id: item.id, title: nameOf(item), complete: false,
         state: 'queued', paused: false, error: undefined, retryAt: undefined, prepared: undefined, progressAt: undefined,
+        batch: batchInfo?.id ?? previous?.batch, batchLabel: batchInfo?.label ?? previous?.batchLabel,
       };
       entries.set(key, JSON.stringify(record));
     }
@@ -164,12 +171,37 @@ export function pauseOffline(base: string, user: MatroUser, id: string) {
     if (holds.has(scope)) await drain(base, scope); else changed();
   });
 }
-export function removeOffline(base: string, user: MatroUser, id: string) {
+const unfinished = async (scope: string, batch: string) => (await recordsFor(scope)).filter(record => record.batch === batch && !record.complete);
+/** Stops every running transfer of the batch, then lets `change` rewrite its records. The queue edit keeps other saves from starting in between. */
+const stopBatch = (base: string, user: MatroUser, batch: string, change: (scope: string, records: OfflineRecord[]) => Promise<void>) => editQueue(async () => {
+  const scope = account(base, user), records = await unfinished(scope, batch), running = records.flatMap(record => jobs.get(recordKey(scope, record.id)) ?? []);
+  running.forEach(job => job.controller.abort());
+  await Promise.all(running.map(job => job.task));
+  await change(scope, (await unfinished(scope, batch)));
+  if (holds.has(scope)) await drain(base, scope); else changed();
+});
+export const pauseBatch = (base: string, user: MatroUser, batch: string) => stopBatch(base, user, batch, (scope, records) =>
+  AsyncStorage.multiSet(records.map(record => [recordKey(scope, record.id), JSON.stringify({ ...record, paused: true, error: undefined, retryAt: undefined })])));
+export const cancelBatch = (base: string, user: MatroUser, batch: string) => stopBatch(base, user, batch, async (scope, records) => {
+  for (const record of records) if (record.uri) { const file = new File(record.uri); if (file.exists) file.delete(); }
+  await AsyncStorage.multiRemove(records.map(record => recordKey(scope, record.id)));
+});
+export function resumeBatch(base: string, user: MatroUser, batch: string) {
+  const scope = account(base, user), release = holdService();
+  return editQueue(async () => {
+    const paused = (await recordsFor(scope)).filter(record => record.batch === batch && !record.complete && record.paused);
+    if (paused.length) await AsyncStorage.multiSet(paused.map(record => [recordKey(scope, record.id), JSON.stringify({ ...record, paused: false, state: 'queued', error: undefined, retryAt: undefined })]));
+    await drain(base, scope);
+  }).finally(release);
+}
+export function removeOffline(base: string, user: MatroUser, id: string, { smartOnly = false } = {}) {
   return editQueue(async () => {
     const scope = account(base, user), key = recordKey(scope, id), job = jobs.get(key);
+    if (smartOnly && job) return;
     job?.controller.abort();
     await job?.task;
     const record = await read<OfflineRecord>(key);
+    if (smartOnly && (!record || !isSmartBatch(record.batch) || !isSaved(record))) return;
     if (record?.uri) { const file = new File(record.uri); if (file.exists) file.delete(); }
     await AsyncStorage.removeItem(key);
     if (holds.has(scope)) await drain(base, scope); else changed();
