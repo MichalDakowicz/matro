@@ -8,6 +8,15 @@ export function compareEpisodes(a, b) {
     || a.title.localeCompare(b.title, undefined, { numeric: true }) || a.id.localeCompare(b.id);
 }
 
+/** Season 0 is Specials; an item with no season counts as season 1. @param {Item} item */
+export const seasonOf = item => item.season ?? 1;
+
+/** @param {number} season */
+export const seasonLabel = season => season === 0 ? 'Specials' : `Season ${season}`;
+
+/** @param {Item[]} items */
+export const seasonNumbers = items => [...new Set(items.map(seasonOf))].sort((a, b) => a - b);
+
 /** @param {Item[]} items */
 export function groupTitles(items) {
   /** @type {Map<string, Item[]>} */
@@ -35,6 +44,15 @@ export function normalizeProgress(progress) {
     const updated = Number.isFinite(entry.updated) ? entry.updated : 0;
     return [id, { ...entry, completed: isCompleted(entry), updated }];
   }));
+}
+
+/** @param {string[]} previous @param {string[]} next */
+export function queueChange(previous, next) {
+  // Appending the reordered suffix leaves any items added by other devices alone.
+  let prefix = 0;
+  for (const id of previous) if (id === next[prefix]) prefix++;
+  const kept = new Set(next.slice(0, prefix));
+  return { add: next.slice(prefix), remove: previous.filter(id => !kept.has(id)) };
 }
 
 /** @param {Progress | undefined} entry */

@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('matro', {
   chooseSource: () => ipcRenderer.invoke('desktop:source-open'),
+  setUpdateChecks: enabled => ipcRenderer.invoke('desktop:updates-set', enabled),
   openMovieRequests: () => ipcRenderer.invoke('desktop:movie-requests'),
   downloadSeriesSearch: options => ipcRenderer.invoke('downloads:series-search', options),
   downloadSeriesReleases: options => ipcRenderer.invoke('downloads:series-releases', options),

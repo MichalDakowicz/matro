@@ -10,6 +10,84 @@ function launchOptions(profile) {
   return process.env.MATRO_EXECUTABLE ? { executablePath: process.env.MATRO_EXECUTABLE, args: [`--user-data-dir=${profile}`], env } : { args: [path.resolve(__dirname, '..')], env };
 }
 
+test('the featured reel starts on a different title when reopened', async ({}, testInfo) => {
+  const profile = testInfo.outputPath('profile');
+  await fs.mkdir(profile, { recursive: true });
+  const items = await Promise.all(['North', 'South'].map(async name => {
+    const file = path.join(profile, `${name}.mkv`);
+    await fs.writeFile(file, '');
+    return describe(file);
+  }));
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items, folders: [] }));
+  const app = await electron.launch(launchOptions(profile));
+  try {
+    const page = await app.firstWindow();
+    const title = page.locator('.show-title');
+    await expect(title).toHaveText(/^(North|South)$/);
+    const first = await title.textContent(), other = first === 'North' ? 'South' : 'North';
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.locator('#reel').press('ArrowRight');
+    await expect(title).toHaveText(other);
+    const movies = page.getByRole('button', { name: 'Movies 2', exact: true });
+    await movies.click();
+    await movies.click();
+    await expect(title).toHaveText(other);
+    await page.reload();
+    await expect(title).toHaveText(first);
+  } finally { await app.close(); }
+});
+
+test('desktop update checks require opt-in and remember the setting across launches', async ({}, testInfo) => {
+  test.skip(!!process.env.MATRO_EXECUTABLE, 'The update fixture launches the source app');
+  const profile = testInfo.outputPath('profile');
+  const endpoint = 'https://api.github.com/repos/MichalDakowicz/matro/releases/latest';
+  const releasePage = 'https://github.com/MichalDakowicz/matro/releases/tag/v999.0.0';
+  const options = { ...launchOptions(profile), args: [path.join(__dirname, 'update-check-host.cjs'), '--local'] };
+  await fs.mkdir(profile, { recursive: true });
+  let app;
+  const fixture = () => app.evaluate(() => globalThis.matroUpdateFixture);
+  async function openSettings(theme) {
+    app = await electron.launch(options);
+    const page = await app.firstWindow();
+    await page.getByRole('button', { name: 'About Matro and this library' }).press('Enter');
+    await page.getByRole('button', { name: theme, exact: true }).press('Enter');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme.toLowerCase());
+    return page.getByRole('switch', { name: 'Check for updates' });
+  }
+  try {
+    let toggle = await openSettings('Dark');
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect((await fixture()).requests).toEqual([]);
+    await toggle.press('Space');
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await expect(toggle).toBeFocused();
+    await expect.poll(async () => (await fixture()).opened).toEqual([releasePage]);
+    expect((await fixture()).requests).toEqual([{ url: endpoint, credentials: 'omit' }]);
+    expect((await fixture()).offers).toEqual(['Matro 999.0.0 is available.']);
+    await app.close();
+
+    toggle = await openSettings('Light');
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await expect.poll(async () => (await fixture()).opened).toEqual([releasePage]);
+    await toggle.press('Enter');
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await app.evaluate(() => { globalThis.matroUpdateFixture.status = 503; });
+    await toggle.press('Enter');
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await expect.poll(async () => (await fixture()).requests.length).toBe(2);
+    expect((await fixture()).offers).toHaveLength(1);
+    await toggle.press('Enter');
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await app.close();
+
+    toggle = await openSettings('Dark');
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect((await fixture()).requests).toEqual([]);
+  } finally {
+    await app?.close();
+  }
+});
+
 test('the selected movie metadata language updates the grid title and poster', async ({}, testInfo) => {
   test.skip(!!process.env.MATRO_EXECUTABLE, 'Packaged builds do not accept fixture TMDB endpoints');
   const profile = testInfo.outputPath('profile');
@@ -38,7 +116,7 @@ test('the selected movie metadata language updates the grid title and poster', a
     app = await electron.launch(launch);
     const page = await app.firstWindow();
     await page.getByRole('button', { name: 'Movies 1', exact: true }).click();
-    const card = name => page.locator('.card').getByText(name, { exact: true });
+    const card = name => page.getByRole('button', { name: `Open ${name}`, exact: true }).and(page.locator('.card'));
     await card('Day of the Wacko').click();
     await page.getByRole('button', { name: 'TMDB settings' }).click();
     const dialog = page.getByRole('dialog', { name: 'TMDB settings' });
@@ -95,8 +173,8 @@ test('existing folder library migrates to two shows and one movie without losing
     await page.screenshot({ path: 'test-results/folder-library.png' });
     await page.getByRole('button', { name: 'Open Over The Garden Wall', exact: true }).click();
     await expect(page.locator('.episode-row')).toHaveCount(11);
-    await expect(page.locator('.episode-code').first()).toHaveText('S1 E0');
-    await expect(page.locator('.episode-code').last()).toHaveText('S1 E10');
+    await expect(page.locator('.episode-code').first()).toHaveText('S1 E1');
+    await expect(page.locator('.episode-code').last()).toHaveText('S1 E11');
     await page.getByRole('button', { name: 'Close details', exact: true }).click();
     const state = await page.evaluate(() => window.matro.load());
     expect(state.progress[watched].position).toBe(120); expect(state.queue).toEqual([watched]); expect(state.libraryVersion).toBe(2);
@@ -576,6 +654,23 @@ test('subtitles stay right after seeks and 5-second skips, paused or playing', a
     await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
     await page.locator('[data-subtitle="3"]').click();
     await expect.poll(active).toBe('A place for your collection.');
+    const caption = page.locator('#subtitle-caption'), top = page.getByRole('button', { name: 'Top', exact: true });
+    await expect(caption).toHaveText('A place for your collection.');
+    const bottom = await caption.boundingBox();
+    await top.press('Enter');
+    await expect(top).toHaveAttribute('aria-pressed', 'true');
+    const upper = await caption.boundingBox(), heading = await page.locator('.player-heading').boundingBox();
+    expect(upper.y).toBeLessThan(bottom.y);
+    expect(upper.y).toBeGreaterThanOrEqual(heading.y + heading.height);
+    const horizontal = page.getByRole('slider', { name: 'Horizontal subtitle position' });
+    await horizontal.press('End');
+    await expect(horizontal).toHaveValue('100');
+    expect((await caption.boundingBox()).x).toBeGreaterThan(upper.x);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('matro.subtitlePosition')))).toEqual({ x: 100, y: 0 });
+    await page.getByRole('button', { name: 'Reset position' }).press('Enter');
+    await expect(horizontal).toHaveValue('50');
+    const timeline = await page.locator('.timeline').boundingBox(), reset = await caption.boundingBox();
+    expect(reset.y + reset.height).toBeLessThanOrEqual(timeline.y);
     await page.getByRole('button', { name: 'Close audio and subtitles' }).click();
     // Paused: a seek that restarts the stream must show the line for the new moment without pressing play.
     await page.locator('#seek').evaluate(el => { el.value = '6'; el.dispatchEvent(new Event('change', { bubbles: true })); });
@@ -749,7 +844,7 @@ test('a loaded subtitle file is copied next to the video and offered again next 
     await expect(page.locator('.sub-style-row output')).toHaveText('150%');
     for (const choice of ['font:serif', 'background:solid', 'bold:on', 'edge:outline']) await page.locator(`[data-sub-style="${choice}"]`).click();
     await expect(page.locator('[data-sub-style="bold:on"]')).toHaveAttribute('aria-pressed', 'true');
-    const vars = await page.locator('video').evaluate(v => ['--cue-scale', '--cue-font', '--cue-bg', '--cue-weight', '--cue-shadow'].map(name => v.style.getPropertyValue(name)));
+    const vars = await page.locator('#subtitle-caption').evaluate(caption => ['--cue-scale', '--cue-font', '--cue-bg', '--cue-weight', '--cue-shadow'].map(name => getComputedStyle(caption).getPropertyValue(name)));
     expect(vars[0]).toBe('1.5'); expect(vars[1]).toContain('Georgia'); expect(vars[2]).toBe('rgb(0 0 0 / 1)'); expect(vars[3]).toBe('700'); expect(vars[4]).toContain('#000');
     await page.screenshot({ path: 'test-results/subtitle-panel.png' });
     await page.getByRole('button', { name: 'Close audio and subtitles' }).click();
