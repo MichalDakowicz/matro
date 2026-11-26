@@ -5,6 +5,66 @@ const { fixtures } = require('./fixtures.cjs');
 const { createApp } = require('../packages/core/server');
 const { ffmpeg, run } = require('../packages/core/desktop/media.cjs');
 
+test('a failed browser logout survives reload and a replacement account gets a fresh recovery scope', async () => {
+  const root = await fs.mkdtemp(path.join(require('node:os').tmpdir(), 'matro-logout-ui-'));
+  const { app, server, db } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: {} }, movieRequests: { env: {} } });
+  let browser;
+  try {
+    const viewer = await app.createUser('viewer', 'logout-ui-password', 'viewer');
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: base };
+    delete env.ELECTRON_RUN_AS_NODE;
+    browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
+    const page = await browser.firstWindow();
+    const signIn = async () => {
+      await page.getByRole('textbox', { name: 'Username', exact: true }).fill('viewer');
+      const password = page.getByLabel('Password', { exact: true });
+      await password.fill('logout-ui-password');
+      await password.press('Enter');
+      await expect(page.getByRole('button', { name: 'Profile: viewer' })).toBeVisible();
+    };
+    await page.setViewportSize({ width: 375, height: 800 });
+    await signIn();
+    await page.evaluate(() => window.matroTheme.set('light'));
+    const originalScope = await page.evaluate(() => window.matro.recoveryScope);
+    expect(originalScope).toMatch(/^account-v2:[a-f0-9]{32}$/);
+    const originalCookie = (await page.context().cookies(base)).find(cookie => cookie.name === 'matro_session');
+    expect(originalCookie.httpOnly).toBe(true);
+
+    await page.route('**/api/logout', route => route.abort());
+    await page.getByRole('button', { name: 'Profile: viewer' }).press('Enter');
+    await page.getByRole('button', { name: 'Sign out', exact: true }).press('Enter');
+    const loginButton = page.getByRole('button', { name: 'Sign in', exact: true });
+    await expect(loginButton).toBeVisible();
+    expect((await (await page.request.get(base + '/api/status')).json()).user.username).toBe('viewer');
+    await page.reload();
+    await expect(loginButton).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Profile: viewer' })).toHaveCount(0);
+
+    await page.unroute('**/api/logout');
+    await page.reload();
+    await expect(loginButton).toBeVisible();
+    expect((await page.context().cookies(base)).find(cookie => cookie.name === 'matro_session')).toBeUndefined();
+    expect(await page.evaluate(() => localStorage.getItem('matro.pending-logout'))).toBeNull();
+    const revoked = await fetch(base + '/api/me', { headers: { cookie: `matro_session=${originalCookie.value}` } });
+    expect(revoked.status).toBe(401);
+
+    db.prepare('DELETE FROM users WHERE id = ?').run(viewer);
+    await app.createUser('viewer', 'logout-ui-password', 'viewer');
+    await page.setViewportSize({ width: 1200, height: 850 });
+    await signIn();
+    await page.evaluate(() => window.matroTheme.set('dark'));
+    expect(await page.evaluate(() => window.matro.recoveryScope)).not.toBe(originalScope);
+  } finally {
+    await browser?.close();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+    db.close();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  }
+});
+
 test('viewers request a movie and the owner searches for a release without starting a transfer', async () => {
   const root = await fs.mkdtemp(path.join(require('node:os').tmpdir(), 'matro-request-ui-'));
   const queries = [], hash = 'a'.repeat(40);
@@ -126,6 +186,30 @@ test('an open web library picks up a catalog change without a reload', async () 
     await library.rescanAll();
     await expect(newTitle).toBeVisible({ timeout: 12000 });
     expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
+
+    await page.getByRole('button', { name: 'Folders', exact: true }).press('Enter');
+    const note = page.getByText(/Uploaded subtitles are kept too/);
+    await page.evaluate(() => window.matroTheme.set('dark'));
+    await expect(note).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.evaluate(() => window.matroTheme.set('light'));
+    await expect(note).toBeVisible();
+    await fs.rename(media, path.join(root, 'disconnected'));
+    await fs.mkdir(media);
+    await page.getByRole('button', { name: 'Rescan folders', exact: true }).press('Enter');
+    await expect(page.locator('#toast')).toContainText('No media files were found. Existing titles were kept.');
+    await expect(page.locator('.source-count')).toHaveText('2 items');
+    await page.setViewportSize({ width: 375, height: 800 });
+    await page.evaluate(() => window.matroTheme.set('light'));
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const movies = page.locator('.dock [data-tab="movie"]'), featured = page.locator('.show-title');
+    await movies.click();
+    await expect(featured).toHaveText(/^(Northbound|New Arrival)$/);
+    const start = await featured.textContent(), other = start === 'Northbound' ? 'New Arrival' : 'Northbound';
+    await page.locator('#reel').press('ArrowLeft');
+    await expect(featured).toHaveText(other);
+    await page.reload();
+    await expect(featured).toHaveText(other);
   } finally {
     await browser?.close();
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
@@ -387,11 +471,31 @@ test('Vite production UI signs in, plays through the HTTP adapter and saves prog
     // Pausing the decoder must not stop downloading the rest of the movie.
     await expect(page.locator('video')).toHaveAttribute('data-buffer-complete', 'true');
     expect(await page.locator('video').evaluate(v => v.src.startsWith('blob:'))).toBe(true);
+    await page.setViewportSize({ width: 375, height: 800 });
+    await page.evaluate(() => window.matroTheme.set('light'));
+    await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
+    const subtitle = page.locator('[data-subtitle="3"]');
+    await subtitle.click();
+    await expect(subtitle).toHaveAttribute('aria-pressed', 'true');
     await page.locator('#seek').evaluate(el => { el.value = '6'; el.dispatchEvent(new Event('change', { bubbles: true })); });
-    await expect(page.locator('#position')).toHaveText('0:06');
-    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    await expect(page.locator('#subtitle-caption')).toHaveText('Subtitles after a seek.');
+    await expect.poll(() => page.locator('video').evaluate(v => v.paused)).toBe(true);
+    const at = await page.locator('#position').textContent();
+    const y = page.getByRole('slider', { name: 'Vertical subtitle position' });
+    await y.press('Home');
+    await y.press('ArrowRight');
+    await expect(y).toHaveValue('1');
+    await expect(page.locator('#position')).toHaveText(at);
+    await expect(page.locator('#subtitle-caption')).toHaveText('Subtitles after a seek.');
+    await page.getByRole('button', { name: 'Close audio and subtitles' }).click();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('video')).toHaveCount(0);
     const saved = await page.evaluate(async () => (await (await fetch('/api/library')).json()).progress);
     expect(Object.values(saved).some(p => p.position >= 5.9)).toBe(true);
+    await page.reload();
+    await page.getByRole('button', { name: 'Resume watching', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Audio and subtitles', exact: true }).click();
+    await expect(y).toHaveValue('1');
     expect(errors).toEqual([]);
   } finally {
     await browser?.close(); app.downloads.close(); app.closePlayback();
@@ -484,15 +588,15 @@ test('direct-play resume survives leaving before metadata arrives and resumes at
     let requested, release;
     const started = new Promise(resolve => { requested = resolve; });
     const blocked = new Promise(resolve => { release = resolve; });
-    await page.route('**/api/items/*/direct', async route => { requested(); await blocked; await route.abort(); });
+    await page.route('**/api/items/*/direct?*', async route => { requested(new URL(route.request().url()).searchParams.get('session')); await blocked; await route.abort(); });
     await page.getByRole('button', { name: 'Resume watching', exact: true }).click();
-    await started;
+    expect(await started).toMatch(/^[a-f0-9]{32}$/);
     await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
     await expect(page.locator('.shell')).toBeVisible();
     release();
     const saved = await page.evaluate(async () => (await (await fetch('/api/library')).json()).progress);
     expect(Object.values(saved)[0].position).toBeGreaterThanOrEqual(5.9);
-    await page.unroute('**/api/items/*/direct');
+    await page.unroute('**/api/items/*/direct?*');
     await page.locator('.continue-card [data-play]').click();
     await expect.poll(() => page.locator('#video').evaluate(v => v.currentTime)).toBeGreaterThanOrEqual(5.9);
   } finally {
