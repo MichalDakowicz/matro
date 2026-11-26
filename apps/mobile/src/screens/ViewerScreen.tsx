@@ -239,6 +239,12 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     const added = queue.length - data.queue.length;
     notify(!added ? 'Already in your queue.' : added === 1 ? `Added “${items.length === 1 ? nameFor(data, items[0]) : 'one item'}” to the queue.` : `Added ${plural(added, 'item')} to the queue.`, { label: 'View queue', run: () => jump('queue') });
   };
+  // Changes made inside the player: the queue (and what is saved as Up next) and account switches such as autoplay.
+  const changeQueue = (queue: Item[]) => {
+    if (!data) return;
+    const ids = queue.map(i => i.id); setPlaying(current => current && { ...current, queue });
+    updateQueue(ids, queueChange(data.queue, ids));
+  };
   const startPlayback = async (item: Item, queue: Item[], start?: number) => {
     if (!data) return;
     const run = ++playRun.current;
@@ -323,7 +329,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   useEffect(() => () => setSceneOverride(null), []);
   setSceneOverride(playing && data ? 'dark' : null); // the player draws over video, dark in both themes
   if (playing && data) return <><StatusBar style="light" /><NativePlayer key={`${playing.item.id}:${playing.start ?? 'resume'}`} {...art} item={playing.item} data={data} initialPosition={playing.start} queue={playing.queue}
-    saved={playing.saved} offline={offline} onBack={() => { playRun.current++; setPlaying(null); void load(); }} onSelect={item => void startPlayback(item, playing.queue)} onNext={() => {
+    saved={playing.saved} offline={offline} onQueue={changeQueue} onComplete={item => void updateProgress(item, false)} onPreferences={patch => setData(current => current && { ...current, preferences: { ...current.preferences, ...patch } })} onBack={() => { playRun.current++; setPlaying(null); void load(); }} onSelect={item => void startPlayback(item, playing.queue)} onNext={() => {
       const next = playing.queue[playing.queue.findIndex(i => i.id === playing.item.id) + 1];
       if (next && data.preferences.autoplay !== false) void startPlayback(next, playing.queue);
       else { setPlaying(null); void load(); }

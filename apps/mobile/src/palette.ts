@@ -84,7 +84,7 @@ const light: Palette = {
 };
 export const palettes: Record<Scheme, Palette> = { dark, light };
 
-export const overArt = { text: '#f3f1ec', dim: '#d6d2ca', shade: '#000a', shadeDeep: '#000000e8', card: '#15151999', cardDeep: '#0a0a0bf5', chrome: '#171719aa', chip: '#0a0a0b99', badge: '#0a0a0ba0', still: '#ffffff59', rule: '#ffffff33', warn: '#e3a58b', sheen: ['#0a0a0b4d', '#0a0a0b8c'] as const, cover: ['#252328', '#15151b', '#29252a'] as const } as const;
+export const overArt = { black: '#000000', captionShadow: '#000c', text: '#f3f1ec', dim: '#d6d2ca', shade: '#000a', shadeDeep: '#000000e8', card: '#15151999', cardDeep: '#0a0a0bf5', chrome: '#171719aa', chip: '#0a0a0b99', badge: '#0a0a0ba0', still: '#ffffff59', rule: '#ffffff33', warn: '#e3a58b', sheen: ['#0a0a0b4d', '#0a0a0b8c'] as const, cover: ['#252328', '#15151b', '#29252a'] as const } as const;
 
 /** "System" follows the phone; an unknown system scheme falls back to dark, the app's original look. */
 export const resolveScheme = (choice: ThemeChoice, system: string | null | undefined): Scheme =>

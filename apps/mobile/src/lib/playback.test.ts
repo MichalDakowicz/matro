@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import vm from 'node:vm';
 import { playbackPath } from '../../../../packages/core/client/server.ts';
 import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
+import { createAutoSkip } from '../../../../packages/core/client/auto-skip.js';
 import * as watchProgress from '../../../../packages/core/client/watch-progress.js';
 import { createPictureInPictureLifecycle } from '../player/pictureInPicture.ts';
 
@@ -17,7 +18,7 @@ const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(resolv
 
 // Exercise the real hook with asynchronous native replacements and events. The
 // platform boundary is fake; playback URLs, subtitles and hook logic are real.
-function harness(t: any, directPlay = false, savedAtOpen = false, markers: { type: string; start: number; end: number }[] = []) {
+function harness(t: any, directPlay = false, savedAtOpen = false, markers: { type: string; start: number; end: number; source?: string }[] = [], preferences: Record<string, unknown> = {}) {
   const effects: (() => (() => void) | void)[] = [], states: any[] = [], listeners = new Map<string, Function>();
   const pending: { source: any; resolve: () => void; reject: (error: Error) => void }[] = [], downloads: { ready: (uri: string) => void; cancelled: boolean }[] = [];
   const saved: any[] = [], activity: { session: string; playing: boolean }[] = [];
@@ -29,7 +30,7 @@ function harness(t: any, directPlay = false, savedAtOpen = false, markers: { typ
     addListener(name: string, callback: Function) { listeners.set(name, callback); return { remove() {} }; },
   };
   const info = { duration: 200, directPlay, video: { codec: 'h264', height: 1080, width: 1920 }, audio: [{ index: 1 }], embedded: [], uploaded: [{ id: 1, name: 'English', language: 'en' }] };
-  const data = { user: {}, preferences: { tracks: {} }, progress: {}, markers: { movie: markers } };
+  const data = { user: {}, preferences: { tracks: {}, ...preferences }, progress: {}, markers: { movie: markers } };
   const localCopy = { uri: 'file:///saved.mp4', info, text: {} };
   let available = savedAtOpen, inspections = 0;
   const modules: Record<string, any> = {
@@ -43,6 +44,7 @@ function harness(t: any, directPlay = false, savedAtOpen = false, markers: { typ
     '../../../../packages/core/client/quality.js': require('../../../../packages/core/client/quality.js'),
     '../../../../packages/core/client/playback-info.js': require('../../../../packages/core/client/playback-info.js'),
     '../../../../packages/core/client/subtitles': { parseVtt },
+    '../../../../packages/core/client/auto-skip.js': { createAutoSkip },
     './diskBuffer': { downloadPlayback: (_: any, __: any, ready: any) => { const job = { ready, cancelled: false }; downloads.push(job); return () => { job.cancelled = true; }; } },
     './pictureInPicture': { createPictureInPictureLifecycle },
     '../lib/storage': { recoveryScope: () => 'test', progressRecovery: { write: async () => {} }, loadQuality: async () => 'original', saveQuality: async () => {} },
@@ -97,6 +99,35 @@ test('outro completion does not make a truncated stream eligible for autoplay', 
   h.emit('playToEnd'); await flush();
   assert.equal(h.pending.length, 2);
   assert.equal(h.ended(), 0);
+});
+
+test('auto-skip jumps past an intro only when it is enabled and playback is running', async t => {
+  const intro = [{ type: 'intro', start: 5, end: 15, source: 'manual' }];
+  for (const autoSkip of [true, false]) {
+    const h = harness(t, true, false, intro, { autoSkip }); await flush(); h.pending[0].resolve(); await flush();
+    h.player.currentTime = 0; h.emit('timeUpdate'); h.player.currentTime = 6; h.emit('timeUpdate', { currentTime: 6 }); await flush();
+    assert.equal(h.player.currentTime, autoSkip ? 15 : 6, `autoSkip ${autoSkip}`);
+    h.player.currentTime = 16; h.emit('timeUpdate', { currentTime: 16 }); assert.equal(h.player.currentTime, 16, 'outside the range nothing is skipped');
+  }
+  const paused = harness(t, true, false, intro, { autoSkip: true }); await flush(); paused.pending[0].resolve(); await flush();
+  paused.player.currentTime = 0; paused.emit('timeUpdate'); paused.player.playing = false; paused.player.currentTime = 6; paused.emit('timeUpdate', { currentTime: 6 });
+  assert.equal(paused.player.currentTime, 6, 'a paused player is left alone');
+});
+
+test('seeking into a marker suppresses auto-skip and a used marker stays skipped after rewinding', async t => {
+  const intro = [{ type: 'intro', start: 5, end: 15, source: 'manual' }];
+  const h = harness(t, true, false, intro, { autoSkip: true }); await flush(); h.pending[0].resolve(); await flush();
+  h.emit('timeUpdate');
+  h.hook.seek(6); h.emit('timeUpdate');
+  assert.equal(h.player.currentTime, 6);
+  h.player.currentTime = 12; h.emit('timeUpdate');
+  assert.equal(h.player.currentTime, 12);
+  h.hook.seek(3); h.emit('timeUpdate');
+  h.player.currentTime = 6; h.emit('timeUpdate');
+  assert.equal(h.player.currentTime, 15);
+  h.hook.seek(3); h.emit('timeUpdate');
+  h.player.currentTime = 6; h.emit('timeUpdate');
+  assert.equal(h.player.currentTime, 6);
 });
 
 test('rapid seeks serialize native loads and skip superseded requests', async t => {

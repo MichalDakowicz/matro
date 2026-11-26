@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, AppState, BackHandler, FlatList, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, BackHandler, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { isPictureInPictureSupported, VideoView } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -7,25 +7,39 @@ import Slider from '@react-native-community/slider';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { setStatusBarHidden } from 'expo-status-bar';
 import { NavigationBar } from 'expo-navigation-bar';
-import type { Item, Library } from '../lib/server';
-import { episodeName, formatTime, languageName, metadataFor, nameFor } from '../../../../packages/core/client/library';
+import type { Item, Library, Preferences } from '../lib/server';
+import { episodeName, formatTime, languageName, metadataFor, nameFor, subtitleTracks } from '../../../../packages/core/client/library';
 import { usePlayback } from '../player/usePlayback';
+import { usePinchToFill } from '../player/usePinchToFill';
 import { SubtitlePositionControls, useSubtitlePosition } from '../player/SubtitlePositionControls';
 import { subtitleOffset } from '../player/subtitlePosition';
-import { usePinchToFill } from '../player/usePinchToFill';
+import { PlaybackSheet } from '../player/PlaybackSheet';
+import { SeekMarks, SeekPreview } from '../player/SeekExtras';
+import { SubtitleStyleControls } from '../player/SubtitleStyleControls';
+import { UpNextSheet } from '../player/UpNextSheet';
+import { showCreditsNext } from '../player/playerTools';
+import { parseSubtitleStyle, subtitleTextStyle } from '../player/subtitleStyle';
+import { useBackgroundAudio } from '../player/useBackgroundAudio';
+import { usePlayerGestures } from '../player/usePlayerGestures';
+import { useSkipEditing } from '../player/useSkipEditing';
+import { useSleepTimer } from '../player/useSleepTimer';
 import { Icon, IconButton, MediaArt, Pill, SkipIcon, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
 import { colors, fonts } from '../theme';
 import type { SavedMedia } from '../lib/offline';
 
-type Props = ArtProps & { item: Item; data: Library; initialPosition?: number; saved?: SavedMedia; offline?: boolean; queue: Item[]; onBack: () => void; onSelect: (item: Item) => void; onNext: () => void };
-export default function NativePlayer({ base, headers, item, data, initialPosition, saved, offline, queue, onBack, onSelect, onNext }: Props) {
+type Props = ArtProps & { item: Item; data: Library; initialPosition?: number; saved?: SavedMedia; offline?: boolean; queue: Item[]; onBack: () => void; onSelect: (item: Item) => void; onNext: () => void; onPreferences: (patch: Partial<Preferences>) => void; onQueue: (queue: Item[]) => void; onComplete: (item: Item) => void };
+export default function NativePlayer({ base, headers, item, data, initialPosition, saved, offline, queue, onBack, onSelect, onNext, onPreferences, onQueue, onComplete }: Props) {
+  // The timer ends playback at the end of the episode or after a set time. It reads the player lazily because the player is created after it.
+  const sleep = useSleepTimer(() => { if (p.playing) p.toggle(); setControls(true); });
+  const [background, setBackground] = useBackgroundAudio();
   const [supportsPiP] = useState(() => Platform.OS === 'android' && isPictureInPictureSupported());
   const videoView = useRef<VideoView>(null);
-  const p = usePlayback({ base, data, item, initialPosition, saved, offline, supportsPiP, onEnd: onNext });
-  const [controls, setControls] = useState(true), [sheet, setSheet] = useState<'tracks' | 'queue' | null>(null), [scrub, setScrub] = useState<number | null>(null);
+  const p = usePlayback({ base, data, item, initialPosition, saved, offline, background, supportsPiP, onEnd: () => { if (!sleep.stopAtEnd()) onNext(); } });
+  const [controls, setControls] = useState(true), [sheet, setSheet] = useState<'tracks' | 'queue' | 'more' | null>(null), [scrub, setScrub] = useState<number | null>(null), [seekWidth, setSeekWidth] = useState(0);
+  const tapRef = useRef(() => {});
   const bitmap = !!p.info?.embedded.some(track => track.index === p.subtitle && track.bitmap);
-  const { fit, indicator, stageTouches } = usePinchToFill(!!p.info?.video, bitmap, () => setControls(visible => !visible));
+  const { fit, indicator, stageTouches } = usePinchToFill(!!p.info?.video, bitmap, () => tapRef.current());
   const insets = useSafeAreaInsets(), { width, height } = useWindowDimensions(), landscape = width > height, opacity = useRef(new Animated.Value(1)).current;
   const dragging = useRef(false);
   const [subtitlePosition, setSubtitlePosition] = useSubtitlePosition();
@@ -81,16 +95,25 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
       Alert.alert('Picture-in-picture unavailable', 'Check the picture-in-picture permission in Android settings.');
     }
   };
+  const gestures = usePlayerGestures({ stage: stageTouches, width, onTap: () => setControls(visible => !visible), seekBy: delta => p.seek(p.position + delta), volume: () => p.player.volume, setVolume: value => { p.player.volume = value; } });
+  tapRef.current = gestures.tap;
+  useEffect(() => { sleep.check(); }, [p.position, sleep.check]);
+  const editing = useSkipEditing({ base, item, queue, markers: p.markers, position: p.position, duration: p.info?.duration || 0, applyMarkers: p.applyMarkers });
+  const creditsNext = showCreditsNext(p.markers, p.position, p.info?.duration || 0, hasNext);
+  const subStyle = parseSubtitleStyle(p.settings.subtitles), styled = p.settings.subtitles ? subtitleTextStyle(subStyle) : null;
+  const changeSubtitleStyle = (change: Partial<typeof subStyle>) => setPreference({ subtitles: { ...(typeof p.settings.subtitles === 'object' ? p.settings.subtitles : {}), ...subStyle, ...change } });
+  const setPreference = (patch: Partial<Preferences>) => { p.setPreference(patch); onPreferences(patch); };
+  const changeQueue = (next: Item[]) => onQueue(next);
   const videoAspect = p.info?.video?.width && p.info.video.height ? p.info.video.width / p.info.video.height : 16 / 9;
   const pictureHeight = fit === 'cover' ? height : Math.min(height, width / videoAspect);
   const skipBottom = controls ? (landscape ? 140 : 290 + insets.bottom) : insets.bottom + 24;
   const captionTop = Math.max(insets.top + 12, controls ? headerEnd + 8 : 0);
-  const captionBottom = Math.max((height - pictureHeight) / 2 + pictureHeight * .06, insets.bottom + 16, controls && controlsTop !== null ? height - controlsTop + 8 : 0, segment ? skipBottom + 58 : 0);
+  const pictureBottom = (height - pictureHeight) / 2 + pictureHeight * .06;
+  const captionBottom = Math.max(insets.bottom + 16, pictureBottom, controls && controlsTop !== null ? height - controlsTop + 8 : 0, segment || creditsNext ? skipBottom + (segment && creditsNext ? 116 : 58) : 0);
   const captionLeft = insets.left + 12, captionRight = insets.right + 12;
   const captionWidth = Math.max(0, width - captionLeft - captionRight), captionHeight = Math.max(0, height - captionTop - captionBottom);
   const captionLineHeight = Math.min(27 * p.subtitleSize, Math.max(16, captionHeight / 2));
-  const allSubs = [...(p.info?.embedded || []), ...(p.info?.uploaded || []).map(track => ({ index: 10000 + track.id, language: track.language, title: track.name, text: true, codec: 'vtt' })), ...(p.info?.files || []).map(track => ({ ...track, index: 20000 + track.id, text: true }))];
-  const bitmap = allSubs.some(track => track.index === p.subtitle && 'bitmap' in track && track.bitmap);
+  const allSubs = p.info ? subtitleTracks(p.info) : [];
   const transport = <View style={[s.transport, landscape && { gap: 4 }]}>
     <IconButton name="prev" label="Previous in queue" disabled={!hasPrevious} size={landscape ? 40 : 46} onPress={() => void select(queue[queueIndex - 1])} />
     <IconButton label="Back 5 seconds" size={landscape ? 40 : 46} onPress={() => skip(-5)}><SkipIcon back /></IconButton>
@@ -103,6 +126,7 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
     <IconButton name="tracks" label="Audio and subtitles" active={sheet === 'tracks'} onPress={() => { setControls(true); setSheet('tracks'); }} />
     <IconButton name="queue" label="Queue" active={sheet === 'queue'} onPress={() => { setControls(true); setSheet('queue'); }} />
     {p.allowPiP && <IconButton name="pictureInPicture" label="Picture-in-picture" disabled={p.busy || !!p.error} onPress={() => void enterPictureInPicture()} />}
+    <IconButton name="more" label="Playback settings" active={sheet === 'more'} onPress={() => { setControls(true); setSheet('more'); }} />
     <IconButton name="fullscreen" label={landscape ? 'Exit fullscreen' : 'Fullscreen'} onPress={toggleFullscreen} />
   </View>;
   return <View style={s.fill}>
@@ -110,10 +134,10 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
       allowsPictureInPicture={p.allowPiP} startsPictureInPictureAutomatically={p.autoPiP}
       onPictureInPictureStart={() => { p.pictureInPicture.started(); setSheet(null); }}
       onPictureInPictureStop={() => { p.pictureInPicture.stopped(); setControls(true); }} />
-    <Pressable style={StyleSheet.absoluteFill} {...stageTouches} accessibilityLabel="Show or hide playback controls" />
+    <Pressable style={StyleSheet.absoluteFill} {...gestures.bind} accessibilityLabel="Show or hide playback controls" />
     {p.caption && captionHeight >= captionLineHeight + 4 && <View pointerEvents="none" style={[s.captionArea, { top: captionTop, bottom: captionBottom, left: captionLeft, right: captionRight }]}>
       <Text onLayout={({ nativeEvent: { layout } }) => setCaptionSize({ width: layout.width, height: layout.height })}
-        numberOfLines={Math.floor((captionHeight - 4) / captionLineHeight)} style={[s.caption, {
+        numberOfLines={Math.floor((captionHeight - 4) / captionLineHeight)} style={[s.caption, styled, {
           transform: [{ translateX: subtitleOffset(subtitlePosition.x, captionWidth, captionSize.width) }, { translateY: subtitleOffset(subtitlePosition.y, captionHeight, captionSize.height) }],
           maxWidth: Math.min(captionWidth, width * (landscape ? .8 : .92)), fontSize: captionLineHeight * 20 / 27, lineHeight: captionLineHeight,
         }]}>{p.caption.trim()}</Text>
@@ -127,8 +151,10 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
       </View>
       <LinearGradient pointerEvents="none" colors={['transparent', '#000e']} style={[s.bottomFade, { height: landscape ? 180 : 300 + insets.bottom }]} />
       <View onLayout={({ nativeEvent }) => setControlsTop(nativeEvent.layout.y)} style={[s.controls, { left: Math.max(14, insets.left), right: Math.max(14, insets.right), bottom: landscape ? Math.max(6, insets.bottom) : insets.bottom + 12 }]}>
-        <View style={{ height: 34, justifyContent: 'center' }}>
+        <View onLayout={({ nativeEvent }) => setSeekWidth(nativeEvent.layout.width)} style={{ height: 34, justifyContent: 'center' }}>
+          {scrub !== null && !offline && p.info?.video ? <SeekPreview base={base} headers={headers} id={item.id} time={scrub} duration={duration} width={seekWidth} chapters={p.info.chapters} /> : null}
           <View pointerEvents="none" style={s.bufferTrack}><View style={{ height: 3, width: `${duration ? Math.min(100, p.buffered / duration * 100) : 0}%`, backgroundColor: '#ffffff40' }} /></View>
+          <SeekMarks duration={duration} chapters={p.info?.chapters} markers={p.markers} />
           <Slider accessibilityLabel="Seek" minimumValue={0} maximumValue={duration || 1} value={shownPosition} minimumTrackTintColor={colors.primary} maximumTrackTintColor="#ffffff24" thumbTintColor={colors.primary} step={.1} style={{ height: 34, marginHorizontal: -13 }}
             onSlidingStart={value => { dragging.current = true; setControls(true); setScrub(value); }} onValueChange={value => { if (dragging.current) setScrub(value); }} onSlidingComplete={value => { dragging.current = false; setScrub(null); p.seek(value); }} />
         </View>
@@ -136,14 +162,17 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
         <View style={[s.controlRows, landscape && { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>{transport}{utilities}</View>
       </View>
     </Animated.View>
-    {indicator ? <View pointerEvents="none" style={[s.fitIndicator, { top: landscape ? 62 : insets.top + 68 }]}>
-      <Text accessibilityLiveRegion="polite" style={t.text}>{indicator}</Text>
+    {indicator || gestures.label ? <View pointerEvents="none" style={[s.fitIndicator, { top: landscape ? 62 : insets.top + 68 }]}>
+      <Text accessibilityLiveRegion="polite" style={t.text}>{indicator || gestures.label}</Text>
     </View> : null}
-    {segment && <View style={{ position: 'absolute', right: Math.max(18, insets.right), bottom: skipBottom }}><Pill label={`Skip ${segment.type}`} onPress={() => { setControls(true); p.seek(segment.end); }} /></View>}
+    {segment || creditsNext ? <View style={{ position: 'absolute', right: Math.max(18, insets.right), bottom: skipBottom, gap: 8, alignItems: 'flex-end' }}>
+      {creditsNext ? <Pill label="Next episode" primary onPress={() => void select(queue[queueIndex + 1])} /> : null}
+      {segment ? <Pill label={`Skip ${segment.type}`} onPress={() => { setControls(true); p.seek(segment.end); }} /> : null}
+    </View> : null}
     <Modal visible={!!sheet} transparent animationType="slide" supportedOrientations={['portrait', 'landscape']} presentationStyle="overFullScreen" onRequestClose={() => setSheet(null)}>
       <Pressable style={s.scrim} onPress={() => setSheet(null)} accessibilityLabel="Close player panel" />
       <View style={[s.sheet, { paddingBottom: Math.max(16, insets.bottom + 12), maxHeight: landscape ? height - 20 : height * .78 }, landscape && { width: 360, left: undefined, top: 0, bottom: 0, maxHeight: height, borderTopRightRadius: 0 }]}>
-        <View style={t.sectionHeading}><Text style={t.sectionTitle}>{sheet === 'tracks' ? 'Audio and subtitles' : 'Queue'}</Text><IconButton name="close" label={sheet === 'tracks' ? 'Close audio and subtitles' : 'Close queue'} onPress={() => setSheet(null)} /></View>
+        <View style={t.sectionHeading}><Text style={t.sectionTitle}>{sheet === 'tracks' ? 'Audio and subtitles' : sheet === 'more' ? 'Playback' : 'Queue'}</Text><IconButton name="close" label={sheet === 'tracks' ? 'Close audio and subtitles' : sheet === 'more' ? 'Close playback settings' : 'Close queue'} onPress={() => setSheet(null)} /></View>
         {sheet === 'tracks' ? <ScrollView showsVerticalScrollIndicator={false}>
           {p.diagnostics && <View style={{ marginBottom: 14 }}><Text style={s.panelLabel}>Playback info · {p.diagnostics.mode}</Text><Text style={t.muted}>{p.diagnostics.reason}</Text></View>}
           {p.qualities.length > 0 && <View style={[t.row, { flexWrap: 'wrap', marginBottom: 12 }]}>
@@ -159,7 +188,11 @@ export default function NativePlayer({ base, headers, item, data, initialPositio
           <View style={s.setting}><Text style={t.muted}>Audio delay</Text><View style={t.row}><IconButton label="Audio earlier" onPress={() => p.setAudioDelay(p.audioDelay - .1)}><Text style={t.text}>−</Text></IconButton><Text style={[t.mono, { minWidth: 50, textAlign: 'center' }]}>{p.audioDelay >= 0 ? '+' : ''}{p.audioDelay.toFixed(1)} s</Text><IconButton label="Audio later" onPress={() => p.setAudioDelay(p.audioDelay + .1)}><Text style={t.text}>+</Text></IconButton></View></View>
           <View style={[s.setting, { marginBottom: 18 }]}><Text style={t.muted}>Text size</Text><Slider accessibilityLabel="Subtitle size" style={{ width: 170, height: 40 }} minimumValue={.6} maximumValue={1.8} value={p.subtitleSize} minimumTrackTintColor={colors.primary} maximumTrackTintColor="#ffffff24" thumbTintColor={colors.primary} onSlidingComplete={p.setSubtitleSize} /></View>
           {bitmap ? <Text style={[t.dim, { marginBottom: 16 }]}>Position is available for text subtitles.</Text> : <SubtitlePositionControls position={subtitlePosition} onChange={setSubtitlePosition} />}
-        </ScrollView> : <FlatList data={queue} keyExtractor={entry => entry.id} showsVerticalScrollIndicator={false} renderItem={({ item: entry, index }) => <View>{entry.kind === 'show' && (index === 0 || queue[index - 1].season !== entry.season) ? <Text style={[s.panelLabel, { marginTop: 14 }]}>Season {entry.season}</Text> : null}<Pressable accessibilityLabel={`Play ${episodeName(data, entry)}`} onPress={() => void select(entry)} style={[s.queueRow, entry.id === item.id && s.selectedTrack]}><MediaArt base={base} headers={headers} path={metadataFor(data, entry).episodes?.[String(entry.season)]?.[String(entry.episode)]?.still || metadataFor(data, entry).backdrop || metadataFor(data, entry).poster} style={{ width: 88, height: 50, borderRadius: 6 }} /><View style={{ flex: 1, gap: 4 }}><Text style={[t.text, { fontSize: 13 }]} numberOfLines={2}>{entry.kind === 'show' ? `${entry.episode}. ${episodeName(data, entry)}` : nameFor(data, entry)}</Text><Text style={[t.dim, { fontSize: 11 }]}>{entry.id === item.id ? 'Now playing' : data.progress[entry.id]?.completed ? 'Watched' : entry.format}</Text></View>{entry.id === item.id && <Icon name="play" size={16} />}</Pressable></View>} />}
+          <SubtitleStyleControls style={subStyle} onChange={changeSubtitleStyle} disabled={bitmap} />
+        </ScrollView> : sheet === 'more' ? <PlaybackSheet chapters={p.info?.chapters} markers={p.markers} position={p.position} isShow={item.kind === 'show'} canEdit={!offline} editing={editing}
+          autoSkip={p.settings.autoSkip === true} onAutoSkip={value => setPreference({ autoSkip: value })} sleep={sleep.mode} onSleep={sleep.choose} background={background} onBackground={setBackground} onSeek={time => { setSheet(null); p.seek(time); }} />
+        : <UpNextSheet base={base} headers={headers} data={data} item={item} queue={queue} autoplay={p.settings.autoplay !== false} canEdit={!offline} onAutoplay={value => setPreference({ autoplay: value })}
+          onPlay={entry => void select(entry)} onComplete={onComplete} onRemove={entry => changeQueue(queue.filter(i => i.id !== entry.id))} onClearWatched={() => changeQueue(queue.filter(i => i.id === item.id || !data.progress[i.id]?.completed))} />}
       </View>
     </Modal>
   </View>;
