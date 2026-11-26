@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, BackHandler, StyleSheet, Text, View } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { accountChanged, changeProgress, inspect, library, mediaHeaders, request, ServerError, syncDismissal, updateWatchOptions, type Item, type Library, type MovieRequest, type ScannerStatus } from '../lib/server';
+import { accountChanged, changeProgress, inspect, library, mediaHeaders, request, ServerError, syncDismissal, updateWatchOptions, type Item, type Library, type MovieRequest } from '../lib/server';
 import { progressRecovery, recoveryScope, rememberProgress } from '../lib/storage';
 import { continueItems, groupLibrary, metadataFor, nameFor, savedServes, titleKey, trackKey } from '../../../../packages/core/client/library';
 import { normalizeProgress, queueChange } from '../../../../packages/core/client/watch-progress.js';
 import { applyDismissals } from '../../../../packages/core/client/recovery';
-import { colors, dock } from '../theme';
+import { colors, dock, setSceneOverride, themed } from '../theme';
 import { Pill, styles as t } from '../components/Matro';
 import { AboutSheet, AccountSheet, Corner, Dock, Grain, OfflinePill, Toast, useKeyboardOpen, useNotice, type DockTab } from '../components/Shell';
 import { plural } from '../lib/text';
@@ -246,12 +247,14 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     setAccount(false);
     push('movie-requests');
   }, [alerts.opened, alerts.supported, playing]);
-  if (playing && data) return <NativePlayer key={`${playing.item.id}:${playing.start ?? 'resume'}`} {...art} item={playing.item} data={data} initialPosition={playing.start} queue={playing.queue}
+  useEffect(() => () => setSceneOverride(null), []);
+  setSceneOverride(playing && data ? 'dark' : null); // the player draws over video, dark in both themes
+  if (playing && data) return <><StatusBar style="light" /><NativePlayer key={`${playing.item.id}:${playing.start ?? 'resume'}`} {...art} item={playing.item} data={data} initialPosition={playing.start} queue={playing.queue}
     saved={playing.saved} offline={offline} onBack={() => { playRun.current++; setPlaying(null); void load(); }} onSelect={item => void startPlayback(item, playing.queue)} onNext={() => {
       const next = playing.queue[playing.queue.findIndex(i => i.id === playing.item.id) + 1];
       if (next && data.preferences.autoplay !== false) void startPlayback(next, playing.queue);
       else { setPlaying(null); void load(); }
-    }} />;
+    }} /></>;
   const admin = !offline && data?.user.role === 'admin', layout = { top: insets.top + (offline ? 44 : 0), bottom: insets.bottom };
   const libraryTab = ['home', 'movie', 'show', 'folders'].includes(tab);
   const requestsLabel = !offline && data?.movieRequestsEnabled ? (data.user.role === 'admin' ? 'Movie requests' : 'Request a movie') : undefined;
@@ -302,4 +305,4 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     <AboutSheet visible={about} onClose={() => setAbout(false)} files={data?.items.length || 0} />
   </View>;
 }
-const s = StyleSheet.create({ fill: { flex: 1, backgroundColor: colors.ground }, center: { flex: 1, justifyContent: 'center' }, overlay: { ...StyleSheet.absoluteFill, zIndex: 50, elevation: 24, backgroundColor: colors.ground } });
+const s = themed(() => StyleSheet.create({ fill: { flex: 1, backgroundColor: colors.ground }, center: { flex: 1, justifyContent: 'center' }, overlay: { ...StyleSheet.absoluteFill, zIndex: 50, elevation: 24, backgroundColor: colors.ground } }));

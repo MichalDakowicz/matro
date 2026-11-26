@@ -5,14 +5,14 @@ import Svg, { Path, Text as SvgText, SvgXml } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import icons from '../../../../packages/browser-ui/icons.json';
 import brand from '../../../../packages/browser-ui/brand.json';
-import { colors, coverTint, fonts, radius, type } from '../theme';
+import { colors, coverTint, fonts, overArt, radius, type, themed } from '../theme';
 import { useReduceMotion } from './Motion';
 
 export type Glyph = keyof typeof icons;
 export function Icon({ name, size = 20, color = colors.text }: { name: Glyph; size?: number; color?: string }) {
   return <SvgXml width={size} height={size} xml={`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${icons[name]}</svg>`} />;
 }
-export const Brand = ({ size = 34 }: { size?: number }) => <SvgXml xml={brand.svg} width={size} height={size} />;
+export const Brand = ({ size = 34 }: { size?: number }) => <SvgXml xml={brand.svg.replaceAll('#F3F1EC', colors.primary)} width={size} height={size} />;
 export function SkipIcon({ back }: { back?: boolean }) {
   return <Svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke={colors.text} strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round"><Path d={back ? 'M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4.5v4h4' : 'M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4'} /><SvgText x={12} y={15.4} textAnchor="middle" strokeWidth={0} fill={colors.text} fontSize={9} fontFamily={fonts.medium}>5</SvgText></Svg>;
 }
@@ -20,9 +20,9 @@ export function SkipIcon({ back }: { back?: boolean }) {
 const slop = (height: number) => { const extra = Math.max(0, Math.ceil((44 - height) / 2)); return { top: extra, bottom: extra, left: extra, right: extra }; };
 const pressed = (reduce: boolean) => reduce ? { opacity: .68 } : { opacity: .68, transform: [{ scale: .97 }] };
 
-export function IconButton({ name, label, onPress, active, disabled, size = 44, children }: { name?: Glyph; label: string; onPress: () => void; active?: boolean; disabled?: boolean; size?: number; children?: ReactNode }) {
+export function IconButton({ name, label, onPress, active, disabled, size = 44, color, children }: { name?: Glyph; label: string; onPress: () => void; active?: boolean; disabled?: boolean; size?: number; color?: string; children?: ReactNode }) {
   const reduce = useReduceMotion();
-  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected: !!active, disabled: !!disabled }} disabled={disabled} onPress={onPress} hitSlop={slop(size)} style={({ pressed: down }) => [styles.iconButton, { width: size, height: size }, active && styles.selected, down && pressed(reduce), disabled && { opacity: .3 }]}>{children || (name && <Icon name={name} />)}</Pressable>;
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected: !!active, disabled: !!disabled }} disabled={disabled} onPress={onPress} hitSlop={slop(size)} style={({ pressed: down }) => [styles.iconButton, { width: size, height: size }, active && styles.selected, down && pressed(reduce), disabled && { opacity: .3 }]}>{children || (name && <Icon name={name} color={color} />)}</Pressable>;
 }
 export function Pill({ label, icon, onPress, primary, selected, compact, disabled, style }: { label: string; icon?: Glyph; onPress: () => void; primary?: boolean; selected?: boolean; compact?: boolean; disabled?: boolean; style?: StyleProp<ViewStyle> }) {
   primary = primary || selected;
@@ -43,7 +43,7 @@ export const MediaArt = memo(function MediaArt({ base, headers, path, title, sty
     {children}
   </View>;
 });
-export const ProgressBar = ({ value }: { value: number }) => <View style={styles.progress}><View style={[styles.progressFill, { width: `${Math.max(0, Math.min(1, value)) * 100}%` }]} /></View>;
+export const ProgressBar = ({ value, onArt }: { value: number; onArt?: boolean }) => <View style={[styles.progress, onArt && { backgroundColor: overArt.rule }]}><View style={[styles.progressFill, onArt && { backgroundColor: overArt.text }, { width: `${Math.max(0, Math.min(1, value)) * 100}%` }]} /></View>;
 
 /** Bottom sheet on a scrim. Android Back and a tap outside both close it. */
 export function Sheet({ visible, onClose, title, children }: { visible: boolean; onClose: () => void; title: string; children: ReactNode }) {
@@ -68,7 +68,8 @@ export function Row({ icon, label, detail, onPress, destructive, chevron, last }
 }
 export const SectionLabel = ({ children }: { children: string }) => <Text style={styles.sectionLabel}>{children}</Text>;
 
-export const styles = StyleSheet.create({
+export const styles = themed(() => StyleSheet.create({
+  onArt: { color: overArt.text }, onArtDim: { color: overArt.dim },
   text: { color: colors.text, fontFamily: fonts.regular, fontSize: 14 }, muted: { color: colors.muted, fontFamily: fonts.regular, fontSize: 13, lineHeight: 20 },
   dim: { color: colors.dim, fontFamily: fonts.regular, fontSize: 12 }, heading: { color: colors.text, fontFamily: fonts.semibold, ...type.page },
   display: { color: colors.text, fontFamily: fonts.semibold, ...type.display }, sheetTitle: { color: colors.text, fontFamily: fonts.semibold, ...type.sheet },
@@ -79,10 +80,10 @@ export const styles = StyleSheet.create({
   pill: { height: 50, borderRadius: radius.pill, borderColor: colors.hairlineStrong, borderWidth: 1, paddingHorizontal: 22, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, backgroundColor: colors.fill },
   primary: { backgroundColor: colors.primary, borderColor: colors.primary }, pillLabel: { color: colors.text, fontFamily: fonts.medium, fontSize: 15 },
   chip: { borderRadius: radius.pill, paddingHorizontal: 18, justifyContent: 'center', backgroundColor: colors.chip }, chipLabel: { color: colors.text, fontFamily: fonts.medium, fontSize: 14 },
-  art: { backgroundColor: colors.panel, overflow: 'hidden' }, fallback: { color: colors.text, fontFamily: fonts.semibold, fontSize: 20, letterSpacing: -.5, margin: 12, marginTop: 'auto', marginBottom: 16 },
+  art: { backgroundColor: colors.panel, overflow: 'hidden' }, fallback: { color: overArt.text, fontFamily: fonts.semibold, fontSize: 20, letterSpacing: -.5, margin: 12, marginTop: 'auto', marginBottom: 16 },
   progress: { height: 3, width: '100%', backgroundColor: colors.track, overflow: 'hidden', borderRadius: 2 }, progressFill: { height: '100%', backgroundColor: colors.primary },
   scrim: { ...StyleSheet.absoluteFill, backgroundColor: colors.scrim },
   sheet: { position: 'absolute', bottom: 0, left: 0, right: 0, maxHeight: '88%', paddingHorizontal: 22, paddingTop: 10, backgroundColor: colors.ground, borderTopLeftRadius: radius.sheet, borderTopRightRadius: radius.sheet, borderWidth: 1, borderColor: colors.hairline },
   handle: { alignSelf: 'center', width: 40, height: 5, borderRadius: radius.pill, backgroundColor: colors.hairlineStrong, marginBottom: 10 },
   listRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.hairline },
-});
+}));

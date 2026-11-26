@@ -8,7 +8,7 @@ import { cleanEpisodeName, plural, runtimeText } from '../lib/text';
 import { Chip, Icon, IconButton, MediaArt, Pill, ProgressBar, Row, Sheet, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
 import { TopFade } from '../components/Shell';
-import { colors, fonts, radius } from '../theme';
+import { colors, fonts, overArt, radius, themed } from '../theme';
 
 type Props = ArtProps & {
   data: Library; items: Item[]; onBack: () => void; onPlay: (item: Item, start?: number) => void; onEnqueue: (items: Item[]) => void;
@@ -69,7 +69,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
         const e = metadataFor(data, ep).episodes?.[String(ep.season)]?.[String(ep.episode)], progress = data.progress[ep.id], watched = progress?.completed, label = episodeTitle(ep);
         return <View style={s.episodeEntry}>
           <Pressable onPress={() => onPlay(ep)} onLongPress={() => setMenu({ episode: ep })} accessibilityLabel={`Play ${label}`} accessibilityHint="Long press for more actions" style={s.episodeRow}>
-            <MediaArt {...art} quiet path={e?.still} title={name} style={s.episodeStill}><LinearGradient colors={[colors.clear, colors.veil]} style={StyleSheet.absoluteFill} /><Text style={s.episodeCode}>S{ep.season} E{ep.episode}</Text>{progress?.duration > 0 && !watched && <View style={s.episodeProgress}><ProgressBar value={progress.position / progress.duration} /></View>}</MediaArt>
+            <MediaArt {...art} quiet path={e?.still} title={name} style={s.episodeStill}><LinearGradient colors={[colors.clear, overArt.shade]} style={StyleSheet.absoluteFill} /><Text style={s.episodeCode}>S{ep.season} E{ep.episode}</Text>{progress?.duration > 0 && !watched && <View style={s.episodeProgress}><ProgressBar onArt value={progress.position / progress.duration} /></View>}</MediaArt>
             <View style={{ flex: 1, gap: 4 }}><Text style={[t.text, { fontFamily: fonts.medium, lineHeight: 20 }, watched && { color: colors.dim }]} numberOfLines={2}>{ep.episode}. {label}</Text><Text style={[t.dim, { fontSize: 11 }]}>{[e?.runtime ? e.runtime + 'm' : '', watched ? 'Watched' : progress?.position ? formatTime(progress.position) + ' watched' : '', state(ep.id) === 'saved' ? 'Saved offline' : state(ep.id) === 'saving' ? 'Saving…' : ''].filter(Boolean).join(' · ')}</Text>{e?.overview && <Text numberOfLines={2} style={[t.dim, { fontSize: 11, lineHeight: 17 }]}>{e.overview}</Text>}</View>
           </Pressable>
           <IconButton name="more" label={`More actions for ${label}`} onPress={() => setMenu({ episode: ep })} />
@@ -95,11 +95,11 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
     </Sheet>
   </View>;
 }
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   fill: { flex: 1, backgroundColor: colors.ground }, circleAction: { borderRadius: radius.pill, borderWidth: 1, borderColor: colors.hairlineStrong }, action: { height: 44, paddingHorizontal: 16 },
   back: { position: 'absolute', left: 14, borderRadius: radius.pill, backgroundColor: colors.glass, borderWidth: 1, borderColor: colors.hairlineStrong, zIndex: 20 },
   ratings: { marginTop: 26, paddingLeft: 12, borderLeftWidth: 1, borderColor: colors.hairlineStrong }, score: { color: colors.text, fontSize: 22, fontFamily: fonts.medium },
   episodeEntry: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 12 }, episodeRow: { flex: 1, flexDirection: 'row', gap: 14, alignItems: 'center' }, episodeStill: { width: 128, height: 76, borderRadius: radius.poster },
-  episodeCode: { position: 'absolute', bottom: 8, left: 8, color: colors.text, fontSize: 10, fontFamily: fonts.mono }, episodeProgress: { position: 'absolute', bottom: 0, left: 0, right: 0 },
+  episodeCode: { position: 'absolute', bottom: 8, left: 8, color: overArt.text, fontSize: 10, fontFamily: fonts.mono }, episodeProgress: { position: 'absolute', bottom: 0, left: 0, right: 0 },
   castGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 }, castMember: { width: '30%', maxWidth: 150 },
-});
+}));

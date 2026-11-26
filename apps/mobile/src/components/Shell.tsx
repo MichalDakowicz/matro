@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Image, Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ThemeRow } from './ThemeRow';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { Library } from '../lib/server';
-import { colors, dock as dockSize, fonts, radius } from '../theme';
+import { colors, dock as dockSize, fonts, radius, themed } from '../theme';
 import { Brand, Icon, IconButton, Row, SectionLabel, Sheet, styles as t, type Glyph } from './Matro';
 import { useReduceMotion } from './Motion';
 
@@ -110,7 +111,8 @@ export function AccountSheet({ visible, onClose, data, base, offline, requests, 
       <View><Text style={s.stat}>{Object.values(data?.progress || {}).filter(p => p.completed).length}</Text><Text style={t.dim}>Watched</Text></View>
     </View>
     <SectionLabel>Library</SectionLabel>
-    {data && <Row icon="download" label="Saved for offline" chevron onPress={() => go('offline')} />}
+    {data && <ThemeRow />
+    <Row icon="download" label="Saved for offline" chevron onPress={() => go('offline')} />}
     {admin && <Row icon="folder" label="Folders" chevron onPress={() => go('folders')} />}
     {admin && <Row icon="arrows" label="Host downloads" detail="Find releases and add them to the server" chevron onPress={() => go('downloads')} />}
     {!offline && !!requests && <Row icon="requests" label={requests} chevron onPress={() => go('movie-requests')} />}
@@ -131,7 +133,7 @@ export const AboutSheet = ({ visible, onClose, files }: { visible: boolean; onCl
     <Text style={[t.muted, { marginTop: 12 }]}>Metadata and artwork come from TMDB.</Text>
   </Sheet>;
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   fade: { position: 'absolute', left: 0, right: 0, zIndex: 15 },
   grain: { ...StyleSheet.absoluteFill, opacity: .07, zIndex: 55, elevation: 26 },
   corner: { position: 'absolute', left: 14, right: 14, height: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', zIndex: 20 },
@@ -142,13 +144,13 @@ const s = StyleSheet.create({
   offlineDot: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: colors.warn },
   reconnect: { height: 30, paddingHorizontal: 12, borderRadius: radius.pill, backgroundColor: colors.chipSelected, justifyContent: 'center' },
   dockWrap: { position: 'absolute', left: 14, right: 14, alignItems: 'center', zIndex: 30 },
-  dock: { width: '100%', maxWidth: 420, height: dockSize.height, padding: 6, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.hairline, backgroundColor: colors.dock, flexDirection: 'row', gap: 4, elevation: 12, boxShadow: '0 10px 30px #0006' },
+  dock: { width: '100%', maxWidth: 420, height: dockSize.height, padding: 6, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.hairline, backgroundColor: colors.dock, flexDirection: 'row', gap: 4, elevation: 12, boxShadow: `0 10px 30px ${colors.shadow}` },
   dockItem: { height: dockSize.item, borderRadius: radius.pill, justifyContent: 'center', alignItems: 'center', flexDirection: 'row', gap: 8 },
   dockOn: { flex: 2.2, backgroundColor: colors.primary },
   dockLabel: { color: colors.onPrimary, fontFamily: fonts.semibold, fontSize: 14 },
   dockBadge: { position: 'absolute', top: 11, right: '28%', width: 7, height: 7, borderRadius: radius.pill, backgroundColor: colors.text },
   toastWrap: { position: 'absolute', left: 18, right: 18, alignItems: 'center', zIndex: 60, elevation: 30 },
-  toast: { width: '100%', maxWidth: 420, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingLeft: 18, paddingRight: 12, minHeight: 52, borderRadius: radius.panel, backgroundColor: colors.glassStrong, borderWidth: 1, borderColor: colors.hairlineStrong, boxShadow: '0 10px 30px #0006' },
+  toast: { width: '100%', maxWidth: 420, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingLeft: 18, paddingRight: 12, minHeight: 52, borderRadius: radius.panel, backgroundColor: colors.glassStrong, borderWidth: 1, borderColor: colors.hairlineStrong, boxShadow: `0 10px 30px ${colors.shadow}` },
   toastAction: { minHeight: 36, paddingHorizontal: 10, justifyContent: 'center', borderRadius: radius.pill, backgroundColor: colors.chip },
   stat: { color: colors.text, fontFamily: fonts.medium, fontSize: 28, letterSpacing: -1 },
-});
+}));

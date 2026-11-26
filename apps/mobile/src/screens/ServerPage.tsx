@@ -3,7 +3,7 @@ import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { request, type Item, type Library } from '../lib/server';
 import { groupLibrary } from '../../../../packages/core/client/library';
 import { plural } from '../lib/text';
-import { colors, fonts, radius } from '../theme';
+import { colors, fonts, radius, themed } from '../theme';
 import { Chip, Icon, Pill, Row, SectionLabel, styles as t } from '../components/Matro';
 
 type Props = { base: string; data: Library; offline: boolean; layout: { top: number; bottom: number }; requests?: string; onGo: (tab: string) => void; onBrowseFolder: (path: string) => void; onRefresh: () => Promise<void> | void; onChangeServer: () => void; notify: (text: string) => void };
@@ -44,10 +44,10 @@ export default function ServerPage({ base, data, offline, layout, requests, onGo
     <Text style={[t.dim, { marginTop: 20, lineHeight: 19 }]}>Matro is open source. Run the Matro server next to your media folders, then link this app to it.</Text>
   </ScrollView>;
 }
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   card: { marginTop: 18, padding: 18, flexDirection: 'row', alignItems: 'center', gap: 14, borderRadius: radius.sheet, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.hairline },
   icon: { width: 52, height: 52, borderRadius: 18, backgroundColor: colors.chip, alignItems: 'center', justifyContent: 'center' },
   status: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, height: 28, borderRadius: radius.pill, backgroundColor: colors.chip }, dot: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: colors.good },
   current: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 16, borderRadius: radius.panel, backgroundColor: colors.fill },
   radio: { width: 18, height: 18, borderRadius: radius.pill, borderWidth: 1.5, borderColor: colors.primary, alignItems: 'center', justifyContent: 'center' }, radioDot: { width: 8, height: 8, borderRadius: radius.pill, backgroundColor: colors.primary },
-});
+}));

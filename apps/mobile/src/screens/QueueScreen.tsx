@@ -2,7 +2,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import type { Item, Library } from '../lib/server';
 import { episodeName, formatTime, metadataFor, nameFor } from '../../../../packages/core/client/library';
 import { cleanEpisodeName, plural, runtimeText } from '../lib/text';
-import { colors, fonts, radius } from '../theme';
+import { colors, fonts, radius, themed } from '../theme';
 import { IconButton, MediaArt, Pill, ProgressBar, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
 
@@ -54,11 +54,11 @@ export default function QueueScreen({ data, layout, onPlay, onQueue, onAutoplay,
     </Pressable>
   </ScrollView>;
 }
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   textButton: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 8 },
   hero: { borderRadius: radius.sheet, overflow: 'hidden', backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.hairline },
   row: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 6 }, play: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 56 },
   empty: { padding: 24, gap: 12, alignItems: 'center', borderRadius: radius.sheet, backgroundColor: colors.fill },
   autoplay: { marginTop: 28, minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, borderRadius: radius.panel, backgroundColor: colors.fill },
   toggle: { width: 48, height: 28, borderRadius: radius.pill, backgroundColor: colors.track }, knob: { position: 'absolute', top: 3, width: 22, height: 22, borderRadius: radius.pill },
-});
+}));

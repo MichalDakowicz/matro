@@ -5,7 +5,7 @@ import { loadServerHistory, removeServerFromHistory } from '../lib/storage';
 import { serverHost } from '../lib/server-history';
 import { IconButton } from '../components/Matro';
 import { ErrorLine, Field, Page, PrimaryPill } from '../ui';
-import { colors, fonts } from '../theme';
+import { colors, fonts, themed } from '../theme';
 
 type Props = { initial?: string; notice?: string; onConnected: (base: string, status: Status) => void };
 
@@ -68,10 +68,10 @@ export default function ServerScreen({ initial = '', notice = '', onConnected }:
   );
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   history: { marginTop: 20, gap: 4 },
   label: { fontFamily: fonts.mono, fontSize: 12, color: colors.dim, letterSpacing: 0.4, marginBottom: 4 },
   row: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: colors.hairline },
   entry: { flex: 1, minHeight: 44, justifyContent: 'center', paddingHorizontal: 4 },
   host: { fontFamily: fonts.regular, fontSize: 15, color: colors.text },
-});
+}));

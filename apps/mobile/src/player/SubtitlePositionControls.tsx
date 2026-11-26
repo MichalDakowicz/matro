@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Slider from '@react-native-community/slider';
 import { Pill, styles as t } from '../components/Matro';
-import { colors } from '../theme';
+import { colors, themed } from '../theme';
 import { parseSubtitlePosition, subtitlePresets, type SubtitlePosition } from './subtitlePosition';
 
 const key = 'matro.subtitlePosition';
@@ -46,8 +46,8 @@ export function SubtitlePositionControls({ position, onChange }: { position: Sub
   </View>;
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   settings: { gap: 6, borderTopWidth: 1, borderTopColor: colors.hairline, paddingTop: 12, marginBottom: 16 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   slider: { width: 170, height: 44 },
-});
+}));

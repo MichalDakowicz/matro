@@ -1,7 +1,7 @@
 import { forwardRef, type ReactNode } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, fonts, type } from './theme';
+import { colors, fonts, themed, type } from './theme';
 
 /** Native account/server page frame: kicker, title, description and form. */
 export function Page({ kicker, title, lede, children }: { kicker: string; title: string; lede: string; children: ReactNode }) {
@@ -57,7 +57,7 @@ export const ErrorLine = ({ text, hint }: { text: string; hint?: string }) => te
     {hint ? <Text style={s.hint}>{hint}</Text> : null}
   </View> : null;
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   fill: { flex: 1, backgroundColor: colors.ground },
   page: { paddingHorizontal: 28, flexGrow: 1 },
   kicker: { fontFamily: fonts.mono, fontSize: 12, color: colors.dim, letterSpacing: 0.4, marginBottom: 14 },
@@ -79,4 +79,4 @@ const s = StyleSheet.create({
   hint: { fontFamily: fonts.regular, fontSize: 13, lineHeight: 19, color: colors.muted, paddingHorizontal: 6 },
   secondary: { height: 52, borderRadius: 999, borderWidth: 1, borderColor: colors.fieldBorder, alignItems: 'center', justifyContent: 'center' },
   secondaryText: { fontFamily: fonts.medium, fontSize: 15, color: colors.text },
-});
+}));

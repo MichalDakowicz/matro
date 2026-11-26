@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { markMovieRequestHandled, movieRequests, removeMovieRequest, sendMovieRequest, type MovieRequest, type MovieRequests } from '../lib/server';
-import { colors } from '../theme';
+import { colors, themed } from '../theme';
 import { Field, ErrorLine } from '../ui';
 import { Icon, IconButton, Pill, styles as t } from '../components/Matro';
 import type { MovieRequestAlerts } from '../lib/movie-request-alerts';
@@ -133,7 +133,7 @@ export default function MovieRequestsScreen({ base, admin, alerts, onSearch }: P
   /></KeyboardAvoidingView>;
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   header: { gap: 10 },
   titleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   form: { gap: 8, marginTop: 12, maxWidth: 460 },
@@ -143,4 +143,4 @@ const s = StyleSheet.create({
   emptyCard: { gap: 4, padding: 14, borderWidth: 1, borderColor: colors.hairline, borderStyle: 'dashed', borderRadius: 12 },
   card: { padding: 14, gap: 6, marginBottom: 8, borderWidth: 1, borderColor: colors.hairline, borderRadius: 12, backgroundColor: colors.panel },
   actions: { flexWrap: 'wrap', marginTop: 4 },
-});
+}));

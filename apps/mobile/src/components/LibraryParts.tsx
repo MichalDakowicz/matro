@@ -6,7 +6,7 @@ import type { Item, Library } from '../lib/server';
 import { formatTime, metadataFor, nameFor, resumeItem, statusOf } from '../../../../packages/core/client/library';
 import { randomReelStart } from '../../../../packages/core/client/reel-start';
 import { titleMeta } from '../lib/text';
-import { colors, fonts, radius } from '../theme';
+import { colors, fonts, overArt, radius, themed } from '../theme';
 import { Icon, MediaArt, Pill, ProgressBar, styles as t } from './Matro';
 import { Lift, useReduceMotion } from './Motion';
 export type ArtProps = { base: string; headers: Record<string, string> };
@@ -20,8 +20,8 @@ export const PosterCard = memo(function PosterCard({ data, items, width, onPress
   const meta = titleMeta(item.kind, m.year, new Set(items.map(i => i.season)).size, items.length);
   return <Lift accessibilityRole="button" accessibilityLabel={`Open ${nameFor(data, item)}`} onPress={onPress} style={{ width, marginBottom: 22 }}>
     <MediaArt {...art} sheen path={m.poster} title={nameFor(data, item)} style={{ width, height: width * 1.5, borderRadius: radius.poster }}>
-      {status === 'done' && <View style={s.watched}><Icon name="check" size={13} /></View>}
-      {status === 'progress' && progress?.duration > 0 && <View style={s.posterProgress}><ProgressBar value={progress.position / progress.duration} /></View>}
+      {status === 'done' && <View style={s.watched}><Icon name="check" size={13} color={overArt.text} /></View>}
+      {status === 'progress' && progress?.duration > 0 && <View style={s.posterProgress}><ProgressBar onArt value={progress.position / progress.duration} /></View>}
     </MediaArt>
     <Text numberOfLines={2} style={s.cardName}>{nameFor(data, item)}</Text>
     {meta ? <Text numberOfLines={1} style={s.cardMeta}>{meta}</Text> : null}
@@ -103,17 +103,17 @@ export function ContinueRow({ data, items, onPlay, onRemove, ...art }: ArtProps 
   return <View style={t.section}><View style={t.sectionHeading}><Text accessibilityRole="header" style={t.sectionTitle}>Continue watching</Text><Text style={t.dim}>{items.length} in progress</Text></View>
     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -18 }} contentContainerStyle={{ paddingHorizontal: 18, gap: 12 }}>
       {items.map(item => { const m = metadataFor(data, item), progress = data.progress[item.id], known = progress?.duration > 0; return <View key={item.id} style={{ width: 240 }}><Lift accessibilityRole="button" accessibilityLabel={`Resume ${nameFor(data, item)}`} onPress={() => onPlay(item)}><MediaArt {...art} sheen path={m.backdrop || m.poster} title={nameFor(data, item)} style={{ width: 240, height: 138, borderRadius: radius.panel }}>
-        <LinearGradient colors={[colors.clear, colors.shade]} style={StyleSheet.absoluteFill} />
-        <View style={s.cwPlay}><Icon name="play" size={19} /></View><View style={s.cwText}><Text numberOfLines={1} style={[t.text, { fontSize: 13, fontFamily: fonts.medium }]}>{nameFor(data, item)}{item.kind === 'show' ? ` · S${item.season} E${item.episode}` : ''}</Text><Text style={[t.dim, { fontSize: 11 }]}>{known ? `${formatTime(progress.duration - progress.position)} left` : 'Up next'}</Text>{known && <ProgressBar value={progress.position / progress.duration} />}</View>
-      </MediaArt></Lift><Pressable accessibilityRole="button" accessibilityLabel={`Remove ${nameFor(data, item)} from Continue watching`} onPress={() => onRemove(item)} hitSlop={8} style={s.remove}><Icon name="close" size={14} /></Pressable></View>; })}
+        <LinearGradient colors={[colors.clear, overArt.shadeDeep]} style={StyleSheet.absoluteFill} />
+        <View style={s.cwPlay}><Icon name="play" size={19} color={overArt.text} /></View><View style={s.cwText}><Text numberOfLines={1} style={[t.text, t.onArt, { fontSize: 13, fontFamily: fonts.medium }]}>{nameFor(data, item)}{item.kind === 'show' ? ` · S${item.season} E${item.episode}` : ''}</Text><Text style={[t.dim, t.onArtDim, { fontSize: 11 }]}>{known ? `${formatTime(progress.duration - progress.position)} left` : 'Up next'}</Text>{known && <ProgressBar onArt value={progress.position / progress.duration} />}</View>
+      </MediaArt></Lift><Pressable accessibilityRole="button" accessibilityLabel={`Remove ${nameFor(data, item)} from Continue watching`} onPress={() => onRemove(item)} hitSlop={8} style={s.remove}><Icon name="close" size={14} color={overArt.text} /></Pressable></View>; })}
     </ScrollView>
   </View>;
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   watched: { position: 'absolute', top: 7, right: 7, width: 22, height: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.veil, borderRadius: radius.pill }, posterProgress: { position: 'absolute', left: 0, right: 0, bottom: 0 },
   cardName: { color: colors.text, fontFamily: fonts.medium, fontSize: 13, marginTop: 8, lineHeight: 17 }, cardMeta: { color: colors.dim, fontFamily: fonts.regular, fontSize: 12, marginTop: 3, lineHeight: 16 },
   seeAll: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 2, justifyContent: 'flex-end', marginVertical: -12 },
   dots: { position: 'absolute', alignSelf: 'center', flexDirection: 'row', gap: 7, alignItems: 'center' }, dot: { width: 5, height: 5, borderRadius: 9, backgroundColor: colors.track }, kicker: { color: colors.dim, fontSize: 13, fontFamily: fonts.medium, marginBottom: 12 },
   cwPlay: { position: 'absolute', top: 48, left: 108 }, cwText: { position: 'absolute', left: 12, right: 12, bottom: 12, gap: 5 }, remove: { position: 'absolute', top: 7, right: 7, backgroundColor: colors.veil, borderRadius: radius.pill, width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
-});
+}));

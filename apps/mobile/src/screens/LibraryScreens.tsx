@@ -4,7 +4,7 @@ import { request, type Item, type Library, type ScannerStatus } from '../lib/ser
 import { loadRecents, saveRecents } from '../lib/storage';
 import { plural, rememberQuery } from '../lib/text';
 import { metadataFor, nameFor, statusOf, titleKey } from '../../../../packages/core/client/library';
-import { colors, fonts, radius } from '../theme';
+import { colors, fonts, radius, themed } from '../theme';
 import { Chip, Icon, MediaArt, Pill, styles as t } from '../components/Matro';
 import { ContinueRow, FeaturedReel, PosterCard, Shelf, gridCardWidth, gridColumns, type ArtProps } from '../components/LibraryParts';
 
@@ -131,7 +131,7 @@ export function SearchView({ data, groups, layout, onOpen, ...art }: ArtProps & 
     </Pressable>} />;
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   divider: { width: 1, height: 24, backgroundColor: colors.hairlineStrong, marginHorizontal: 4 },
   scan: { marginTop: 14, gap: 6 }, scanTrack: { height: 3, borderRadius: 2, backgroundColor: colors.hairline }, scanFill: { height: 3, borderRadius: 2, backgroundColor: colors.muted },
   search: { height: 52, borderRadius: radius.pill, flexDirection: 'row', alignItems: 'center', paddingLeft: 18, paddingRight: 4, gap: 12, backgroundColor: colors.chip },
@@ -140,4 +140,4 @@ const s = StyleSheet.create({
   recent: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 14 }, recentIcon: { width: 44, height: 44, borderRadius: radius.pill, backgroundColor: colors.fill, alignItems: 'center', justifyContent: 'center' },
   result: { flexDirection: 'row', gap: 14, paddingVertical: 8 }, tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 2 },
   tag: { color: colors.soft, fontFamily: fonts.medium, fontSize: 11, paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.pill, backgroundColor: colors.chip, overflow: 'hidden' },
-});
+}));
