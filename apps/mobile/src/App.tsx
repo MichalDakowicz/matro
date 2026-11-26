@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { forgetServer, loadServer, saveServer } from './lib/storage';
+import { addServerToHistory, forgetServer, loadServer, saveServer } from './lib/storage';
 import { logout, status, type Status } from './lib/server';
 import LoginScreen from './screens/LoginScreen';
 import ServerScreen from './screens/ServerScreen';
@@ -50,6 +50,7 @@ export default function App() {
 
   const connected = (base: string, s: Status) => {
     saveServer(base);
+    void addServerToHistory(base);
     setRoute(s.user ? { name: 'viewer', base } : { name: 'login', base, setup: s.setup });
   };
   const changeServer = () => { forgetServer(); setRoute({ name: 'server' }); };

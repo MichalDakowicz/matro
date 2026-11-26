@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setImmediate } from 'node:timers/promises';
-import { accountChanged, candidates, fetchWithDeadline, playbackPath, ServerError } from '../../../../packages/core/client/server.ts';
+import { accountChanged, candidates, connect, fetchWithDeadline, playbackPath, ServerError } from '../../../../packages/core/client/server.ts';
 
 test('public hostnames try https first', () => {
   assert.deepEqual(candidates('matro.dakowicz.xyz/'), ['https://matro.dakowicz.xyz', 'http://matro.dakowicz.xyz']);
@@ -42,4 +42,13 @@ test('only a 401 or an account-changed 409 signs the phone out', () => {
   assert.equal(accountChanged(new ServerError('The signed-in account changed.', 409, 'account-changed')), true);
   assert.equal(accountChanged(new ServerError('This title already has the maximum number of subtitle tracks.', 409)), false);
   assert.equal(accountChanged(new Error('offline')), false);
+});
+
+test('connect keeps the server own message but reports a network failure generically', async t => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: 'Too many requests. Try again later.' }), { status: 429 })) as typeof fetch;
+  await assert.rejects(connect('matro.example.com'), { message: 'Too many requests. Try again later.', status: 429 });
+  globalThis.fetch = (async () => { throw new TypeError('Network request failed'); }) as typeof fetch;
+  await assert.rejects(connect('matro.example.com'), { message: "Couldn't reach a Matro server at that address." });
 });

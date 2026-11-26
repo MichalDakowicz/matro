@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { FlatList, Text, View, useWindowDimensions } from 'react-native';
+import { Alert, FlatList, Text, View, useWindowDimensions } from 'react-native';
+import { Paths } from 'expo-file-system';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { activeDownloads, isSaved, pauseOffline, removeOffline, savedBytes, savedTitles, watchOffline, type OfflineRecord } from '../lib/offline';
 import type { Item, Library } from '../lib/server';
-import { groupLibrary } from '../../../../packages/core/client/library';
-import { Pill, ProgressBar, styles as t } from '../components/Matro';
+import { groupLibrary, metadataFor } from '../../../../packages/core/client/library';
+import { IconButton, MediaArt, Pill, ProgressBar, styles as t } from '../components/Matro';
 import { PosterCard, type ArtProps } from '../components/LibraryParts';
 
 const size = (bytes: number) => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`;
@@ -28,6 +29,7 @@ export default function OfflineScreen({ data, offline, onResume, onOpenTitle, on
     const unsubscribe = watchOffline(refresh);
     return () => { run++; unsubscribe(); };
   }, [base, user.id, user.username]);
+  const free = (() => { try { return Paths.availableDiskSpace; } catch { return 0; } })();
   const active = new Map(jobs.map(job => [job.id, job])), stored = new Map(records.map(record => [record.id, record]));
   const { done, saved, unavailable, bytes } = useMemo(() => {
     const catalog = new Set(data.catalogIds ?? data.items.map(item => item.id));
@@ -47,7 +49,7 @@ export default function OfflineScreen({ data, offline, onResume, onOpenTitle, on
   const remove = (id: string) => void removeOffline(base, user, id).then(onRemoved).catch(e => setError(e.message));
   const shelves = shelvesOf.map(shelf => ({ ...shelf, groups: saved.filter(items => items[0].kind === shelf.kind) })).filter(shelf => shelf.groups.length);
   return <FlatList data={rows} keyExtractor={id => id} contentContainerStyle={{ paddingTop: insets.top + 74, paddingBottom: insets.bottom + 100, paddingHorizontal: 18, gap: 14 }}
-    ListHeaderComponent={<View style={{ gap: 8 }}><Text style={t.heading}>Saved for offline</Text><Text style={t.dim}>{done.size} saved · {size(bytes)} on this device</Text>{error ? <Text style={t.text}>{error}</Text> : null}</View>}
+    ListHeaderComponent={<View style={{ gap: 8 }}><Text style={t.heading}>Saved for offline</Text><Text style={t.dim}>{done.size} saved · {size(bytes)} on this device</Text>{free > 0 ? <View accessible accessibilityLabel={`Saved titles use ${size(bytes)}. ${size(free)} free on this phone.`} style={{ gap: 6, marginTop: 2 }}><ProgressBar value={bytes / (bytes + free)} /><Text style={t.dim}>{size(free)} free on this phone</Text></View> : null}{error ? <Text style={t.text}>{error}</Text> : null}</View>}
     ListFooterComponent={<View style={{ gap: 26, marginTop: 14 }}>
       {shelves.map(shelf => <View key={shelf.kind}>
         <View style={t.sectionHeading}><Text style={t.sectionTitle}>{shelf.title}</Text><Text style={t.dim}>{shelf.groups.length}</Text></View>
@@ -72,15 +74,21 @@ export default function OfflineScreen({ data, offline, onResume, onOpenTitle, on
         : record?.state === 'preparing' && !record.paused ? `Preparation pending${record.prepared === undefined ? '' : ` · ${Math.round(record.prepared * 100)}%`}`
         : record?.error ? record.paused ? 'Download stopped' : 'Waiting to retry'
         : record?.paused ? 'Paused' : 'Waiting to resume';
-      return <View style={{ gap: 8, paddingVertical: 10 }}><Text style={t.text}>{job?.title || record?.title}</Text>
+      const name = job?.title || record?.title || '', item = data.items.find(entry => entry.id === id);
+      const confirmRemove = () => Alert.alert('Remove this download?', `${name} will be deleted from this phone. You can save it again later.`, [
+        { text: 'Cancel', style: 'cancel' }, { text: 'Remove', style: 'destructive', onPress: () => remove(id) },
+      ]);
+      return <View style={{ flexDirection: 'row', gap: 14, paddingVertical: 10 }}>
+        <MediaArt {...art} path={item ? metadataFor(data, item).poster : undefined} title={name} style={{ width: 56, height: 84, borderRadius: 6 }} />
+        <View style={{ flex: 1, gap: 8 }}><Text style={t.text} numberOfLines={2}>{name}</Text>
         <Text style={t.dim}>{status}{!job && !!record?.size ? ` · ${size(savedBytes(record))} of ${size(record.size)}` : ''}</Text>
         {!job && record?.error ? <Text style={t.dim}>{record.error}</Text> : null}
         {!!job && (!!job.size || job.prepared !== null) && <ProgressBar value={percent} />}
         <View style={[t.row, { gap: 8 }]}>
           {job ? <Pill label="Pause" compact onPress={() => void pauseOffline(base, user, id).catch(e => setError(e.message))} /> : queued ? <Pill label="Cancel" compact onPress={() => remove(id)} /> : <>
-            <Pill label="Resume" compact disabled={offline} onPress={() => onResume(id)} />
-            <Pill label="Remove" compact onPress={() => remove(id)} />
+            <Pill label="Resume" compact primary disabled={offline} onPress={() => onResume(id)} />
+            <IconButton name="trash" label={`Remove ${name}`} onPress={confirmRemove} />
           </>}
-        </View></View>;
+        </View></View></View>;
     }} />;
 }
