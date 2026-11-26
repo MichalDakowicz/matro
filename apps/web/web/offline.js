@@ -97,7 +97,7 @@ export function createOffline(user, { inspect, subtitlePath, sendSubtitle }) {
       let info = await retrying(signal, () => inspect(id, { signal, deadline: true }));
       const status = await prepareDownload(signal, () => api('GET', root, undefined, { signal, deadline: true }), progress => {
         job.prepared = progress ?? null; emit();
-      });
+      }, { stallWithoutProgress: false });
       job.prepared = null;
       const texts = {}, tracks = [];
       const send = (path, headers, requestSignal) => fetch(path, { credentials: 'same-origin', signal: requestSignal, headers });

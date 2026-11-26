@@ -69,7 +69,7 @@ test('reloading resumes both preparing and waiting episodes in an offline save b
       requested.add(id);
       return json(preparing ? { state: 'preparing', progress: .2 } : { state: 'ready', size: 1, version, type: 'video/mp4' });
     }
-    if (route === 'subtitles/e2') { captions++; return res.destroy(); }
+    if (route === 'subtitles/e2') return res.writeHead(++captions === 1 ? 502 : 404).end();
     if (route === 'offline/file?version=' + version) {
       const body = id === 'one' && ++ranges === 1 ? '' : 'x';
       return res.writeHead(206, { 'Content-Range': 'bytes 0-0/1' }).end(body);
@@ -91,7 +91,7 @@ test('reloading resumes both preparing and waiting episodes in an offline save b
     await load();
     await expect.poll(state, { timeout: 10000 }).toEqual({ one: 'complete', two: 'complete', three: 'complete' });
     expect(ranges).toBe(2);
-    expect(captions).toBeGreaterThanOrEqual(2);
+    expect(captions).toBe(2);
     const saved = await page.evaluate(() => window.adapter.offline.store.meta('one'));
     expect(saved.info.subtitles).toEqual([]);
   });

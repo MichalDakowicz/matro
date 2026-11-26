@@ -49,11 +49,10 @@ export async function retrying(signal, run, retries = 6) {
 /**
  * @param {AbortSignal} signal
  * @param {() => Promise<Preparing | Ready>} load
- * @param {(best: number | undefined, advancedAt: number) => void | Promise<void>} report
- * @param {{best?: number, advancedAt?: number}} [previous]
+ * @param {(progress: number | undefined, advancedAt: number) => void | Promise<void>} report
+ * @param {{lastProgress?: number, advancedAt?: number, stallWithoutProgress?: boolean}} [options]
  */
-export async function prepareDownload(signal, load, report, previous = {}) {
-  let { best, advancedAt = Date.now() } = previous;
+export async function prepareDownload(signal, load, report, { lastProgress, advancedAt = Date.now(), stallWithoutProgress = true } = {}) {
   for (;;) {
     const status = await retrying(signal, load);
     checkAbort(signal);
@@ -64,15 +63,15 @@ export async function prepareDownload(signal, load, report, previous = {}) {
       return status;
     }
     if (status?.state !== 'preparing') throw new Error('Invalid preparation status.');
-    const progress = status.progress;
-    if (typeof progress === 'number' && Number.isFinite(progress) && (best === undefined || progress > best)) {
-      best = progress;
-      advancedAt = Date.now();
+    const progress = typeof status.progress === 'number' && Number.isFinite(status.progress) ? status.progress : undefined;
+    if (progress !== undefined) {
+      if (lastProgress === undefined || progress > lastProgress) advancedAt = Date.now();
+      lastProgress = progress;
     }
-    if (Date.now() - advancedAt >= PREPARATION_IDLE_MS) {
+    await report(progress, advancedAt);
+    if ((progress !== undefined || stallWithoutProgress) && Date.now() - advancedAt >= PREPARATION_IDLE_MS) {
       throw new RetryableDownloadError('Server preparation has not advanced for 30 minutes. Resume to check again.');
     }
-    await report(best, advancedAt);
     await wait(2000, signal);
   }
 }
@@ -166,11 +165,12 @@ export async function optionalCaption(send, signal) {
     const text = await retrying(signal, () => fetchWithDeadline(send, async response => {
       if (!response.ok) throw responseError(response.status, `Could not download subtitles (HTTP ${response.status}).`);
       return response.text();
-    }, { signal }), 1);
+    }, { signal }));
     checkAbort(signal);
     return text;
-  } catch {
+  } catch (error) {
     checkAbort(signal);
-    return undefined;
+    if (error?.status === 404 || error?.status === 410) return undefined;
+    throw error;
   }
 }

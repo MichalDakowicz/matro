@@ -176,15 +176,15 @@ function startDownload(base: string, scope: string, record: OfflineRecord) {
     record.progressAt ??= Date.now();
     await persist();
     notice.preparing(job.prepared);
-    const preparation = await prepareDownload(signal, () => request(base, route, { signal }), async (best, advancedAt) => {
-      if (best !== record.prepared || advancedAt !== record.progressAt) {
-        record.prepared = best;
+    const preparation = await prepareDownload(signal, () => request(base, route, { signal }), async (progress, advancedAt) => {
+      if (progress !== undefined && (progress !== record.prepared || advancedAt !== record.progressAt)) {
+        record.prepared = progress;
         record.progressAt = advancedAt;
         await persist();
       }
-      job.prepared = best ?? null;
+      job.prepared = progress ?? null;
       notice.preparing(job.prepared); changed();
-    }, { best: record.prepared, advancedAt: record.progressAt });
+    }, { lastProgress: record.prepared, advancedAt: record.progressAt });
     const { size, version, type } = preparation;
     Object.assign(record, { state: 'downloading', prepared: undefined, progressAt: undefined });
     const directory = Array.from(scope, character => character.charCodeAt(0).toString(16).padStart(2, '0')).join('');
