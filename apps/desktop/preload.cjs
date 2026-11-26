@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('matro', {
   chooseSource: () => ipcRenderer.invoke('desktop:source-open'),
+  setUpdateChecks: enabled => ipcRenderer.invoke('desktop:updates-set', enabled),
   openMovieRequests: () => ipcRenderer.invoke('desktop:movie-requests'),
   downloadSeriesSearch: options => ipcRenderer.invoke('downloads:series-search', options),
   downloadSeriesReleases: options => ipcRenderer.invoke('downloads:series-releases', options),
@@ -22,6 +23,8 @@ contextBridge.exposeInMainWorld('matro', {
   addFolder: () => ipcRenderer.invoke('library:folder'),
   connectSSH: options => ipcRenderer.invoke('library:ssh', options),
   openFiles: () => ipcRenderer.invoke('library:files'),
+  takeOpen: () => ipcRenderer.invoke('library:take-open'),
+  onOpen: callback => { const listener = () => callback(); ipcRenderer.on('library:open', listener); return () => ipcRenderer.removeListener('library:open', listener); },
   importDrop: files => ipcRenderer.invoke('library:import', Array.from(files, file => webUtils.getPathForFile(file))),
   rescan: () => ipcRenderer.invoke('library:rescan'),
   setPrelude: options => ipcRenderer.invoke('library:prelude', options),
@@ -40,6 +43,10 @@ contextBridge.exposeInMainWorld('matro', {
   preview: options => ipcRenderer.invoke('media:preview', options),
   subtitles: options => ipcRenderer.invoke('media:subtitles', options),
   loadSubtitle: id => ipcRenderer.invoke('media:subtitle-file', id),
+  subtitleSearchStatus: () => ipcRenderer.invoke('subtitle-search:status'),
+  configureSubtitleSearch: key => ipcRenderer.invoke('subtitle-search:configure', key),
+  searchSubtitles: options => ipcRenderer.invoke('subtitle-search:find', options),
+  downloadSubtitle: options => ipcRenderer.invoke('subtitle-search:download', options),
   stop: keepUrl => ipcRenderer.invoke('media:stop', keepUrl),
   prepare: id => ipcRenderer.invoke('media:prepare', id),
   save: state => ipcRenderer.invoke('library:save', state),

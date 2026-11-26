@@ -1,10 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { continueItems, groupLibrary, matchTrack, metadataFor, resumeItem, trackKey } from '../../../../packages/core/client/library.ts';
+import { markedProgress, seasonLabel, seasonNumbers } from '../../../../packages/core/client/watch-progress.js';
+import { continueItems, groupLibrary, matchTrack, metadataFor, resumeItem, savedServes, statusOf, trackKey } from '../../../../packages/core/client/library.ts';
 import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
+import { randomReelStart } from '../../../../packages/core/client/reel-start.js';
 import type { Item, Library } from '../../../../packages/core/client/server.ts';
 const episode = (id: string, number: number): Item => ({ id, title: id, groupId: 'show', group: 'Show', kind: 'show', season: 1, episode: number, format: 'MKV' });
 const blank = (items: Item[]): Library => ({ user: { id: 1, username: 'viewer', role: 'viewer' }, items, progress: {}, queue: [], preferences: {}, metadata: {} });
+
+test('featured reel picks from every title except its previous start', () => {
+  const titles = ['one', 'two', 'three'];
+  assert.equal(randomReelStart([], null), 0);
+  assert.equal(randomReelStart(['one'], 'one'), 0);
+  assert.equal(randomReelStart(titles, 'removed', () => .99), 2);
+  assert.equal(randomReelStart(titles, 'two', () => 0), 0);
+  assert.equal(randomReelStart(titles, 'two', () => .99), 2);
+  assert.equal(randomReelStart(['one', 'two'], 'one'), 1);
+  assert.equal(randomReelStart(['two', 'one'], 'one'), 0);
+});
 
 test('native shelves use the same show grouping, movie editions and metadata keys as the web', () => {
   const first = episode('one', 1), second = episode('two', 2), movie = { ...first, id: 'movie-a', kind: 'movie', groupId: 'film' }, edition = { ...movie, id: 'movie-b' };
@@ -12,6 +25,17 @@ test('native shelves use the same show grouping, movie editions and metadata key
   const groups = groupLibrary(data.items);
   assert.equal(groups.length, 3); assert.deepEqual(groups[0].map(i => i.id), ['one', 'two']);
   assert.equal(metadataFor(data, second).title, 'The show'); assert.equal(trackKey(movie), trackKey(edition));
+
+  const cuts = [{ ...movie, editionGroup: 'cuts' }, { ...edition, groupId: 'encode', editionGroup: 'cuts' }];
+  const catalog = blank(cuts);
+  const [group] = groupLibrary(catalog.items);
+  assert.deepEqual(group.map(item => item.id), ['movie-a', 'movie-b']);
+  catalog.progress['movie-b'] = { position: 30, duration: 90, updated: 1 };
+  assert.equal(resumeItem(catalog, group).id, 'movie-b');
+  assert.equal(statusOf(catalog, group), 'progress');
+  catalog.progress['movie-b'].completed = true;
+  assert.equal(statusOf(catalog, group), 'done');
+  assert.equal(catalog.progress['movie-a'], undefined);
 });
 test('continue watching advances a completed episode and preserves a dismissed show', () => {
   const one = episode('one', 1), two = episode('two', 2), data = blank([one, two]);
@@ -63,4 +87,33 @@ test('track preferences follow language/title across episode stream-index change
 test('native subtitle parsing retains timing and line breaks without rendering HTML', () => {
   const cues = parseVtt('WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.500\n<i>Hello</i>\nworld\n\n00:03.000 --> 00:04.000\nNext');
   assert.deepEqual(cues, [{ start: 1, end: 2.5, text: 'Hello\nworld' }, { start: 3, end: 4, text: 'Next' }]);
+});
+
+test('a saved copy serves online playback only when its single audio track and text subtitles cover the choice', () => {
+  const track = (index: number, language: string, extra = {}) => ({ index, language, title: '', ...extra });
+  const full = { duration: 5, directPlay: true, audio: [track(1, 'jpn'), track(2, 'eng')], embedded: [track(3, 'eng', { text: true }), track(4, 'eng', { bitmap: true })], uploaded: [] };
+  const saved = { ...full, audio: [full.audio[0]], embedded: [full.embedded[0]] };
+  assert.equal(savedServes(saved, full), true);
+  assert.equal(savedServes(saved, full, { audio: { language: 'jpn', title: '' }, subtitle: { language: 'eng', title: '' } }), true);
+  assert.equal(savedServes(saved, full, { audio: { language: 'eng', title: '' } }), false);
+  assert.equal(savedServes(saved, { ...full, embedded: [full.embedded[1]] }, { subtitle: { language: 'eng', title: '' } }), false);
+});
+
+test('Season 0 stays its own season called Specials, and a missing season counts as season 1', () => {
+  const special = { ...episode('special', 1), season: 0 }, unnumbered = { ...episode('plain', 1), season: undefined as unknown as number };
+  assert.deepEqual(seasonNumbers([episode('two', 2), unnumbered, special]), [0, 1]);
+  assert.equal(seasonLabel(0), 'Specials');
+  assert.equal(seasonLabel(2), 'Season 2');
+});
+
+test('marking a season watched skips finished episodes, rewinds on unwatch and keeps a dismissed show hidden', () => {
+  const list = [episode('one', 1), episode('two', 2), episode('three', 3)];
+  const progress = { one: { position: 99, duration: 100, completed: true, updated: 5 }, two: { position: 10, duration: 100, updated: 6, hidden: true } };
+  const watched = markedProgress(list, progress, true, { now: 50 });
+  assert.deepEqual(Object.keys(watched), ['two', 'three']);
+  assert.equal(watched.two.completed, true); assert.equal(watched.two.hidden, true); assert.equal(watched.three.updated, 50);
+  const unwatched = markedProgress(list, { ...progress, ...watched }, false, { now: 40 });
+  assert.deepEqual(Object.keys(unwatched), ['one', 'two', 'three']);
+  assert.equal(unwatched.one.position, 0); assert.equal(unwatched.three.updated, 51);
+  assert.deepEqual(markedProgress(list, {}, false), {});
 });

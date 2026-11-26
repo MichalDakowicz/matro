@@ -1,6 +1,7 @@
 /* Downloads: poster grid, glass search, transfer cards and the settings and release dialogs.
    Shared pieces (.pill, .chip, .card, .cover, .grid, .search-field, .cw-row) come from styles.css. */
 #download-message{min-height:24px;margin-bottom:14px;color:var(--muted);overflow-wrap:anywhere}
+.download-connect{display:grid;justify-items:start;gap:10px;max-width:520px;margin:0 0 22px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}.download-connect h2{font-size:16px}.download-connect p{line-height:1.6}
 #download-browser>.note,#download-browser .note{line-height:1.6;max-width:760px}
 .download-destination{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin-bottom:24px}
 .download-destination .path{display:flex;align-items:center;gap:8px;min-width:0;overflow-wrap:anywhere;font-size:12px}
