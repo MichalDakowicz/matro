@@ -289,7 +289,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     : tab === 'search' ? <SearchView {...common} data={data} groups={allGroups} />
     : tab === 'queue' ? <QueueScreen {...art} data={data} layout={layout} onPlay={playFromQueue} onQueue={setQueue} onAutoplay={setAutoplay} onBrowse={() => jump('home')} />
     : tab === 'server' ? <ServerPage base={base} data={data} offline={offline} layout={layout} requests={requestsLabel} onGo={go} onBrowseFolder={path => push('home', path)} onRefresh={load} onChangeServer={onChangeServer} notify={notify} />
-    : folder ? <BrowseView {...common} data={data} groups={folderGroups} title={folder.split(/[\/]/).filter(Boolean).pop()} chips={null} />
+    : folder ? <BrowseView {...common} data={data} groups={folderGroups} title={folder.split(/[\\/]/).filter(Boolean).pop()} chips={null} />
     : ['movie', 'show'].includes(tab) ? <BrowseView {...common} data={data} kind={tab} groups={allGroups.filter(items => items[0].kind === tab)} chips={chips} />
     : <HomeView {...common} data={data} groups={allGroups} featured={featured} continues={continues} chips={chips} onPlay={play} onRemoveContinue={removeContinue} onSeeAll={jump} onAddFolder={() => jump('folders')} />;
   const overlay = !!(detail && data), toastBottom = overlay || keyboard ? insets.bottom + 24 : insets.bottom + dock.bottom + dock.height + 18;
