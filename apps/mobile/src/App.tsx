@@ -1,18 +1,22 @@
-import { useEffect, useState } from 'react';
-import { View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Appearance, View, useColorScheme } from 'react-native';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { forgetServer, loadServer, saveServer } from './lib/storage';
+import { addServerToHistory, forgetServer, loadServer, saveServer } from './lib/storage';
 import { logout, status, type Status } from './lib/server';
 import LoginScreen from './screens/LoginScreen';
 import ServerScreen from './screens/ServerScreen';
 import ViewerScreen from './screens/ViewerScreen';
-import { colors, fontAssets } from './theme';
+import * as SystemUI from 'expo-system-ui';
+import { colors, fontAssets, setPreferredScheme, useSceneActive } from './theme';
+import { needsRemount, resolveScheme } from './palette';
+import { loadThemeChoice, useThemeChoice } from './lib/theme-choice';
 import * as SecureStore from 'expo-secure-store';
 import { configureTokenStorage } from './lib/server';
 import { forgetOfflineAccount, offlineLibrary } from './lib/offline';
 import { forgetMovieRequestAlerts } from './lib/movie-request-alerts';
+import { clearPlaybackCache } from './player/diskBuffer';
 
 const tokenKey = (base: string) => 'matro.session.' + Array.from(base).map(c => c.charCodeAt(0).toString(16)).join('');
 configureTokenStorage({
@@ -29,9 +33,20 @@ type Route =
 export default function App() {
   const [fontsReady] = useFonts(fontAssets);
   const [route, setRoute] = useState<Route>({ name: 'boot' });
+  const choice = useThemeChoice(), [themeReady, setThemeReady] = useState(false);
+  const scheme = resolveScheme(choice, useColorScheme());
+  setPreferredScheme(scheme); // before any child renders, so every colors.* read below follows it
+  // Remount to re-theme, but never under a playing video: a System flip waits until the player closes.
+  const playerUp = useSceneActive(), mounted = useRef({ scheme, generation: 0 });
+  if (needsRemount(mounted.current.scheme, scheme, playerUp)) mounted.current = { scheme, generation: mounted.current.generation + 1 };
+  useEffect(() => { void loadThemeChoice().finally(() => setThemeReady(true)); }, []);
+  // Native dialogs, the keyboard and the window background follow the choice too.
+  useEffect(() => { Appearance.setColorScheme(choice === 'system' ? 'unspecified' : choice); }, [choice]);
+  useEffect(() => { void SystemUI.setBackgroundColorAsync(colors.ground).catch(() => {}); }, [scheme]);
 
   // Reopen straight into the library when the saved server still has a live session.
   useEffect(() => {
+    try { clearPlaybackCache(); } catch { /* Cache cleanup must not block startup. */ }
     (async () => {
       const base = await loadServer();
       if (!base) return setRoute({ name: 'server' });
@@ -48,12 +63,13 @@ export default function App() {
 
   const connected = (base: string, s: Status) => {
     saveServer(base);
+    void addServerToHistory(base);
     setRoute(s.user ? { name: 'viewer', base } : { name: 'login', base, setup: s.setup });
   };
   const changeServer = () => { forgetServer(); setRoute({ name: 'server' }); };
 
   let screen = null;
-  if (fontsReady) {
+  if (fontsReady && themeReady) {
     switch (route.name) {
       case 'server':
         screen = <ServerScreen initial={route.initial} notice={route.notice} onConnected={connected} />;
@@ -75,8 +91,8 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <View style={{ flex: 1, backgroundColor: colors.ground }}>{screen}</View>
-      <StatusBar style="light" />
+      <View key={mounted.current.generation} style={{ flex: 1, backgroundColor: colors.ground }}>{screen}</View>
+      <StatusBar style={scheme === 'light' ? 'dark' : 'light'} />
     </SafeAreaProvider>
   );
 }

@@ -59,6 +59,13 @@ test('real season comparison persists markers, isolates shows and remembers per-
     assert.ok((await call(viewer, '/api/library')).markers[item.id].some(m => m.type === 'intro'));
     await call(head, '/api/playback/state', { playing: true, buffering: true });
     assert.equal((await call(head, '/api/segments')).scanner.buffering, true);
+    await call(head, '/api/playback/state', { session: 'second-player', playing: true });
+    await call(head, '/api/playback/stop', {});
+    const stillPlaying = (await call(head, '/api/segments')).scanner;
+    assert.equal(stillPlaying.playback, true);
+    assert.equal(stillPlaying.buffering, false);
+    await call(head, '/api/playback/stop', { session: 'second-player' });
+    assert.equal((await call(head, '/api/segments')).scanner.playback, false);
   } finally {
     if (instance) await stop();
     await fs.rm(root, { recursive: true, force: true });

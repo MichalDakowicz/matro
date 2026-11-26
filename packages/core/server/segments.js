@@ -12,7 +12,7 @@ function createScanner({ dataDir, db }) {
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* First scan. */ }
   const state = { markers: saved.markers || {}, segmentScans: saved.segmentScans || {}, progress: {} };
-  const items = db.prepare('SELECT id, path, title, group_id AS groupId, group_title AS "group", kind, season, episode FROM items');
+  const items = db.prepare('SELECT id, path, title, group_id AS groupId, group_title AS "group", kind, season, episode FROM active_items');
   let writes = Promise.resolve();
   const persist = () => {
     const data = JSON.stringify({ markers: state.markers, segmentScans: state.segmentScans });

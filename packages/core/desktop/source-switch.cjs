@@ -58,7 +58,7 @@ function installSourceSwitch(server) {
     try { await saveSource(dir, { url, enabled }); }
     catch (error) { switching = false; throw error; }
     delete process.env.MATRO_SERVER_URL;
-    app.relaunch({ args: relaunchArgs(process.argv) }); app.quit();
+    app.releaseSingleInstanceLock(); app.relaunch({ args: relaunchArgs(process.argv) }); app.quit();
   }
   ipcMain.handle('desktop:source-open', event => {
     trustedLocalWindow(event);
