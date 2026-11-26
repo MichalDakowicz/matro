@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, BackHandler, FlatList, Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { changeProgress, library, mediaHeaders, request, ServerError, type Item, type Library, type MovieRequest, type ScannerStatus } from '../lib/server';
-import { progressRecovery, recoveryScope } from '../lib/storage';
-import { continueItems, groupLibrary, metadataFor, nameFor, statusOf, titleKey } from '../../../../packages/core/client/library';
+import { changeProgress, inspect, library, mediaHeaders, request, restoreLibraryProgress, ServerError, type Item, type Library, type MovieRequest, type ScannerStatus } from '../lib/server';
+import { migrateLegacyScope, progressRecovery, recoveryScope } from '../lib/storage';
+import { continueItems, groupLibrary, metadataFor, nameFor, savedServes, statusOf, titleKey, trackKey } from '../../../../packages/core/client/library';
 import { dismissedProgress, normalizeProgress } from '../../../../packages/core/client/watch-progress.js';
 import { colors, fonts } from '../theme';
 import { Icon, Pill, styles as t } from '../components/Matro';
@@ -15,49 +15,66 @@ import FoldersScreen from './FoldersScreen';
 import OfflineScreen from './OfflineScreen';
 import MovieRequestsScreen from './MovieRequestsScreen';
 import { useMovieRequestAlerts } from '../lib/movie-request-alerts';
-import { offlineLibrary, rememberLibrary, removeOffline, resumeInterrupted, savedTitle, savedTitles, saveOffline, saveOfflineBatch, watchOffline, type SavedMedia } from '../lib/offline';
+import { isSaved, offlineLibrary, rememberLibrary, removeOffline, resumeInterrupted, retryInterrupted, savedTitle, savedTitles, saveOffline, saveOfflineBatch, watchOffline, type SavedMedia } from '../lib/offline';
 
 type Props = { base: string; onSignedOut: () => void; onChangeServer: () => void };
-const kinds = [{ kind: 'show', title: 'Shows', noun: 'shows' }, { kind: 'movie', title: 'Movies', noun: 'titles' }, { kind: 'audio', title: 'Music & audio', noun: 'files' }];
+const kinds = [{ kind: 'show', title: 'Shows', noun: 'shows' }, { kind: 'movie', title: 'Movies', noun: 'titles' }];
 export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Props) {
-  const [data, setData] = useState<Library | null>(null), [headers, setHeaders] = useState<Record<string, string>>({});
+  const [data, setData] = useState<(Library & { catalogIds?: string[] }) | null>(null), [headers, setHeaders] = useState<Record<string, string>>({});
   const dataRef = useRef(data); dataRef.current = data;
   const [error, setError] = useState(''), [query, setQuery] = useState(''), [tab, setTab] = useState('home'), [filter, setFilter] = useState('all');
   const [requestSearch, setRequestSearch] = useState<MovieRequest | null>(null);
   const [selected, setSelected] = useState<string | null>(null), [playing, setPlaying] = useState<{ item: Item; start?: number; queue: Item[]; saved?: SavedMedia } | null>(null);
   const [offline, setOffline] = useState(false), playRun = useRef(0);
   const [refreshing, setRefreshing] = useState(false), [account, setAccount] = useState(false), [folder, setFolder] = useState<string | null>(null);
-  const revision = useRef<string | undefined>(undefined);
+  const revision = useRef<string | undefined>(undefined), loadRun = useRef(0);
   const alerts = useMovieRequestAlerts(base, !offline && data?.user.role === 'admin' && data.movieRequestPushEnabled === true);
   const openedAlerts = useRef(0);
   const { width } = useWindowDimensions(), insets = useSafeAreaInsets(), columns = Math.max(3, Math.floor((width - 24) / 108)), cardWidth = (width - 36 - (columns - 1) * 12) / columns;
   const load = useCallback(async () => {
+    const run = ++loadRun.current;
     setRefreshing(true); setError('');
     try {
-      const next = await library(base), auth = await mediaHeaders(base);
+      const next = await library(base);
+      await migrateLegacyScope(base, next.user).catch(error => console.warn('Offline account migration failed:', error));
+      await restoreLibraryProgress(base, next);
+      const auth = await mediaHeaders(base);
+      if (run !== loadRun.current) return;
       revision.current = next.catalogRevision;
       setData({ ...next, progress: normalizeProgress(next.progress) }); setHeaders(auth); setOffline(false);
       void rememberLibrary(base, next).catch(() => {});
     }
     catch (e) {
+      if (run !== loadRun.current) return;
       if (e instanceof ServerError && [401, 403].includes(e.status || 0)) { onSignedOut(); return; }
       const cached = await offlineLibrary(base).catch(() => null);
+      if (run !== loadRun.current) return;
       if (cached) { setData({ ...cached, progress: normalizeProgress(cached.progress) }); setHeaders({}); setOffline(true); }
       else setError(e instanceof Error ? e.message : 'Could not load the library.');
     }
-    finally { setRefreshing(false); }
+    finally { if (run === loadRun.current) setRefreshing(false); }
   }, [base, onSignedOut]);
   useEffect(() => { revision.current = undefined; void load(); }, [base]);
   useEffect(() => {
     let closed = false, checking = false;
     const check = async () => {
       const before = revision.current;
-      if (offline || closed || checking || AppState.currentState === 'background' || !before) return;
+      if (closed || checking || AppState.currentState !== 'active' || (!offline && !before)) return;
       checking = true;
       try {
+        if (offline) {
+          const status = await request(base, '/api/status');
+          if (closed || typeof status?.setup !== 'boolean') return;
+          if (status.user) await load();
+          else onSignedOut();
+          return;
+        }
         const { catalogRevision } = await request(base, '/api/library/revision');
-        if (closed || revision.current !== before || catalogRevision === before) return;
-        const next = await library(base);
+        if (closed || revision.current !== before) return;
+        const user = dataRef.current?.user;
+        if (user) void retryInterrupted(base, user)?.catch(() => {});
+        if (catalogRevision === before) return;
+        const next = await restoreLibraryProgress(base, await library(base));
         if (closed || revision.current !== before) return;
         revision.current = next.catalogRevision;
         void rememberLibrary(base, next).catch(() => {});
@@ -69,7 +86,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     const timer = setInterval(check, 5000);
     const subscription = AppState.addEventListener('change', state => { if (state === 'active') void check(); });
     return () => { closed = true; clearInterval(timer); subscription.remove(); };
-  }, [base, offline, onSignedOut]);
+  }, [base, load, offline, onSignedOut]);
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (playing) return false;
@@ -80,7 +97,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   }, [playing, selected, tab, folder, load]);
   const allGroups = useMemo(() => groupLibrary(data?.items || []), [data?.items]);
   const groups = useMemo(() => allGroups.filter(items => !folder || items[0].root === folder), [allGroups, folder]);
-  const featured = useMemo(() => data ? [...allGroups].filter(items => items[0].kind !== 'audio').sort((a, b) => {
+  const featured = useMemo(() => data ? [...allGroups].sort((a, b) => {
     const recent = (items: Item[]) => Math.max(0, ...items.map(i => data.progress[i.id]?.hidden ? 0 : data.progress[i.id]?.updated || 0));
     return recent(b) - recent(a) || (b[0].added || 0) - (a[0].added || 0);
   }) : [], [allGroups, data?.progress]);
@@ -92,7 +109,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     let run = 0;
     const refresh = () => {
       const current = ++run;
-      void savedTitles(base, data.user).then(list => { if (current === run) setSavedIds(new Set(list.filter(record => record.complete).map(record => record.id))); }).catch(() => {});
+      void savedTitles(base, data.user).then(list => { if (current === run) setSavedIds(new Set(list.filter(isSaved).map(record => record.id))); }).catch(() => {});
     };
     refresh();
     const stop = watchOffline(refresh);
@@ -136,10 +153,15 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const startPlayback = async (item: Item, queue: Item[], start?: number) => {
     if (!data) return;
     const run = ++playRun.current;
-    const saved = await savedTitle(base, data.user, item.id).catch(() => undefined);
+    let saved = await savedTitle(base, data.user, item.id).catch(() => undefined);
+    // Online, the saved copy only has the first audio track and text subtitles: stream when the chosen tracks need more.
+    if (saved && !offline) {
+      const full = await inspect(base, item.id).catch(() => null);
+      if (full && !savedServes(saved.info, full, data.preferences.tracks?.[trackKey(item)])) saved = undefined;
+    }
     if (run !== playRun.current) return;
     if (offline && !saved) { setError('This title is not saved on this device.'); return; }
-    setPlaying({ item, start, queue, saved: offline ? saved : undefined });
+    setPlaying({ item, start, queue, saved });
   };
   const play = (item: Item, start?: number) => {
     if (!data) return;
@@ -151,20 +173,22 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const saveName = (item: Item) => data && item.kind !== 'show' ? nameFor(data, item) : item.title;
   useEffect(() => {
     if (!data || offline) return;
-    const resume = () => void resumeInterrupted(base, data.user, data.items, saveName).catch(() => {});
+    const resume = () => void resumeInterrupted(base, data.user).catch(() => {});
     resume();
     const subscription = AppState.addEventListener('change', state => { if (state === 'active') resume(); });
     return () => subscription.remove();
-  }, [base, offline, data?.user.id, data?.items]);
+  }, [base, offline, data?.user.id, data?.user.username]);
   const save = (item: Item) => {
     if (!data || offline) return;
-    void saveOffline(base, data.user, item, saveName(item)).catch(error => Alert.alert('Could not save title', error.message));
-    Alert.alert('Save offline', 'Matro will prepare the title. You can follow progress from your profile.');
+    void saveOffline(base, data.user, item, saveName(item))
+      .then(() => Alert.alert('Save offline', 'Follow preparation and download progress under Saved.'))
+      .catch(error => Alert.alert('Could not save title', error.message));
   };
   const saveMany = (list: Item[]) => {
     if (!data || offline || !list.length) return;
-    void saveOfflineBatch(base, data.user, list, saveName).catch(error => Alert.alert('Could not save everything', error.message));
-    Alert.alert('Saving offline', `${list.length} ${list.length === 1 ? 'episode' : 'episodes'} queued. Matro prepares two at a time; follow progress under Saved.`);
+    void saveOfflineBatch(base, data.user, list, saveName)
+      .then(() => Alert.alert('Saving offline', 'Matro prepares two titles at a time. Follow progress under Saved.'))
+      .catch(error => Alert.alert('Could not save everything', error.message));
   };
   const removeSaved = (list: Item[]) => Alert.alert('Remove from this device?', 'The saved files are deleted. They stay in your library on the server.', [
     { text: 'Cancel', style: 'cancel' },
@@ -197,7 +221,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     {tab === 'home' && !folder && <><ContinueRow {...art} data={data} items={continues} onPlay={play} onRemove={removeContinue} /><FeaturedReel key={`${base}:${featured.length}`} {...art} data={data} groups={featured} onPlay={play} onDetail={item => setSelected(titleKey(item))} /></>}
     {!data.items.length && <View style={{ minHeight: 500, justifyContent: 'center', gap: 18 }}><Text style={t.dim}>Matro · your library</Text><Text style={[t.heading, { fontSize: 38, lineHeight: 40 }]}>Your collection.{"\n"}Your kind of player.</Text><Text style={t.muted}>All your films, shows and favourite files in one quiet place. Add a folder on your server to build your library.</Text>{data.user.role === 'admin' && <Pill label="Add folder" icon="folder" onPress={() => changeTab('folders')} primary />}</View>}
   </> : null;
-  const browse = data && ['movie', 'show', 'audio'].includes(tab), allBrowse = browse ? groups.filter(items => items[0].kind === tab) : [];
+  const browse = data && kinds.some(kind => kind.kind === tab), allBrowse = browse ? groups.filter(items => items[0].kind === tab) : [];
   const browseItems = browse ? allBrowse.filter(items => filter === 'all' || statusOf(data!, items) === filter) : [];
   return <View style={s.fill}>
     {tab === 'offline' && data ? <OfflineScreen {...art} data={data} offline={offline}
@@ -214,7 +238,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
       ListFooterComponent={search && !sections.length ? <Text style={t.muted}>No matches. Check the spelling, or try part of a title or file name.</Text> : <View style={{ height: 12 }} />} />}
     {data && error ? <Pressable onPress={() => setError('')} style={[s.toast, { bottom: insets.bottom + 86 }]}><Text style={t.text}>{error}</Text></Pressable> : null}
     <Corner username={data?.user.username} onHome={() => changeTab('home')} onProfile={() => setAccount(true)} onHelp={() => Alert.alert('Matro', `${data?.items.length || 0} files in your library.\n\nMetadata and artwork from TMDB.\n\nMovies are prepared on your Matro server and played natively on this device.`, [{ text: 'Refresh', onPress: () => void load() }, { text: 'Close' }])} />
-    <Dock tab={tab} onChange={changeTab} audio={!!data?.items.some(i => i.kind === 'audio')} requests={!offline && data?.movieRequestsEnabled ? (data.user.role === 'admin' ? 'Movie requests' : 'Request a movie') : undefined} />
+    <Dock tab={tab} onChange={changeTab} requests={!offline && data?.movieRequestsEnabled ? (data.user.role === 'admin' ? 'Movie requests' : 'Request a movie') : undefined} />
     <AccountSheet visible={account} onClose={() => setAccount(false)} data={data} base={base} offline={offline} onGo={changeTab} onRefresh={() => void load()} onServer={onChangeServer} onSignOut={onSignedOut} />
   </View>;
 }

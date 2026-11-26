@@ -12,10 +12,57 @@ function openRecovery() {
   });
 }
 
+export const recoveryPrefix = scope => `matro:recovery:v1:${encodeURIComponent(scope)}:`;
+export const scopeRange = prefix => IDBKeyRange.bound(prefix, prefix + '\uffff');
+
+// Each read and write runs in the same transaction, so concurrent tabs cannot
+// replace an entry that is already present at the destination.
+export function copyStoredScope(store, from, to, transform = value => value, finish = () => {}) {
+  const request = store.openCursor(scopeRange(from));
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (!cursor) { finish(); return; }
+    const suffix = cursor.key.slice(from.length), key = to + suffix;
+    const existing = store.getKey(key);
+    existing.onsuccess = () => {
+      if (existing.result === undefined) store.put(transform(cursor.value, suffix), key);
+      cursor.continue();
+    };
+  };
+  return request;
+}
+
+export async function copyRecoveryScope(storage, oldScope, newScope) {
+  const from = recoveryPrefix(oldScope), to = recoveryPrefix(newScope);
+  const keys = Object.keys(storage).filter(key => key.startsWith(from));
+  for (const key of keys) {
+    const target = to + key.slice(from.length);
+    if (storage.getItem(target) === null) storage.setItem(target, storage.getItem(key));
+  }
+  const db = await openRecovery();
+  if (!db) throw new Error('Could not open playback recovery for migration.');
+  const change = (db, operation) => new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.oncomplete = resolve;
+    tx.onabort = () => reject(tx.error);
+    operation(tx.objectStore(STORE));
+  });
+  try { await change(db, store => copyStoredScope(store, from, to)); }
+  finally { db.close(); }
+  return async () => {
+    const db = await openRecovery();
+    if (!db) throw new Error('Could not open playback recovery for cleanup.');
+    try {
+      await change(db, store => store.delete(scopeRange(from)));
+      for (const key of keys) storage.removeItem(key);
+    } finally { db.close(); }
+  };
+}
+
 // Keep a quick checkpoint in localStorage and commit a durable copy on each
 // save. Neither copy depends on the server or on unload running successfully.
 export function createRecovery(storage, scope, onError = () => {}) {
-  const prefix = `matro:recovery:v1:${encodeURIComponent(scope)}:`;
+  const prefix = recoveryPrefix(scope);
   let database;
   const open = () => database ||= openRecovery();
   const queued = new Map();

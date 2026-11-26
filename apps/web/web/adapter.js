@@ -2,9 +2,10 @@
 // Everything here turns those calls into requests to the server.
 import { get, post, put, patch, del, api } from './http.js';
 import { h, say, dialog, languageSelect } from './dom.js';
-import { createOffline, networkLost } from './offline.js';
+import { accountScope, createOffline, networkLost } from './offline.js';
 import { toVtt } from './offline-store.js';
 import { mountMovieRequests } from './movie-requests.js';
+import { dismissedProgress, isContinueDismissed } from '../../../packages/core/client/watch-progress.js';
 
 const SIDECAR = 10000; // uploaded subtitle tracks get indexes from here up, as sidecar files do on the desktop
 const KIND = { full: '', forced: ' (forced)', sdh: ' (SDH)' };
@@ -16,7 +17,18 @@ const artwork = value => typeof value === 'string' ? (value.startsWith('artwork/
 export function createAdapter(session) {
   const noop = () => () => {};
   const watchers = new Set();
-  const offline = createOffline(session.user);
+  const scope = accountScope(session.user), offline = createOffline(session.user, { inspect: inspectRemote, subtitles: fetchSubtitles, sendSubtitle });
+  function checkAccount(data) {
+    if (accountScope(data.user) === scope) return;
+    location.reload();
+    throw new Error('The signed-in account changed.');
+  }
+  const playerSession = Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16).padStart(8, '0')).join('');
+  const playbackState = value => {
+    if (session.offline) return;
+    const state = typeof value === 'object' ? value : { playing: !!value };
+    return api('POST', '/api/playback/state', { ...state, session: playerSession }, { keepalive: !state.playing }).catch(() => {});
+  };
   let polling = 0;
   const unsupported = what => () => Promise.reject(new Error(`${what} is a desktop feature.`));
   const headOnly = (message = 'Only the head account can add or remove media.') => { if (session.user.role !== 'admin') throw new Error(message); };
@@ -26,7 +38,7 @@ export function createAdapter(session) {
     return (value === undefined ? await get(url) : await post(url, value)).result;
   };
   const details = new Map();
-  let latest = null;
+  let latest = null, offlineSync;
 
   async function load() {
     if (session.offline) return latest = await offline.library();
@@ -38,19 +50,23 @@ export function createAdapter(session) {
       session.offline = true;
       return latest;
     }
-    if (await offline.sync(body => put('/api/state', body)).catch(() => false)) data = await get('/api/library').catch(() => data);
+    checkAccount(data);
+    if (await offline.sync(body => put('/api/state', body)).catch(() => false)) {
+      data = await get('/api/library').catch(() => data);
+      checkAccount(data);
+    }
     if (offlineSync) await offlineSync.catch(() => {});
-    offlineSync = offline.flushSubtitles(({ id, query, body }) => api('POST', `/api/items/${id}/subtitles?${query}`, body)).catch(() => {});
+    offlineSync = offline.flushSubtitles().catch(() => {});
     data.metadata = artwork(data.metadata);
     await offline.remember(data).catch(() => {});
     acceptLibrary(data);
+    void offline.resume().catch(error => say(error.message));
     return data;
   }
   function acceptLibrary(data) {
     session.user = data.user; latest = data;
     if (data.metadataEnabled) follow();
   }
-  let offlineSync;
   function watchDownloads(callback) {
     let closed = false, checking = false;
     const check = async () => {
@@ -61,8 +77,9 @@ export function createAdapter(session) {
         const { catalogRevision } = await get('/api/library/revision');
         if (closed || latest !== before || catalogRevision === before.catalogRevision) return;
         const data = await get('/api/library');
-        data.metadata = artwork(data.metadata);
         if (closed || latest !== before) return;
+        checkAccount(data);
+        data.metadata = artwork(data.metadata);
         acceptLibrary(data);
         void offline.remember(data).catch(() => {});
         callback({ items: data.items, folders: data.folders, metadata: data.metadata });
@@ -87,20 +104,29 @@ export function createAdapter(session) {
       }
     })();
   }
+  const savedPlayback = id => offline.playback(id).catch(() => null);
   async function inspect(id) {
-    if (session.offline) {
-      const saved = await offline.store.meta(id);
-      if (!saved?.complete) throw new Error('This title is not saved on this device.');
-      details.set(id, saved.info);
-      return saved.info;
+    const saved = await savedPlayback(id);
+    if (saved) return saved.info;
+    if (session.offline) throw new Error('This title is not saved on this device.');
+    try { return await inspectRemote(id); }
+    catch (error) {
+      const fallback = await savedPlayback(id);
+      if (fallback) return fallback.info;
+      throw error;
     }
-    const info = await get(`/api/items/${id}/info`);
+  }
+  async function inspectRemote(id, { signal } = {}) {
+    const info = await api('GET', `/api/items/${id}/info`, undefined, { signal });
     const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay,
       subtitles: [...info.embedded.map(({ forced: _f, ...t }) => t), ...info.uploaded.map(u => track(u))] };
     details.set(id, result);
     return result;
   }
   const track = u => ({ index: SIDECAR + u.id, language: u.language, title: `${u.name}${KIND[u.kind] || ''}`, codec: 'vtt', text: true, bitmap: false, sidecar: true, uploaded: true, uploadId: u.id, addedBy: u.addedBy });
+  function sendSubtitle({ id, query, body }) {
+    return api('POST', `/api/items/${id}/subtitles?${query}`, body);
+  }
 
   // Subtitle files any signed-in person can add to a title, with the name and language everyone will see.
   async function loadSubtitle(id) {
@@ -115,8 +141,13 @@ export function createAdapter(session) {
       e.preventDefault(); submit.disabled = true; status.textContent = 'Uploading…';
       try {
         const q = new URLSearchParams({ name: name.value, lang: language.value, kind: kind.value, filename: file.files[0].name });
-        if (session.offline) {
-          const local = file.files[0];
+        const local = file.files[0];
+        let uploaded;
+        if (!session.offline) {
+          try { uploaded = await sendSubtitle({ id, query: q, body: local }); }
+          catch (error) { if (!networkLost(error)) throw error; }
+        }
+        if (!uploaded) {
           if (local.size > 4 * 1024 * 1024) throw new Error('Subtitle files must be smaller than 4 MB.');
           const text = toVtt(await local.text(), local.name);
           const index = -Number(crypto.getRandomValues(new Uint32Array(1))[0]) - 1;
@@ -126,8 +157,7 @@ export function createAdapter(session) {
           box.close({ queued: { text, track: text ? track : undefined, warning: 'Queued to upload when Matro reconnects.' } });
           return;
         }
-        const { subtitle } = await api('POST', `/api/items/${id}/subtitles?${q}`, file.files[0]);
-        box.close(subtitle);
+        box.close(uploaded.subtitle);
       } catch (error) { status.textContent = error.message; submit.disabled = false; }
     } }, h('p', { class: 'muted' }, 'Everyone who watches this title can pick these subtitles. You and the head account can change or remove them later from your profile.'),
     h('div', { class: 'ssh-fields web-fields' }, h('label', { class: 'ssh-wide' }, 'Subtitle file (SRT, VTT, ASS or SSA)', file), h('label', { class: 'ssh-wide' }, 'Name shown to everyone', name), h('label', {}, 'Language', language), h('label', {}, 'Type', kind)),
@@ -136,11 +166,24 @@ export function createAdapter(session) {
     const subtitle = await box.done;
     if (!subtitle) return null;
     if (subtitle.queued) { details.delete(id); return subtitle.queued; }
-    const text = await subtitles({ id, index: SIDECAR + subtitle.id });
-    return { text, track: track({ ...subtitle, addedBy: session.user.username }) };
+    const uploadedTrack = track({ ...subtitle, addedBy: session.user.username });
+    const text = await fetchSubtitles({ id, index: uploadedTrack.index });
+    await offline.store.addSubtitle(id, uploadedTrack.index, uploadedTrack, text).catch(() => {});
+    return { text, track: uploadedTrack };
   }
-  async function subtitles({ id, index, signal }) {
-    if (session.offline) return (await offline.store.meta(id))?.subtitles[index] || '';
+  async function subtitles(options) {
+    const { id, index } = options;
+    const text = async () => (await offline.store.meta(id).catch(() => null))?.subtitles?.[index];
+    const saved = await text();
+    if (saved !== undefined || session.offline) return saved || '';
+    try { return await fetchSubtitles(options); }
+    catch (error) {
+      const fallback = await text();
+      if (fallback !== undefined) return fallback;
+      throw error;
+    }
+  }
+  async function fetchSubtitles({ id, index, signal }) {
     const res = await fetch(`/api/items/${id}/subtitles/${index >= SIDECAR ? `u${index - SIDECAR}` : `e${index}`}`, { credentials: 'same-origin', signal });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not load subtitles.');
     return res.text();
@@ -148,18 +191,28 @@ export function createAdapter(session) {
 
   // Direct play when the browser can handle the file as-is; otherwise a transcode that starts at `offset`.
   async function stream({ id, offset = 0, audio = null, bitmapSubtitle = null, subtitleDelay = 0, preload = false, forceTranscode = false }) {
-    const saved = await offline.store.meta(id).catch(() => null);
-    if (saved?.complete && bitmapSubtitle === null && (audio === null || audio === saved.info.audio[0]?.index)) {
-      const url = await offline.playback(id);
-      if (url) return { url: preload && offset > 0 ? `${url}#t=${offset}` : url, offset: 0 };
-    }
+    const local = async (fallback = false) => {
+      const saved = await savedPlayback(id);
+      if (!saved || (!fallback && (bitmapSubtitle !== null || (audio !== null && audio !== saved.info.audio[0]?.index)))) return null;
+      return { url: preload && offset > 0 ? `${saved.url}#t=${offset}` : saved.url, offset: 0 };
+    };
+    const saved = await local();
+    if (saved) return saved;
     if (session.offline) throw new Error('This title or track is unavailable offline.');
-    const d = details.get(id) || await inspect(id), first = d.audio[0];
-    if (!forceTranscode && d.directPlay && bitmapSubtitle === null && (audio === null || !first || audio === first.index)) return { url: `/api/items/${id}/direct${preload ? '?preload=1' : ''}${offset > 0 ? `#t=${offset}` : ''}`, offset: 0 };
-    const q = new URLSearchParams({ t: String(Math.floor(offset * 10) / 10) });
+    let d;
+    try { d = details.get(id) || await inspectRemote(id); }
+    catch (error) {
+      const fallback = await local(true);
+      if (fallback) return fallback;
+      throw error;
+    }
+    const first = d.audio[0];
+    const q = new URLSearchParams({ session: playerSession });
+    if (preload) q.set('preload', '1');
+    if (!forceTranscode && d.directPlay && bitmapSubtitle === null && (audio === null || !first || audio === first.index)) return { url: `/api/items/${id}/direct?${q}${offset > 0 ? `#t=${offset}` : ''}`, offset: 0 };
+    q.set('t', String(Math.floor(offset * 10) / 10));
     if (audio !== null) q.set('audio', audio);
     if (bitmapSubtitle !== null) { q.set('burn', bitmapSubtitle); q.set('delay', subtitleDelay); }
-    if (preload) q.set('preload', '1');
     return { url: `/api/items/${id}/transcode?${q}`, offset };
   }
 
@@ -181,9 +234,17 @@ export function createAdapter(session) {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `/api/admin/upload?path=${encodeURIComponent([folder, file.name].filter(Boolean).join('/'))}`);
     xhr.setRequestHeader('x-matro', '1');
+    xhr.timeout = 30 * 60 * 1000;
     xhr.upload.onprogress = e => { if (e.lengthComputable) say(`Uploading ${file.name} · ${Math.round(e.loaded / e.total * 100)}% of ${sizeText(file.size)}`); };
-    xhr.onload = () => xhr.status === 200 ? resolve() : reject(new Error(JSON.parse(xhr.responseText || '{}').error || `Could not upload ${file.name}.`));
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) { resolve(); return; }
+      let message;
+      try { message = JSON.parse(xhr.responseText)?.error; } catch { /* Proxies may send HTML or plain text. */ }
+      reject(new Error(typeof message === 'string' && message ? message : `Could not upload ${file.name} (HTTP ${xhr.status}).`));
+    };
     xhr.onerror = () => reject(new Error(`Upload of ${file.name} failed (connection lost).`));
+    xhr.onabort = () => reject(new Error(`Upload of ${file.name} was canceled.`));
+    xhr.ontimeout = () => reject(new Error(`Upload of ${file.name} timed out.`));
     xhr.send(file);
   });
   async function upload(files) {
@@ -199,28 +260,43 @@ export function createAdapter(session) {
     return files.length ? upload(files) : load();
   }
 
+  async function saveOffline(ids) {
+    if (session.offline) throw new Error('Reconnect to save titles for offline playback.');
+    const items = new Map(latest.items.map(item => [item.id, item]));
+    await offline.enqueue([...new Set(ids)].map(id => {
+      const item = items.get(id);
+      if (!item) throw new Error('That title is no longer in the library.');
+      return { id, title: latest.metadata[item.groupId || id]?.title || item.title };
+    }));
+  }
+
+  async function changeProgress(id, change, localProgress = {}) {
+    if (!session.offline) {
+      try { return (await patch(`/api/items/${encodeURIComponent(id)}/progress`, change)).progress; }
+      catch (error) { if (!networkLost(error)) throw error; }
+    }
+    const cached = await offline.cachedProgress(), progress = { ...cached.progress, ...localProgress };
+    const item = cached.items.find(item => item.id === id);
+    const siblings = item?.kind === 'show' ? cached.items.filter(other =>
+      other.kind === 'show' && (other.groupId || other.group) === (item.groupId || item.group)) : [{ id }];
+    const checkpoint = change.checkpoint || progress[id];
+    const updated = Math.max(Date.now(), (checkpoint?.updated || 0) + 1);
+    const changes = change.dismiss ? dismissedProgress(siblings, progress, progress) : { [id]: {
+      ...checkpoint, position: checkpoint?.position ?? 0, duration: checkpoint?.duration || (await offline.store.meta(id))?.info?.duration || 0,
+      completed: change.completed, hidden: item?.kind === 'show' && (!!checkpoint?.hidden || isContinueDismissed(siblings, progress)), updated,
+    } };
+    await offline.queue({ progress: changes });
+    return changes;
+  }
+
   const matro = {
     chooseSource: window.matroDesktop?.chooseSource,
-    recoveryScope: `account:${session.user.id}:${session.user.username}`,
-    load, inspect, prepare: inspect, subtitles, loadSubtitle, stream,
-    offlineSave: session.offline ? null : async id => {
-      const item = latest.items.find(item => item.id === id);
-      if (!item) throw new Error('That title is no longer in the library.');
-      const saved = await offline.store.meta(id);
-      if (!saved?.complete) await offline.download({ ...item, title: latest.metadata[item.groupId || item.id]?.title || item.title }, inspect, subtitles);
-    },
-    // A season at a time, two titles at once: the server converts files before sending, so more only queues there.
-    offlineSaveMany: session.offline ? null : async ids => {
-      const queue = [...ids]; let failure;
-      await Promise.all(Array.from({ length: Math.min(2, queue.length) }, async () => {
-        for (let id; (id = queue.shift());) {
-          try { await matro.offlineSave(id); } catch (error) { if (error.name !== 'AbortError') failure ??= error; }
-        }
-      }));
-      if (failure) throw failure;
-    },
-    dismissContinue: session.offline ? undefined : async id => (await patch(`/api/items/${encodeURIComponent(id)}/progress`, { dismiss: true })).progress,
-    setCompleted: session.offline ? undefined : async (id, completed, checkpoint) => (await patch(`/api/items/${encodeURIComponent(id)}/progress`, { completed, checkpoint })).progress,
+    recoveryScope: scope,
+    load, inspect, prepare: inspect, savedPlayback, subtitles, loadSubtitle, stream,
+    get offlineSave() { return session.offline ? null : id => saveOffline([id]); },
+    get offlineSaveMany() { return session.offline ? null : saveOffline; },
+    dismissContinue: (id, progress) => changeProgress(id, { dismiss: true }, progress),
+    setCompleted: (id, completed, checkpoint) => changeProgress(id, { completed, checkpoint }),
     save: (state, { keepalive = false } = {}) => {
       const body = { progress: state.progress, queue: state.queue, preferences: state.preferences };
       // Keepalive has a small shared in-flight byte quota. Reserve it for exit;
@@ -231,16 +307,23 @@ export function createAdapter(session) {
         return offline.queue({ progress: body.progress });
       });
     },
-    stop: async keepUrl => {
+    stop: async (keepUrl, { background = false } = {}) => {
       offline.release(keepUrl);
-      if (!session.offline) await post('/api/playback/stop', { keepPreload: !!keepUrl && new URL(keepUrl, location.origin).searchParams.get('preload') === '1' }).catch(error => { if (!networkLost(error)) throw error; });
-    }, playbackState: value => post('/api/playback/state', typeof value === 'object' ? value : { playing: !!value }).catch(() => {}),
+      if (session.offline) return;
+      const stop = post('/api/playback/stop', { session: playerSession, keepPreload: !!keepUrl && new URL(keepUrl, location.origin).searchParams.get('preload') === '1' });
+      if (background) void stop.catch(() => {});
+      else await stop.catch(error => { if (!networkLost(error)) throw error; });
+    }, playbackState, playbackHeartbeat: playbackState,
     preview: async ({ id, time, hover }) => `/api/items/${id}/frame?t=${Math.max(0, Number(time) || 0)}&w=${hover ? 320 : 480}`,
     segments: async ({ id, force }) => (await post(`/api/items/${id}/segments`, { force })).markers,
     saveMarkers: async edits => (await post('/api/segments/manual', edits)).markers,
     removeMarker: async ({ id, marker }) => (await post(`/api/items/${id}/segments/remove`, { marker })).markers,
     scannerStatus: async () => (await get('/api/segments')).scanner,
-    rescan: async () => { if (session.user.role === 'admin') await post('/api/admin/rescan'); return load(); },
+    rescan: async () => {
+      if (session.user.role !== 'admin') return load();
+      const { results } = await post('/api/admin/rescan');
+      return { ...await load(), warnings: results.filter(result => !result.ok).map(({ folder, error }) => folder ? `${folder}: ${error}` : error) };
+    },
     addFolder: async () => { headOnly(); const path = await chooseFolder(); if (path) { const r = await post('/api/admin/folders', { path }); say(r.ok ? `Added. Found ${r.items} video${r.items === 1 ? '' : 's'}.` : r.error); } return load(); },
     openFiles: pickFiles, importDrop: files => upload(Array.from(files)),
     removeFolder: async root => { headOnly(); const { folders } = await get('/api/admin/folders'); const folder = folders.find(f => f.path === root); if (folder) await del(`/api/admin/folders/${folder.id}`); return load(); },

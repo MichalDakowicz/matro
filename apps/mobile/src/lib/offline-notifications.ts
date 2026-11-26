@@ -59,7 +59,7 @@ export function offlineNotice(key: string, title: string) {
     preparing(fraction: number | null) { update(fraction === null ? 'Preparing on the server…' : `Preparing on the server · ${Math.round(fraction * 100)}%`, fraction === null ? -1 : Math.round(fraction * 100)); },
     progress(have: number, total: number) { update(total ? `${Math.min(99, Math.floor(have / total * 100))}%` : 'Starting…', total ? Math.min(99, Math.floor(have / total * 100)) : -1); },
     done() { clear(); result('matro-offline-result-' + key, `${title} is ready offline`, 'Saved on this device.'); },
-    failed() { clear(); result('matro-offline-result-' + key, `Could not finish saving ${title}`, 'Open Matro to resume the download.'); },
+    failed(reason: string) { clear(); result('matro-offline-result-' + key, `Could not finish saving ${title}`, reason); },
     dismiss: clear,
   };
 }

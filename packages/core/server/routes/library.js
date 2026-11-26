@@ -24,9 +24,9 @@ function dismissMarker(state, id, marker, legacyOnly = false) {
 function register(app) {
   const { router, db, library, tmdb, scanner } = app;
   const q = {
-    items: db.prepare('SELECT i.id, i.path, i.title, i.group_id, i.group_title, i.kind, i.season, i.episode, i.added, f.path AS folder FROM items i JOIN folders f ON f.id = i.folder_id ORDER BY i.path'),
-    episodes: db.prepare("SELECT id FROM items WHERE kind = 'show' AND group_id = ?"),
-    folders: db.prepare('SELECT path FROM folders ORDER BY path'),
+    items: db.prepare('SELECT i.id, i.path, i.title, i.group_id, i.group_title, i.kind, i.season, i.episode, i.added, f.path AS folder FROM active_items i JOIN active_folders f ON f.id = i.folder_id ORDER BY i.path'),
+    episodes: db.prepare("SELECT id FROM active_items WHERE kind = 'show' AND group_id = ?"),
+    folders: db.prepare('SELECT path FROM active_folders ORDER BY path'),
     get: db.prepare('SELECT data FROM user_state WHERE user_id = ?'),
     set: db.prepare('INSERT INTO user_state (user_id, data, updated) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated = excluded.updated')
   };
@@ -39,7 +39,7 @@ function register(app) {
     const items = q.items.all().map(r => ({ id: r.id, path: admin ? r.path : path.relative(r.folder, r.path), root: label(r.folder), title: r.title, group: r.group_title,
       groupId: r.group_id, titlePath: r.group_id, kind: r.kind, season: r.season, episode: r.episode, format: path.extname(r.path).slice(1).toUpperCase(), added: r.added }));
     const state = stateOf(ctx.user.id); scanner.refresh();
-    return { user: { id: ctx.user.id, username: ctx.user.username, role: ctx.user.role }, folders: [...new Set(q.folders.all().map(f => label(f.path)))], items, ...state, markers: scanner.markers(state.markers, state.markerDismissals),
+    return { user: ctx.user, folders: [...new Set(q.folders.all().map(f => label(f.path)))], items, ...state, markers: scanner.markers(state.markers, state.markerDismissals),
       scanner: scanner.snapshot(), metadata: tmdb.snapshot(), metadataEnabled: tmdb.enabled, catalogRevision: library.state.revision, movieRequestsEnabled: true,
       movieRequestPushEnabled: admin && app.movieRequests.push.enabled };
   });
@@ -94,11 +94,6 @@ function register(app) {
     q.set.run(ctx.user.id, JSON.stringify(state), Date.now());
     return { markers: scanner.markers(state.markers, state.markerDismissals)[id] || [] };
   });
-  router.add('POST', '/api/playback/state', async ctx => {
-    const body = await readJson(ctx.req);
-    scanner.setPlayback(body.playing === true, body.buffering === true);
-  });
-
   router.add('GET', '/api/metadata', () => ({ metadata: tmdb.snapshot() }));
   // Cached posters, backdrops, stills and cast photos. Names are matched against a strict pattern by the matcher.
   router.add('GET', '/api/artwork/:name', async ctx => {

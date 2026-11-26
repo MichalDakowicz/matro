@@ -1,4 +1,3 @@
-const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { randomBytes } = require('node:crypto');
@@ -9,7 +8,23 @@ const { HttpError, readJson } = require('../http');
 const { VIDEO } = require('../scan');
 
 // Every path segment from the browser is reduced to something safe to create under the media folder.
-const safeSegment = value => String(value).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+/, '').trim().slice(0, 150);
+const safeSegment = value => String(value).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^[.\s]+/, '').trimEnd().slice(0, 150);
+
+async function uploadParent(parts) {
+  await fsp.mkdir(config.mediaDir, { recursive: true });
+  const root = await fsp.realpath(config.mediaDir);
+  let parent = root;
+  for (const part of parts) {
+    const dir = path.resolve(parent, part);
+    try { await fsp.mkdir(dir); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    parent = await fsp.realpath(dir);
+    const relative = path.relative(root, parent);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new HttpError(400, 'Bad path.');
+    if (!(await fsp.stat(parent)).isDirectory()) throw new HttpError(400, 'Bad path.');
+  }
+  return parent;
+}
 
 function register(app) {
   const { router, db, library, auth } = app;
@@ -75,18 +90,37 @@ function register(app) {
     if (!VIDEO.has(path.extname(parts.at(-1)).slice(1).toLowerCase())) throw new HttpError(400, 'That is not a video file type Matro knows.');
     const declared = Number(ctx.req.headers['content-length']);
     if (declared > config.maxUploadBytes) throw new HttpError(413, 'That file is larger than the upload limit.');
-    const final = path.join(config.mediaDir, ...parts);
-    if (!final.startsWith(config.mediaDir + path.sep)) throw new HttpError(400, 'Bad path.');
-    await fsp.mkdir(path.dirname(final), { recursive: true });
-    try { await fsp.access(final); throw new HttpError(409, 'A file with that name is already on the server.'); } catch (error) { if (error instanceof HttpError) throw error; }
+    const parent = await uploadParent(parts.slice(0, -1));
+    const final = path.join(parent, parts.at(-1));
+    const nameConflict = () => new HttpError(409, 'A file with that name is already on the server.');
+    try { await fsp.lstat(final); throw nameConflict(); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
     const temporary = `${final}.${randomBytes(6).toString('hex')}.part`;
     let size = 0;
     const limit = new Transform({ transform(chunk, _enc, done) { size += chunk.length; done(size > config.maxUploadBytes ? new HttpError(413, 'That file is larger than the upload limit.') : null, chunk); } });
-    try { await pipeline(ctx.req, limit, fs.createWriteStream(temporary, { flags: 'wx' })); await fsp.rename(temporary, final); }
-    catch (error) { await fsp.rm(temporary, { force: true }); throw error; }
-    let folder = library.byPath(config.mediaDir);
-    if (!folder) { await fsp.mkdir(config.mediaDir, { recursive: true }); await library.addFolder(config.mediaDir); folder = library.byPath(config.mediaDir); }
-    else await library.rescan(folder.id);
+    const file = await fsp.open(temporary, 'wx');
+    try {
+      await pipeline(ctx.req, limit, file.createWriteStream());
+      try { await fsp.link(temporary, final); }
+      catch (error) {
+        if (error.code === 'EEXIST') throw nameConflict();
+        // On shares without hard links, reserve the name before renaming into place.
+        if (!['EPERM', 'ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EXDEV'].includes(error.code)) throw error;
+        const reservation = await fsp.open(final, 'wx').catch(inner => {
+          if (inner.code === 'EEXIST') throw nameConflict();
+          throw inner;
+        });
+        try {
+          await reservation.close();
+          await fsp.rename(temporary, final);
+        } catch (inner) {
+          await fsp.rm(final, { force: true });
+          throw inner;
+        }
+      }
+    } finally { await fsp.rm(temporary, { force: true }); }
+    const folder = await library.coveringFolder(config.mediaDir) || await library.addFolder(config.mediaDir);
+    await library.rescan(folder.id);
     return { path: parts.join('/'), size };
   });
 }
