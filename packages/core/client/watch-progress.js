@@ -8,12 +8,21 @@ export function compareEpisodes(a, b) {
     || a.title.localeCompare(b.title, undefined, { numeric: true }) || a.id.localeCompare(b.id);
 }
 
+/** Season 0 is Specials; an item with no season counts as season 1. @param {Item} item */
+export const seasonOf = item => item.season ?? 1;
+
+/** @param {number} season */
+export const seasonLabel = season => season === 0 ? 'Specials' : `Season ${season}`;
+
+/** @param {Item[]} items */
+export const seasonNumbers = items => [...new Set(items.map(seasonOf))].sort((a, b) => a - b);
+
 /** @param {Item[]} items */
 export function groupTitles(items) {
   /** @type {Map<string, Item[]>} */
   const groups = new Map();
   for (const item of items) {
-    const key = item.kind === 'show' ? item.groupId || item.group : item.id;
+    const key = item.kind === 'show' ? item.groupId || item.group : item.editionGroup || item.id;
     const group = groups.get(key);
     if (group) group.push(item);
     else groups.set(key, [item]);
@@ -21,10 +30,27 @@ export function groupTitles(items) {
   return [...groups.values()];
 }
 
+/** @param {number} position @param {number} duration */
+export function reachedPlaybackEnd(position, duration) {
+  return Number.isFinite(duration) && duration > 0 && Number.isFinite(position)
+    && position >= duration - Math.min(10, duration * .05);
+}
+
+/** @param {number} position @param {number} duration @param {{type: string, start: number}[]} markers */
+export function reachedOutro(position, duration, markers) {
+  return Number.isFinite(duration) && duration > 0 && Number.isFinite(position) && markers.some(marker => marker.type === 'outro'
+    && marker.start > duration / 2 && marker.start < duration && position >= marker.start);
+}
+
+/** @param {number} position @param {number} duration @param {{type: string, start: number}[]} [markers] */
+export function reachedCompletion(position, duration, markers = []) {
+  return reachedPlaybackEnd(position, duration) || reachedOutro(position, duration, markers);
+}
+
 /** @param {Progress | undefined} entry */
 export function isCompleted(entry) {
   if (!entry) return false;
-  return entry.completed ?? (entry.duration > 0 && entry.position >= entry.duration - Math.min(10, entry.duration * .05));
+  return entry.completed ?? reachedCompletion(entry.position, entry.duration);
 }
 
 /** @param {ProgressMap} progress */
@@ -35,6 +61,15 @@ export function normalizeProgress(progress) {
     const updated = Number.isFinite(entry.updated) ? entry.updated : 0;
     return [id, { ...entry, completed: isCompleted(entry), updated }];
   }));
+}
+
+/** @param {string[]} previous @param {string[]} next */
+export function queueChange(previous, next) {
+  // Appending the reordered suffix leaves any items added by other devices alone.
+  let prefix = 0;
+  for (const id of previous) if (id === next[prefix]) prefix++;
+  const kept = new Set(next.slice(0, prefix));
+  return { add: next.slice(prefix), remove: previous.filter(id => !kept.has(id)) };
 }
 
 /** @param {Progress | undefined} entry */
@@ -60,6 +95,48 @@ export function dismissedProgress(items, previous, current, resolved = {}) {
     else if (local && local === previous[id]) patch[id] = { ...local, hidden: true };
   }
   return patch;
+}
+
+/**
+ * Progress changes that mark `items` (one episode, a season, a whole show or a few movies) watched or unwatched.
+ * Items already in that state are skipped. A show dismissed from Continue watching stays dismissed.
+ * @param {Item[]} items @param {ProgressMap} progress @param {boolean} completed
+ * @param {{ now?: number, episodesOf?: (item: Item) => Item[], durationOf?: (item: Item) => number }} [options]
+ */
+export function markedProgress(items, progress, completed, { now = Date.now(), episodesOf = item => [item], durationOf = () => 0 } = {}) {
+  /** @type {ProgressMap} */
+  const patch = {};
+  for (const item of items) {
+    const previous = progress[item.id];
+    if (isCompleted(previous) === completed) continue;
+    const hidden = item.kind === 'show' && (!!previous?.hidden || isContinueDismissed(episodesOf(item), progress));
+    patch[item.id] = { ...previous, position: completed ? previous?.position ?? 0 : 0, duration: previous?.duration || durationOf(item) || 0, completed, hidden,
+      updated: Math.max(now, (previous?.updated || 0) + 1) };
+  }
+  return patch;
+}
+
+/**
+ * What was actually watched, newest first. Each entry's last update is its date, and an entry needs a played position:
+ * episodes that were only marked watched have none, so a bulk mark does not flood the history.
+ * @param {Item[]} items @param {ProgressMap} progress @param {{ since?: number, limit?: number }} [options]
+ */
+export function watchHistory(items, progress, { since = 0, limit = Infinity } = {}) {
+  const byId = new Map(items.map(item => [item.id, item]));
+  return Object.entries(progress).flatMap(([id, entry]) => {
+    const item = byId.get(id);
+    return item && Number.isFinite(entry?.updated) && entry.updated > since && entry.position > 0 ? [{ item, entry, at: entry.updated }] : [];
+  }).sort((a, b) => b.at - a.at).slice(0, limit);
+}
+
+/** "Today", "Yesterday" or "Tuesday, Nov 24" for a history heading (local time). @param {number} at @param {number} [now] */
+export function dayLabel(at, now = Date.now()) {
+  const day = new Date(at).toDateString();
+  if (day === new Date(now).toDateString()) return 'Today';
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (day === yesterday.toDateString()) return 'Yesterday';
+  return new Date(at).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 /** @param {Item[]} items @param {ProgressMap} progress */
@@ -96,5 +173,5 @@ export function resumeTarget(items, progress, fallback = items[0]) {
   const unfinished = items.filter(item => !isCompleted(progress[item.id])).sort(compareEpisodes);
   const partial = unfinished.filter(item => progress[item.id]?.position > 0)
     .sort((a, b) => (progress[b.id].updated || 0) - (progress[a.id].updated || 0) || compareEpisodes(a, b))[0];
-  return partial || unfinished[0] || fallback;
+  return partial || (fallback?.editionGroup ? fallback : unfinished[0] || fallback);
 }
