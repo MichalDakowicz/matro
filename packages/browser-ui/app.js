@@ -2,7 +2,8 @@ import icons from './icons.json' with { type: 'json' };
 import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
-import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, normalizeProgress, resumeTarget } from '../core/client/watch-progress.js';
+import { randomReelStart } from '../core/client/reel-start.js';
+import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, normalizeProgress, queueChange, resumeTarget } from '../core/client/watch-progress.js';
 const api = window.matro;
 if (api?.chooseSource && !document.querySelector('.desktop-source-button')) {
   const button = document.createElement('button'); button.className = 'pill desktop-source-button'; button.textContent = 'Server'; button.setAttribute('aria-label', 'Playback source');
@@ -119,11 +120,32 @@ function hoverSeek(event) {
 const finishMargin = duration => Math.min(10, duration * .05);
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 5000); }
 async function attempt(fn) { try { return await fn(); } catch (error) { toast(error.message || String(error)); return null; } }
-function save(options) {
-  if (!stateLoaded) return Promise.resolve();
+const pendingProgress = new Map();
+async function save(options) {
+  if (!stateLoaded) return;
+  if (api.savePreferences) {
+    if (!pendingProgress.size) return;
+    const progress = Object.fromEntries(pendingProgress);
+    recovery.persist(progress);
+    const result = await api.save({ progress }, options);
+    for (const [id, entry] of Object.entries(progress)) {
+      if (pendingProgress.get(id) === entry) pendingProgress.delete(id);
+      const confirmed = result?.progress?.[id];
+      if (!confirmed) continue;
+      recovery.confirm(id, entry, confirmed);
+      if (library.progress[id] === entry) library.progress[id] = normalizeProgress({ [id]: confirmed })[id];
+    }
+    return;
+  }
   for (const [id, entry] of Object.entries(library.progress)) recovery.write(id, entry);
   recovery.persist(library.progress);
   return api.save({ progress: library.progress, queue: library.queue, preferences: library.preferences, markers: library.markers || {} }, options);
+}
+const savePreferences = patch => api.savePreferences ? api.savePreferences(patch) : save();
+function saveQueue(previous) {
+  if (!api.changeQueue) return save();
+  const change = queueChange(previous, library.queue);
+  if (change.add.length || change.remove.length) return api.changeQueue(change);
 }
 const completed = id => isCompleted(library.progress[id]);
 const orderedEpisodes = item => library.items.filter(i => i.kind === 'show' && sameTitle(i, item)).sort(compareEpisodes);
@@ -134,11 +156,13 @@ function matchTrack(tracks, choice) {
   const score = t => Number(t.title === choice.title) * 4 + Number(t.channels === choice.channels) * 2 + Number(t.codec === choice.codec);
   return tracks.filter(t => t.language === choice.language).sort((a, b) => score(b) - score(a))[0] || null;
 }
-function rememberTracks() {
+function rememberTracks(changed) {
   library.preferences.tracks ||= {};
-  library.preferences.tracks[titleKey(current)] = { audio: trackChoice(info.audio.find(t => t.index === audio)), subtitle: trackChoice(info.subtitles.find(t => t.index === subtitle)), off: subtitle === null, delay };
+  const key = titleKey(current), fields = { audio: trackChoice(info.audio.find(t => t.index === audio)), subtitle: trackChoice(info.subtitles.find(t => t.index === subtitle)), off: subtitle === null, delay };
+  const patch = Object.fromEntries(changed.map(field => [field, fields[field]]));
+  library.preferences.tracks[key] = { ...library.preferences.tracks[key], ...patch };
   // A preloaded next episode used the old choice; prepare it again with this one.
-  discardPrepared(); void attempt(save);
+  discardPrepared(); void attempt(() => savePreferences({ tracks: { [key]: patch } }));
 }
 // Title metadata comes from TMDB when configured; everything falls back to file names.
 const metaKey = item => item.kind === 'show' ? titleKey(item) : item.id;
@@ -159,27 +183,30 @@ async function markComplete(id) {
   const done = !completed(id);
   if (api.setCompleted) {
     const patch = normalizeProgress(await api.setCompleted(id, done, old));
-    if (patch[id].updated >= (library.progress[id]?.updated || 0)) applyProgress(patch);
+    if (!library.progress[id] || library.progress[id] === old) applyProgress(patch);
   } else {
     const hidden = item.kind === 'show' && (!!old.hidden || isContinueDismissed(orderedEpisodes(item), library.progress));
-    library.progress[id] = { ...old, completed: done, hidden, updated: Date.now() };
+    applyProgress({ [id]: { ...old, completed: done, hidden, updated: Date.now() } }, true);
     await save();
   }
   if (view === 'player') { renderQueue(); renderSegments(); }
   else { const selectedId = selected?.id; renderLibrary(); if (selectedId) detail(selectedId); }
 }
-function applyProgress(patch) {
+function applyProgress(patch, local = false) {
   Object.assign(library.progress, patch);
-  for (const [id, entry] of Object.entries(patch)) recovery.write(id, entry);
+  for (const [id, entry] of Object.entries(patch)) {
+    recovery.write(id, entry);
+    if (local && api.savePreferences) pendingProgress.set(id, entry);
+  }
   recovery.persist(patch);
 }
 async function removeContinue(id) {
   const item = library.items.find(i => i.id === id); if (!item) return;
   const siblings = item.kind === 'show' ? orderedEpisodes(item) : [item];
   const previous = { ...library.progress };
-  const resolved = api.dismissContinue ? normalizeProgress(await api.dismissContinue(id)) : {};
+  const resolved = api.dismissContinue ? normalizeProgress(await api.dismissContinue(id, previous)) : {};
   const patch = dismissedProgress(siblings, previous, library.progress, resolved);
-  applyProgress(patch);
+  applyProgress(patch, !api.dismissContinue);
   if (!api.dismissContinue) await save();
   if (view === 'library') rerender();
 }
@@ -211,8 +238,9 @@ function remember() {
   const entry = { ...old, position, duration: info.duration, completed: (!rewatchingShow && !!old.completed) || (!hidden && reachedEnd), hidden, updated: Date.now() };
   rewatchingShow = false;
   const sameVisibility = current.kind === 'show' ? old.hidden === hidden : !!old.hidden === hidden;
-  if (old.position === position && old.duration === info.duration && old.completed === entry.completed && sameVisibility) entry.updated = old.updated;
+  if (old.position === position && old.duration === info.duration && old.completed === entry.completed && sameVisibility) return true;
   library.progress[current.id] = entry;
+  if (api.savePreferences) pendingProgress.set(current.id, entry);
   recovery.write(current.id, library.progress[current.id]);
   return true;
 }
@@ -221,6 +249,12 @@ function remember() {
 let saveTimer = null, settlePending = null;
 // A separate clock persists playback even when media events or control rendering stall.
 setInterval(() => { if (view === 'player' && video && !video.paused) checkpoint(); }, 1000);
+if (api.playbackHeartbeat) setInterval(() => {
+  if (view !== 'player' || !video) return;
+  const active = playIntent && !video.ended && !playbackError && (!video.paused || loading);
+  // A paused player still holds its prepared stream: renew it without counting as scanner activity.
+  void api.playbackHeartbeat(active ? { playing: true, buffering: loading } : { playing: false });
+}, 20000);
 function checkpoint(now = false) {
   if (!remember()) return;
   const wait = 1000 - (Date.now() - lastSave);
@@ -313,7 +347,7 @@ function foldersPage() {
     ${loose ? `<li class="source-row"><span class="source-icon">${icon('file')}</span><span><span class="source-name">Opened files</span><span class="source-path">Added one by one or dropped into the window</span></span><span class="source-count">${loose} items</span><span></span></li>` : ''}</ul>
     ${!library.folders.length && !loose ? '<p class="page-sub">No folders yet. Add one to build your library — mounted network drives work too.</p>' : ''}
     <div class="drop-hint">${icon('upload')}Drop folders or files anywhere to import · scanning is recursive</div>
-    <p class="note">Removing a folder never deletes files on disk. Progress, queue and skip markers are kept for when you add it back.</p>`;
+    <p class="note">Removing a folder keeps its media files, progress, queue entries and skip markers. Add the same path to see them in your library again.${library.user ? ' Uploaded subtitles are kept too.' : ''}</p>`;
 }
 function renderLibrary() {
   downloads.unmount();
@@ -366,6 +400,17 @@ function featuredTitles() {
   return [...groups('show'), ...groups('movie')].sort((a, b) => recency(b) - recency(a) || (b[0].added || 0) - (a[0].added || 0));
 }
 function reelMarkup(list) {
+  if (!$('#reel')) {
+    const key = `matro.reelStart:${api.recoveryScope || 'desktop'}`;
+    const titles = list.map(([item]) => item.kind === 'show' ? titleKey(item) : item.id);
+    try { reel.previousStart = localStorage.getItem(key) ?? reel.previousStart; } catch {}
+    stopReel();
+    clearTimeout(reel.wheelTimer);
+    reel.pos = reel.target = randomReelStart(titles, reel.previousStart ?? null);
+    reel.mode = 'idle';
+    reel.previousStart = titles[reel.pos];
+    try { localStorage.setItem(key, reel.previousStart); } catch {}
+  }
   reel.list = list;
   // Enough repeats to fill both sides of a wide window, so the loop's wrap still happens beyond the faded edges.
   const copies = list.length > 1 ? Math.ceil(18 / list.length) : 1;
@@ -754,27 +799,42 @@ function closeDetail() {
 function enqueue(id, all = false) {
   const item = library.items.find(i => i.id === id); if (!item) return;
   const ids = all ? library.items.filter(i => sameTitle(i, item) && i.kind === 'show').sort((a, b) => a.season - b.season || a.episode - b.episode).map(i => i.id) : [id];
-  library.queue = [...new Set([...library.queue, ...ids])]; void attempt(save); toast(`${all ? 'Episodes' : displayName(item)} added to queue`); if (view === 'player') renderQueue();
+  const previous = library.queue;
+  library.queue = [...new Set([...previous, ...ids])];
+  void attempt(() => api.changeQueue ? api.changeQueue({ add: ids, remove: [] }) : save());
+  toast(`${all ? 'Episodes' : displayName(item)} added to queue`); if (view === 'player') renderQueue();
 }
 function ib(name, label, action, extra = '') { return `<button class="icon-button ${extra}" data-action="${action}" aria-label="${label}" title="${label}">${icon(name)}</button>`; }
+let stopping = Promise.resolve();
+function stopPlayback(token, keepUrl, options) {
+  stopping = stopping.catch(() => {}).then(() => { if (token === generation) return api.stop(keepUrl, options); });
+  return stopping;
+}
 async function play(id, keepQueue = false, compareEdition = false) {
-  if (compareEdition) library.queue = [id];
-  else {
-    const editions = Object.values(library.movieEditions || {}).find(group => group.editions.includes(id));
-    if (editions?.favorite && library.items.some(item => item.id === editions.favorite)) {
-      id = editions.favorite;
-      library.queue = [...new Set(library.queue.map(queued => editions.editions.includes(queued) ? id : queued))];
-    }
-  }
+  const editions = !compareEdition && Object.values(library.movieEditions || {}).find(group => group.editions.includes(id));
+  const favorite = editions?.favorite && library.items.some(item => item.id === editions.favorite);
+  if (favorite) id = editions.favorite;
   const item = library.items.find(i => i.id === id); if (!item) return;
+  const token = ++generation; subtitleGeneration++;
   // Starting playback from the library always opens with the queue closed; next, previous and autoplay keep it as it was.
   if (view !== 'player') queueOpen = false;
-  hidePreview(); remember(); await save(); const token = ++generation; subtitleGeneration++; loading = true; frameRun++; selected = null;
+  hidePreview(); remember();
+  const saved = await api.savedPlayback?.(id);
+  if (token !== generation) return;
+  if (!saved) await save();
+  if (token !== generation) return;
+  loading = true; frameRun++; selected = null;
   // A preloaded stream is used only if its track choice still matches what this title would pick now.
-  const fresh = prepared?.id === id && (({ audio: a, subtitle: s, delay: d }) => a === prepared.audio && s === prepared.subtitle && d === prepared.delay)(chooseTracks(item, prepared.info));
+  const fresh = prepared?.id === id && (!saved || prepared.url.split('#')[0] === saved.url)
+    && (({ audio: a, subtitle: s, delay: d }) => a === prepared.audio && s === prepared.subtitle && d === prepared.delay)(chooseTracks(item, prepared.info));
   const ready = fresh ? prepared : null; if (ready) prepared = null; discardPrepared();
   resetPlayer();
-  await api.stop(ready?.url); current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
+  await stopPlayback(token, saved?.url || ready?.url, saved ? { background: true } : undefined);
+  if (token !== generation) { if (ready) releaseBuffer(ready.element); return; }
+  current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
+  const previousQueue = library.queue;
+  if (compareEdition) library.queue = [id];
+  else if (favorite) library.queue = [...new Set(library.queue.map(queued => editions.editions.includes(queued) ? id : queued))];
   if (item.kind === 'show') {
     rewatchingShow = completed(id);
     dismissedShow = isContinueDismissed(orderedEpisodes(item), library.progress);
@@ -785,26 +845,34 @@ async function play(id, keepQueue = false, compareEdition = false) {
     const siblings = item.kind === 'show' ? library.items.filter(i => sameTitle(i, item) && i.kind === 'show').sort((a, b) => a.season - b.season || a.episode - b.episode).map(i => i.id) : [id];
     library.queue = [...new Set([...library.queue, ...siblings])];
   }
+  if (api.changeQueue) void attempt(() => saveQueue(previousQueue));
   info = { duration: 0, audio: [], subtitles: [], chapters: [] }; renderPlayer(ready?.element);
   try {
     if (ready) {
       // Preloaded: tracks were chosen and the stream has been buffering; the inspect call only tells the scanner what plays.
-      ({ info, audio, subtitle, delay, subtitleText } = ready); void api.inspect(id).catch(() => {});
+      ({ info, audio, subtitle, delay, subtitleText } = ready); if (!saved) void api.inspect(id).catch(() => {});
     } else {
-      const metadata = await api.inspect(id); if (token !== generation) return; info = metadata;
+      const metadata = saved?.info || await api.inspect(id); if (token !== generation) return; info = metadata;
       ({ audio, subtitle, delay } = chooseTracks(item, info));
       if (info.subtitles.find(t => t.index === subtitle)?.text) {
-        try { subtitleText = await api.subtitles({ id, index: subtitle }); } catch { subtitle = null; subtitleText = null; }
+        const text = saved ? saved.subtitles[subtitle] ?? null : await api.subtitles({ id, index: subtitle }).catch(() => null);
         if (token !== generation) return;
+        subtitleText = text;
+        if (text === null) subtitle = null;
       }
     }
-    if (item.kind !== 'show' && library.progress[id]) library.progress[id].hidden = false;
     updateMetadata();
     const start = startAt(item, info.duration);
     // Starting an already watched title begins a new viewing session with a resumable position.
-    if (item.kind !== 'show' && completed(id) && !start) library.progress[id] = { ...library.progress[id], position: 0, completed: false, updated: Date.now() };
-    if (ready) await adoptStream(ready, token); else await loadStream(start, true, token);
-    await save(); void detectMarkers(id);
+    if (item.kind !== 'show' && library.progress[id] && (library.progress[id].hidden || completed(id) && !start)) {
+      const entry = library.progress[id];
+      applyProgress({ [id]: { ...entry, ...(completed(id) && !start ? { position: 0, completed: false } : {}), hidden: false, updated: Date.now() } }, true);
+    }
+    if (ready) await adoptStream(ready, token); else await loadStream(start, true, token, saved?.url);
+    if (token !== generation) return;
+    if (saved) void attempt(save);
+    else await save();
+    if (token === generation && !saved) void detectMarkers(id);
   } catch (error) { if (token === generation) { loading = false; playbackError = error.message; showMessage(); } }
 }
 function chooseTracks(item, details) {
@@ -855,10 +923,11 @@ async function adoptStream(ready, token) {
 function renderPlayer(adopt = null) {
   document.body.classList.add('in-player');
   const heading = current.kind === 'show' ? `${displayName(current)} · ${code(current)}` : itemMeta(current);
-  root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
+  root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div id="subtitle-overlay" class="subtitle-overlay"><div id="subtitle-caption" class="subtitle-caption"></div></div><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
   if (adopt) { $('#video').replaceWith(adopt); adopt.id = 'video'; adopt.dataset.preloaded = String(adopt.readyState); }
   video = $('#video'); applyVolume(library.preferences.volume); updateVolume(); applySubStyle();
   const player = video, events = playerEvents = new AbortController();
+  setupSubtitleOverlay(events.signal);
   let recoveryTimer, recoveryAttempts = 0;
   const recover = () => {
     clearTimeout(recoveryTimer);
@@ -921,9 +990,9 @@ function updateMetadata() {
   $('#player-chips').innerHTML = `<span class="chip">${esc(current.format)}</span>${info.video ? `<span class="chip">${info.video.height}p · ${esc(info.video.codec.toUpperCase())}</span>` : '<span class="chip">Audio</span>'}${info.audio.length ? `<span class="chip">${esc(info.audio.find(a => a.index === audio)?.codec.toUpperCase())} · Stereo output</span>` : ''}`;
   $('#seek').max = info.duration || 1; $('#duration').textContent = fmt(info.duration); showTimes(offset + (video?.currentTime || 0)); renderSeekMarks();
 }
-async function loadStream(position, shouldPlay = true, token = generation) {
+async function loadStream(position, shouldPlay = true, token = generation, savedUrl) {
   playIntent = shouldPlay; loading = true; playbackError = ''; showMessage(); updateToggle(); pendingStream = { id: current.id, position };
-  const result = await api.stream({ id: current.id, offset: position, audio, bitmapSubtitle: bitmapTrack()?.index ?? null, subtitleDelay: delay, forceTranscode: supportsFullBuffer(!!info.video) || video.dataset.forceTranscode === 'true' }); if (token !== generation) return;
+  const result = savedUrl ? { url: savedUrl, offset: 0 } : await api.stream({ id: current.id, offset: position, audio, bitmapSubtitle: bitmapTrack()?.index ?? null, subtitleDelay: delay, forceTranscode: supportsFullBuffer(!!info.video) || video.dataset.forceTranscode === 'true' }); if (token !== generation) return;
   offset = result.offset; streamId = current.id;
   const player = video, start = Math.max(0, position - offset);
   // Preserve the target until this source has reached it. load() emits zero-time
@@ -971,7 +1040,7 @@ function updateTime() {
 }
 function updateToggle() { const btn = $('#play-toggle'); if (!btn) return; btn.innerHTML = icon(playIntent ? 'pause' : 'play'); btn.setAttribute('aria-label', playIntent ? 'Pause' : 'Play'); }
 function toggle() { if (!video || !video.getAttribute('src')) return; playIntent = !playIntent; void api.playbackState(playIntent); if (playIntent) void attempt(() => video.play()); else video.pause(); updateToggle(); }
-function setVolume(value) { if (!video) return; const volume = Math.round(Math.max(0, Math.min(MAX_VOLUME, value)) * 100) / 100; applyVolume(volume); video.muted = false; library.preferences.volume = volume; updateVolume(); const btn = document.querySelector('[data-action="mute"]'); if (btn) btn.innerHTML = icon('volume'); void attempt(save); }
+function setVolume(value) { if (!video) return; const volume = Math.round(Math.max(0, Math.min(MAX_VOLUME, value)) * 100) / 100; applyVolume(volume); video.muted = false; library.preferences.volume = volume; updateVolume(); const btn = document.querySelector('[data-action="mute"]'); if (btn) btn.innerHTML = icon('volume'); void attempt(() => savePreferences({ volume })); }
 function showMessage() {
   const message = $('#stage-message'); if (!message) return;
   message.classList.toggle('error', !!playbackError);
@@ -1089,41 +1158,98 @@ function renderTracks() {
     <div class="track-bottom"><div class="delay-controls"><span>Sub delay</span><button class="icon-button" data-action="delay-down" aria-label="Subtitles earlier by 0.1 seconds">−</button><output>${delay > 0 ? '+' : ''}${delay.toFixed(1)} s</output><button class="icon-button" data-action="delay-up" aria-label="Subtitles later by 0.1 seconds">+</button></div>
     <button class="text-button" data-action="subtitle-file">Load subtitle file…</button></div>
     ${subStylePanel(bitmap)}
-    ${bitmap ? '<p class="bitmap-note">Bitmap subtitles keep their original appearance. Track or delay changes briefly reload playback.</p>' : ''}
+    ${bitmap ? '<p class="bitmap-note">Bitmap subtitles are part of the picture. Track or delay changes briefly reload playback.</p>' : ''}
     ${info.chapters.length ? `<div class="player-chapters">${info.chapters.map((c, index) => `<button class="chapter-button" data-chapter="${index}">${esc(c.title)} · ${fmt(c.start)}</button>`).join('')}</div>` : ''}</section>`;
 }
 // Subtitle look is one global preference: size (50–200%), font, background box, weight/slant and an edge effect.
-// It is applied through CSS variables that video::cue reads, so restyling never reloads the track.
+// The caption overlay reads these CSS variables, so restyling never reloads the track.
 const SUB_FONTS = [['sans', 'Sans', "Geist, 'Segoe UI', system-ui, sans-serif"], ['classic', 'Classic', 'Arial, Helvetica, sans-serif'], ['serif', 'Serif', "Georgia, 'Times New Roman', serif"], ['mono', 'Mono', "'Geist Mono', Consolas, monospace"], ['casual', 'Casual', "'Comic Sans MS', 'Segoe Print', cursive"]];
 const SUB_BACKGROUNDS = [['none', 'Off', 0], ['light', 'Light', .45], ['dark', 'Dark', .75], ['solid', 'Solid', 1]];
 const SUB_EDGES = [['none', 'None', 'none'], ['outline', 'Outline', '-1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000, 0 0 3px #000'], ['shadow', 'Shadow', '2px 2px 4px #000, 0 0 8px #000c']];
 const subStyle = () => ({ size: 1, font: 'sans', background: 'light', bold: false, italic: false, edge: 'none', ...library.preferences.subtitles });
 function applySubStyle() {
   if (!video) return; const style = subStyle();
-  const set = (name, value) => video.style.setProperty(name, value);
+  const set = (name, value) => $('.stage').style.setProperty(name, value);
   set('--cue-scale', String(style.size)); set('--cue-font', SUB_FONTS.find(([id]) => id === style.font)?.[2] || SUB_FONTS[0][2]);
   set('--cue-bg', `rgb(0 0 0 / ${SUB_BACKGROUNDS.find(([id]) => id === style.background)?.[2] ?? .45})`);
   set('--cue-weight', style.bold ? '700' : '400'); set('--cue-style', style.italic ? 'italic' : 'normal'); set('--cue-shadow', SUB_EDGES.find(([id]) => id === style.edge)?.[2] || 'none');
 }
-function setSubStyle(change, render = true) { library.preferences.subtitles = { ...subStyle(), ...change }; applySubStyle(); if (render) renderTracks(); void attempt(save); }
+function setSubStyle(change, render = true) { library.preferences.subtitles = { ...subStyle(), ...change }; applySubStyle(); if (render) renderTracks(); void attempt(() => savePreferences({ subtitles: change })); }
 function subStylePanel(bitmap) {
   const style = subStyle(), off = bitmap ? 'disabled title="Bitmap subtitles keep their original look"' : '';
   const chips = (label, key, options) => `<div class="size-options" role="group" aria-label="${label}">${options.map(([id, name]) => `<button class="${style[key] === id ? 'selected' : ''}" data-sub-style="${key}:${id}" aria-pressed="${style[key] === id}" ${off}>${name}</button>`).join('')}</div>`;
   const row = (label, body) => `<div class="sub-style-row"><span>${label}</span>${body}</div>`;
   return `<div class="sub-style">${row('Size', `<input id="sub-size" class="volume" type="range" min=".5" max="2" step=".05" value="${style.size}" aria-label="Subtitle size" ${off}><output>${Math.round(style.size * 100)}%</output>`)}
     ${row('Font', chips('Subtitle font', 'font', SUB_FONTS))}${row('Background', chips('Subtitle background', 'background', SUB_BACKGROUNDS))}
-    ${row('Style', `<div class="size-options" role="group" aria-label="Subtitle text style">${[['bold', 'Bold'], ['italic', 'Italic']].map(([key, name]) => `<button class="${style[key] ? 'selected' : ''}" data-sub-style="${key}:on" aria-pressed="${style[key]}" ${off}>${name}</button>`).join('')}</div>${chips('Subtitle edge', 'edge', SUB_EDGES)}`)}</div>`;
+    ${row('Style', `<div class="size-options" role="group" aria-label="Subtitle text style">${[['bold', 'Bold'], ['italic', 'Italic']].map(([key, name]) => `<button class="${style[key] ? 'selected' : ''}" data-sub-style="${key}:on" aria-pressed="${style[key]}" ${off}>${name}</button>`).join('')}</div>${chips('Subtitle edge', 'edge', SUB_EDGES)}`)}
+    ${row('Position', `<div class="size-options" role="group" aria-label="Subtitle position presets">${Object.keys(SUBTITLE_PRESETS).map(name => `<button data-sub-position="${name}" aria-pressed="${atSubtitlePreset(name)}" ${off}>${name}</button>`).join('')}</div><button class="text-button" data-sub-position="Reset" ${off}>Reset position</button>`)}
+    ${row('Horizontal', subtitlePositionSlider('x', 'Horizontal subtitle position', off))}
+    ${row('Vertical', subtitlePositionSlider('y', 'Vertical subtitle position', off))}</div>`;
+}
+const SUBTITLE_PRESETS = { Bottom: { x: 50, y: 100 }, Top: { x: 50, y: 0 } };
+const SUBTITLE_POSITION_KEY = 'matro.subtitlePosition';
+const validSubtitleAxis = (value, fallback) => Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : fallback;
+let subtitlePosition = SUBTITLE_PRESETS.Bottom;
+try {
+  const saved = JSON.parse(localStorage.getItem(SUBTITLE_POSITION_KEY));
+  if (saved) subtitlePosition = { x: validSubtitleAxis(saved.x, 50), y: validSubtitleAxis(saved.y, 100) };
+} catch {}
+function atSubtitlePreset(name) {
+  const preset = SUBTITLE_PRESETS[name];
+  return subtitlePosition.x === preset.x && subtitlePosition.y === preset.y;
+}
+function subtitlePositionSlider(axis, label, disabled) {
+  return `<input class="volume" type="range" min="0" max="100" value="${subtitlePosition[axis]}" style="--fill:${subtitlePosition[axis]}%" data-sub-position-axis="${axis}" aria-label="${label}" ${disabled}>`;
+}
+function applySubtitlePosition() {
+  const overlay = $('#subtitle-overlay');
+  overlay.style.setProperty('--caption-x', `${subtitlePosition.x}%`);
+  overlay.style.setProperty('--caption-y', `${subtitlePosition.y}%`);
+}
+function setSubtitlePosition(position) {
+  subtitlePosition = position;
+  applySubtitlePosition();
+  try { localStorage.setItem(SUBTITLE_POSITION_KEY, JSON.stringify(position)); } catch {}
+  document.querySelectorAll('[data-sub-position-axis]').forEach(input => { input.value = position[input.dataset.subPositionAxis]; fillRange(input); });
+  document.querySelectorAll('.size-options [data-sub-position]').forEach(button => button.setAttribute('aria-pressed', String(atSubtitlePreset(button.dataset.subPosition))));
+}
+function setupSubtitleOverlay(signal) {
+  const stage = $('.stage'), heading = $('.player-top'), timeline = $('.timeline'), segmentTools = $('#segment-tools');
+  const updateBounds = () => {
+    const { top, bottom, height } = stage.getBoundingClientRect();
+    const headerEnd = Math.max(...Array.from(heading.children, child => child.getBoundingClientRect().bottom));
+    const segmentHeight = segmentTools.offsetHeight;
+    const aboveTimeline = bottom - timeline.getBoundingClientRect().top + 8;
+    const aboveSegment = segmentHeight ? parseFloat(getComputedStyle(segmentTools).bottom) + segmentHeight + 8 : 0;
+    const topInset = Math.min(Math.max(12, headerEnd - top + 8), height / 2);
+    stage.style.setProperty('--caption-top', `${topInset}px`);
+    stage.style.setProperty('--caption-bottom', `${Math.max(12, Math.min(height - topInset, Math.max(aboveTimeline, aboveSegment)))}px`);
+  };
+  const observer = new ResizeObserver(updateBounds);
+  for (const element of [stage, timeline, segmentTools, ...heading.children]) observer.observe(element);
+  signal.addEventListener('abort', () => observer.disconnect(), { once: true });
+  applySubtitlePosition();
+  updateBounds();
 }
 document.addEventListener('input', event => {
+  const axis = event.target.dataset.subPositionAxis;
+  if (axis) { setSubtitlePosition({ ...subtitlePosition, [axis]: Number(event.target.value) }); return; }
   if (event.target.id !== 'sub-size') return;
   const size = Number(event.target.value); event.target.nextElementSibling.textContent = `${Math.round(size * 100)}%`; fillRange(event.target); setSubStyle({ size }, false);
 });
-// Chromium keeps drawing the cues that were active when a track element is removed, and nothing ever ends them, so each
-// skip would leave its line stuck on screen. Empty and disable the old track first.
 function dropSubtitleTrack() {
   const old = $('#subtitle-track'), textTrack = old?.track;
   if (textTrack) { for (const cue of [...(textTrack.cues || [])]) textTrack.removeCue(cue); textTrack.mode = 'disabled'; }
   old?.remove();
+  $('#subtitle-caption')?.replaceChildren();
+}
+function renderSubtitleCaption(track) {
+  const caption = $('#subtitle-caption');
+  if (!caption) return;
+  caption.replaceChildren(...Array.from(track.activeCues || [], cue => {
+    const line = document.createElement('div'), text = document.createElement('span');
+    text.append(cue.getCueAsHTML()); line.append(text); return line;
+  }));
 }
 function applySubtitle() {
   dropSubtitleTrack(); if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); subtitleUrl = null; trackCues = []; cueTrack = null;
@@ -1131,8 +1257,15 @@ function applySubtitle() {
   subtitleUrl = URL.createObjectURL(new Blob([subtitleText], { type: 'text/vtt' }));
   const track = document.createElement('track'); track.id = 'subtitle-track'; track.kind = 'subtitles'; track.label = 'Selected subtitles'; track.src = subtitleUrl; track.default = true;
   // A track replaced by a quicker seek may still finish loading; only the current one may take over the cues.
-  track.addEventListener('load', () => { if (!track.isConnected) return; track.track.mode = 'showing'; cueTrack = track.track; trackCues = [...cueTrack.cues].map(cue => { cue.line = -5; return { cue, start: cue.startTime, end: cue.endTime }; }); adjustCues(); });
+  track.track.addEventListener('cuechange', () => { if (track.isConnected) renderSubtitleCaption(track.track); });
+  track.addEventListener('load', () => {
+    if (!track.isConnected) return;
+    track.track.mode = 'hidden'; cueTrack = track.track;
+    trackCues = [...cueTrack.cues].map(cue => ({ cue, start: cue.startTime, end: cue.endTime }));
+    adjustCues(); renderSubtitleCaption(cueTrack);
+  });
   video.append(track);
+  track.track.mode = 'hidden';
 }
 // Cue times are relative to the current stream, which starts at `offset`. Every timing change (a new stream after a seek
 // or skip, or a delay change) rebuilds the track's cue list: lines that ended before the stream start are left off, so
@@ -1158,15 +1291,15 @@ function refreshCues() {
 async function pickSubtitle(value) {
   const token = ++subtitleGeneration; const id = current.id;
   const wasBitmap = !!bitmapTrack();
-  if (value === 'off') { subtitle = null; subtitleText = null; rememberTracks(); applySubtitle(); renderTracks(); if (wasBitmap) await restartStream(); return; }
+  if (value === 'off') { subtitle = null; subtitleText = null; rememberTracks(['subtitle', 'off']); applySubtitle(); renderTracks(); if (wasBitmap) await restartStream(); return; }
   const selectedTrack = info.subtitles.find(track => track.index === Number(value));
-  if (selectedTrack?.bitmap) { subtitle = selectedTrack.index; subtitleText = null; rememberTracks(); applySubtitle(); renderTracks(); await restartStream(); return; }
+  if (selectedTrack?.bitmap) { subtitle = selectedTrack.index; subtitleText = null; rememberTracks(['subtitle', 'off']); applySubtitle(); renderTracks(); await restartStream(); return; }
   const text = await api.subtitles({ id, index: Number(value) }); if (token !== subtitleGeneration || current.id !== id) return;
-  subtitle = Number(value); subtitleText = text; rememberTracks(); applySubtitle(); renderTracks();
+  subtitle = Number(value); subtitleText = text; rememberTracks(['subtitle', 'off']); applySubtitle(); renderTracks();
   if (wasBitmap) await restartStream();
 }
 async function restartStream() { const token = ++generation; await loadStream(offset + video.currentTime, playIntent, token); }
-async function changeSubtitleDelay(change) { delay = Math.max(-60, Math.min(60, Math.round((delay + change) * 10) / 10)); adjustCues(); renderTracks(); rememberTracks(); if (bitmapTrack()) await restartStream(); }
+async function changeSubtitleDelay(change) { delay = Math.max(-60, Math.min(60, Math.round((delay + change) * 10) / 10)); adjustCues(); renderTracks(); rememberTracks(['delay']); if (bitmapTrack()) await restartStream(); }
 function resetPlayer() {
   // load() resets currentTime and queues media events. Invalidate the stream
   // first so those events cannot overwrite the checkpoint we just saved.
@@ -1177,7 +1310,11 @@ function resetPlayer() {
   if (video) { video.pause(); releaseBuffer(video); video.removeAttribute('src'); video.load(); }
 }
 async function backToLibrary() {
-  hidePreview(); discardPrepared(); if (fullscreenActive) await api.window('fullscreen'); remember(); await save(); ++generation; ++subtitleGeneration; resetPlayer(); await api.stop();
+  const token = ++generation; ++subtitleGeneration;
+  hidePreview(); discardPrepared(); if (fullscreenActive) await api.window('fullscreen');
+  if (token !== generation) return;
+  remember(); await save(); if (token !== generation) return;
+  resetPlayer(); await stopPlayback(token); if (token !== generation) return;
   if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); current = null; video = null; renderLibrary();
 }
 // Page transitions run through the View Transitions API and are skipped when motion is reduced.
@@ -1237,8 +1374,8 @@ const actions = {
   queue: () => { if (fullscreenActive) fullscreenQueueOpen = !fullscreenQueueOpen; else queueOpen = !queueOpen; renderQueue(); },
   tracks: () => openPanel('tracks'), segments: () => openPanel('segments'), mute: () => { video.muted = !video.muted; const btn = document.querySelector('[data-action="mute"]'); btn.innerHTML = icon(video.muted ? 'mute' : 'volume'); btn.setAttribute('aria-label', video.muted ? 'Unmute (M)' : 'Mute (M)'); updateVolume(); },
   speed: () => { const rates = [.5, .75, 1, 1.25, 1.5, 2]; video.playbackRate = rates[(rates.indexOf(video.playbackRate) + 1) % rates.length]; document.querySelector('[data-action="speed"]').textContent = `${video.playbackRate}×`; },
-  autoplay: async () => { library.preferences.autoplay = !library.preferences.autoplay; await save(); renderQueue(); },
-  'clear-watched': async () => { library.queue = library.queue.filter(id => id === current.id || !completed(id)); await save(); renderQueue(); },
+  autoplay: async () => { library.preferences.autoplay = !library.preferences.autoplay; await savePreferences({ autoplay: library.preferences.autoplay }); renderQueue(); },
+  'clear-watched': async () => { const previous = library.queue; library.queue = previous.filter(id => id === current.id || !completed(id)); await saveQueue(previous); renderQueue(); },
   'delay-down': () => changeSubtitleDelay(-.1),
   'delay-up': () => changeSubtitleDelay(.1),
   'subtitle-file': async () => {
@@ -1246,7 +1383,7 @@ const actions = {
     if (!loaded || current?.id !== id || token !== subtitleGeneration) return;
     const wasBitmap = !!bitmapTrack(); subtitleText = loaded.text;
     // Saved next to the video, it is a regular track from now on and is remembered like one.
-    if (loaded.track) { if (!info.subtitles.some(t => t.index === loaded.track.index)) info.subtitles.push(loaded.track); subtitle = loaded.track.index; rememberTracks(); toast(loaded.warning || 'Subtitles saved next to the video.'); }
+    if (loaded.track) { if (!info.subtitles.some(t => t.index === loaded.track.index)) info.subtitles.push(loaded.track); subtitle = loaded.track.index; rememberTracks(['subtitle', 'off']); toast(loaded.warning || 'Subtitles saved next to the video.'); }
     else { subtitle = 'external'; if (loaded.warning) toast(loaded.warning); }
     applySubtitle(); renderTracks(); if (wasBitmap) await restartStream();
   },
@@ -1308,7 +1445,7 @@ document.addEventListener('click', event => {
     if (btn.dataset.seasonTab) return showSeason(Number(btn.dataset.seasonTab));
     if (btn.dataset.matchPick) return assignMatch(Number(btn.dataset.matchPick));
     if (btn.dataset.matchNone !== undefined) return assignMatch(null);
-    if (btn.dataset.restart) { const old = library.progress[btn.dataset.restart]; if (old) library.progress[btn.dataset.restart] = { ...old, position: 0, updated: Date.now() }; return play(btn.dataset.restart); }
+    if (btn.dataset.restart) { const id = btn.dataset.restart, old = library.progress[id]; if (old) applyProgress({ [id]: { ...old, position: 0, updated: Date.now() } }, true); return play(id); }
     if (btn.dataset.upgrade && api.canCompareEditions !== false) { await downloads.openUpgrade(btn.dataset.upgrade); goTab('downloads'); return; }
     if (btn.dataset.play) return play(btn.dataset.play, !!btn.closest('.queue-panel'));
     if (btn.dataset.detail) return openDetail(btn.dataset.detail, btn);
@@ -1317,23 +1454,24 @@ document.addEventListener('click', event => {
     if (btn.dataset.tab) return goTab(btn.dataset.tab);
     if (btn.dataset.themeMode) { window.matroTheme.set(btn.dataset.themeMode); return; }
     if (btn.dataset.motion) {
-      library.preferences.motion = btn.dataset.motion; applyMotion(); await save();
+      library.preferences.motion = btn.dataset.motion; applyMotion(); await savePreferences({ motion: library.preferences.motion });
       document.querySelectorAll('[data-motion]').forEach(chip => chip.setAttribute('aria-pressed', String(chip.dataset.motion === btn.dataset.motion)));
       reel.hover = null; updateReel(); return;
     }
     if (btn.dataset.statusFilter) { statusFilter = btn.dataset.statusFilter; renderLibrary(); return; }
     if (btn.dataset.folder !== undefined) { folderFilter = library.folders[Number(btn.dataset.folder)]; tab = 'home'; renderLibrary(); $('.shell')?.scrollTo(0, 0); return; }
     if (btn.dataset.removeFolder !== undefined) { library = await api.removeFolder(library.folders[Number(btn.dataset.removeFolder)]); renderLibrary(); return; }
-    if (btn.dataset.removeQueue) { library.queue = library.queue.filter(id => id !== btn.dataset.removeQueue); await save(); renderQueue(); return; }
-    if (btn.dataset.audio) { const position = offset + video.currentTime, playing = playIntent; audio = Number(btn.dataset.audio); rememberTracks(); updateMetadata(); renderTracks(); const token = ++generation; await loadStream(position, playing, token); return; }
+    if (btn.dataset.removeQueue) { const previous = library.queue; library.queue = previous.filter(id => id !== btn.dataset.removeQueue); await saveQueue(previous); renderQueue(); return; }
+    if (btn.dataset.audio) { const position = offset + video.currentTime, playing = playIntent; audio = Number(btn.dataset.audio); rememberTracks(['audio']); updateMetadata(); renderTracks(); const token = ++generation; await loadStream(position, playing, token); return; }
     if (btn.dataset.subtitle) return pickSubtitle(btn.dataset.subtitle);
+    if (btn.dataset.subPosition) { setSubtitlePosition(SUBTITLE_PRESETS[btn.dataset.subPosition] || SUBTITLE_PRESETS.Bottom); return; }
     if (btn.dataset.subStyle) { const [key, value] = btn.dataset.subStyle.split(':'); const style = subStyle(); setSubStyle({ [key]: ['bold', 'italic'].includes(key) ? !style[key] : value }); return; }
     if (btn.dataset.chapter !== undefined) return seek(info.chapters[Number(btn.dataset.chapter)].start);
     const action = actions[btn.dataset.action]; if (action) { btn.classList.add('busy'); try { await action(); } finally { btn.classList.remove('busy'); } }
   });
 });
 document.addEventListener('keydown', event => {
-  const typing = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) && event.target.type !== 'range';
+  const typing = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) && (event.target.type !== 'range' || event.target.dataset.subPositionAxis);
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); void attempt(actions.files); return; }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && view === 'library') { event.preventDefault(); if (tab !== 'search') goTab('search'); $('#search')?.focus(); return; }
   if (event.key === 'Escape') { if ($('#shortcuts').open || $('#match-dialog')?.open || $('#ssh-dialog').open) return; if (footerOpen && view === 'library') { actions.about(); return; } if (fullscreenActive) { void api.window('fullscreen'); return; } if (selected) closeDetail(); else if (sidePanel) { sidePanel = null; renderTracks(); } else if (view === 'player') void attempt(backToLibrary); return; }
@@ -1349,7 +1487,7 @@ document.addEventListener('dragover', event => event.preventDefault());
 document.addEventListener('dragleave', event => { event.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; $('#drop-overlay')?.remove(); } });
 document.addEventListener('drop', event => { event.preventDefault(); dragDepth = 0; $('#drop-overlay')?.remove(); const files = Array.from(event.dataTransfer.files); void attempt(async () => { const before = new Set(library.items.map(i => i.id)); library = await api.importDrop(files); const item = library.items.find(i => !before.has(i.id)); if (item) await play(item.id); else toast('No new supported media files found. Use Add folder for directories.'); }); });
 window.addEventListener('beforeunload', () => { remember(); void save({ keepalive: true }).catch(() => {}); });
-window.addEventListener('pagehide', () => { if (video) releaseBuffer(video); discardPrepared(); });
+window.addEventListener('pagehide', () => { if (video) { void api.playbackHeartbeat?.(false); releaseBuffer(video); } discardPrepared(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { remember(); void attempt(save); } });
 // Closing the window waits for the latest position to be written before the app quits.
 api?.onClosing?.(async () => { try { remember(); await save(); } finally { void api.window('close'); } });
@@ -1370,7 +1508,9 @@ api?.onSegments(update => {
 });
 if (!api) { root.innerHTML = '<main class="page"><h1 class="page-title">Open Matro in its desktop app.</h1><p class="page-sub">Run npm start from the project folder.</p></main>'; }
 else void attempt(async () => { library = await api.load();
-  const restored = await recovery.restore(library.progress, library.items.map(item => item.id)); library.progress = normalizeProgress(restored.progress); stateLoaded = true;
+  const original = library.progress;
+  const restored = await recovery.restore(original, library.items.map(item => item.id)); library.progress = normalizeProgress(restored.progress); stateLoaded = true;
+  if (api.savePreferences && restored.recovered) for (const [id, entry] of Object.entries(restored.progress)) if (entry !== original[id]) pendingProgress.set(id, library.progress[id]);
   metadata = library.metadata || {}; metadataEnabled = !!library.metadataEnabled;
   scannerSummary = library.scanner || await api.scannerStatus();
   library.markers ||= {};

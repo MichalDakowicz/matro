@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { candidates, playbackPath } from '../../../../packages/core/client/server.ts';
+import { setImmediate } from 'node:timers/promises';
+import { accountChanged, candidates, fetchWithDeadline, playbackPath, ServerError } from '../../../../packages/core/client/server.ts';
 
 test('public hostnames try https first', () => {
   assert.deepEqual(candidates('matro.dakowicz.xyz/'), ['https://matro.dakowicz.xyz', 'http://matro.dakowicz.xyz']);
@@ -17,4 +18,28 @@ test('native direct play resumes on the original timeline; transcoding uses rela
   const info = { duration: 100, directPlay: true, audio: [{ index: 1, language: 'en', title: '' }], embedded: [], uploaded: [] };
   assert.deepEqual(playbackPath('id', info, 42, null, null), { path: '/api/items/id/direct', offset: 0, start: 42 });
   assert.deepEqual(playbackPath('id', info, 42, 2, 3), { path: '/api/items/id/transcode?t=42&audio=2&burn=3', offset: 42, start: 0 });
+  assert.deepEqual(playbackPath('id', info, 42, null, null, 0, 'native'), { path: '/api/items/id/direct?session=native', offset: 0, start: 42 });
+  assert.deepEqual(playbackPath('id', info, 42, 2, 3, 1, 'native'), { path: '/api/items/id/transcode?session=native&t=42&audio=2&burn=3&delay=1', offset: 42, start: 0 });
+});
+
+test('the body deadline is an idle limit: steady progress outlives it and a stall does not', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+  const slow = fetchWithDeadline(async () => 'response', async (_, touch) => {
+    for (let chunk = 0; chunk < 4; chunk++) { await pause(20000); touch(); }
+    return 'done';
+  }, { bodyMs: 30000 });
+  for (let chunk = 0; chunk < 4; chunk++) { await setImmediate(); t.mock.timers.tick(20000); }
+  assert.equal(await slow, 'done');
+  const stalled = fetchWithDeadline(async () => 'response', () => new Promise<never>(() => {}), { bodyMs: 30000 });
+  await setImmediate();
+  t.mock.timers.tick(30000);
+  await assert.rejects(stalled, /took too long to send/);
+});
+
+test('only a 401 or an account-changed 409 signs the phone out', () => {
+  assert.equal(accountChanged(new ServerError('Sign in first.', 401)), true);
+  assert.equal(accountChanged(new ServerError('The signed-in account changed.', 409, 'account-changed')), true);
+  assert.equal(accountChanged(new ServerError('This title already has the maximum number of subtitle tracks.', 409)), false);
+  assert.equal(accountChanged(new Error('offline')), false);
 });

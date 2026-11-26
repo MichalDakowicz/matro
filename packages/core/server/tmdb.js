@@ -18,12 +18,12 @@ function loadEnv(files) {
 }
 
 // What the matcher needs to know about a title, in the desktop's item shape.
-const asItem = row => ({ id: row.id, kind: row.kind, group: row.year ? `${row.group_title} (${row.year})` : row.group_title, groupId: row.group_id, path: row.path, season: row.season });
+const asItem = row => ({ id: row.id, kind: row.kind, group: row.group_title, year: row.year, groupId: row.group_id, path: row.path, season: row.season });
 const keyOf = item => item.kind === 'show' ? item.groupId || item.group : item.id;
 
 function createTmdb(db, { fetchImpl = fetch, env = loadEnv([path.join(config.dataDir, '.env'), path.join(__dirname, '../../../apps/server/.env'), path.join(__dirname, '../../../.env')]) } = {}) {
   const auth = vendor && vendor.credentials(env);
-  const rows = db.prepare('SELECT id, kind, group_id, group_title, year, path, season FROM items');
+  const rows = db.prepare('SELECT id, kind, group_id, group_title, year, path, season FROM active_items');
   const items = () => rows.all().map(asItem);
   function matchingItems(key) {
     const matching = items().filter(item => keyOf(item) === key);
