@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { palettes } from '../palette';
 import * as Notifications from 'expo-notifications';
 import { registerMovieRequestDevice, ServerError, testMovieRequestAlert, unregisterMovieRequestDevice } from './server';
 
@@ -10,7 +11,9 @@ export const requestAlertKind = 'matro.movie-request';
 export async function forgetMovieRequestAlerts(base: string, unregister = false) {
   const key = storageKey(base);
   if (unregister && await AsyncStorage.getItem(key)) {
-    await unregisterMovieRequestDevice(base).catch(() => {});
+    // The saved id does not say which kind of account registered it, so try both routes.
+    await unregisterMovieRequestDevice(base, true).catch(() => {});
+    await unregisterMovieRequestDevice(base, false).catch(() => {});
   }
   await AsyncStorage.removeItem(key);
 }
@@ -21,7 +24,7 @@ async function deviceToken() {
   return token.data;
 }
 
-export function useMovieRequestAlerts(base: string, available: boolean) {
+export function useMovieRequestAlerts(base: string, available: boolean, owner: boolean) {
   const supported = available && Platform.OS === 'android';
   const [enabled, setEnabled] = useState(false), [ready, setReady] = useState(false), [opened, setOpened] = useState(0);
   const registration = useRef<string | null>(null);
@@ -35,7 +38,7 @@ export function useMovieRequestAlerts(base: string, available: boolean) {
   }
 
   async function register(token: string) {
-    const result = await registerMovieRequestDevice(base, token);
+    const result = await registerMovieRequestDevice(base, token, owner);
     await AsyncStorage.setItem(storageKey(base), result.registration);
     registration.current = result.registration;
     setEnabled(true);
@@ -86,22 +89,22 @@ export function useMovieRequestAlerts(base: string, available: boolean) {
     supported, ready, enabled, opened,
     enable: () => update(async () => {
       await Notifications.setNotificationChannelAsync('movie-requests', {
-        name: 'Movie requests', importance: Notifications.AndroidImportance.HIGH, lightColor: '#ece9e4', sound: 'default',
+        name: 'Requests', importance: Notifications.AndroidImportance.HIGH, lightColor: palettes.dark.text, sound: 'default',
       });
       const current = await Notifications.getPermissionsAsync();
       if (!current.granted && (!current.canAskAgain || !(await Notifications.requestPermissionsAsync()).granted)) {
-        throw new Error('Allow Matro notifications in Android settings to receive movie request alerts.');
+        throw new Error('Allow Matro notifications in Android settings to receive request alerts.');
       }
       await register(await deviceToken());
     }),
     disable: () => update(async () => {
-      await unregisterMovieRequestDevice(base);
+      await unregisterMovieRequestDevice(base, owner);
       await forgetMovieRequestAlerts(base);
       registration.current = null;
       setEnabled(false);
     }),
     test: async () => {
-      try { await testMovieRequestAlert(base); }
+      try { await testMovieRequestAlert(base, owner); }
       catch (error) {
         if (error instanceof ServerError && error.status === 409) {
           await forgetMovieRequestAlerts(base);
