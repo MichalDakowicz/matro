@@ -315,12 +315,12 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     choices.current.quality = id; setQualityValue(id); void saveQuality(id); void load(at.current);
   };
   const setSubtitleSize = (value: number) => { choices.current.size = value; setSubtitleSizeValue(value); remember({ size: value }); };
-  const changeSpeed = () => { const values = [.75, 1, 1.25, 1.5, 2], next = values[(values.indexOf(rateRef.current) + 1) % values.length]; rateRef.current = next; player.playbackRate = next; setRate(next); };
+  const setSpeed = (next: number) => { rateRef.current = next; player.playbackRate = next; setRate(next); };
   const setPreference = (patch: Partial<Preferences>) => {
     settingsRef.current = { ...settingsRef.current, ...patch };
     setSettings(settingsRef.current);
     if (!offlineRef.current) void updateWatchOptions(base, dataRef.current.user, { preferences: patch }).catch(() => {});
   };
   const applyMarkers = (next: typeof markers) => { markersRef.current = next; setMarkers(next); };
-  return { player, info, diagnostics, markers, applyMarkers, settings, setPreference, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, audioDelay, subtitleSize, rate, quality, qualities: savedCopy ? [] : qualityOptions(info?.video), chooseQuality, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setAudioDelay, setSubtitleSize, changeSpeed, allowPiP, autoPiP, pictureInPicture, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
+  return { player, info, diagnostics, markers, applyMarkers, settings, setPreference, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, audioDelay, subtitleSize, rate, quality, qualities: savedCopy ? [] : qualityOptions(info?.video), chooseQuality, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setAudioDelay, setSubtitleSize, setSpeed, allowPiP, autoPiP, pictureInPicture, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
 }

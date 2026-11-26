@@ -92,3 +92,20 @@ export const resolveScheme = (choice: ThemeChoice, system: string | null | undef
 
 /** The tree remounts to re-theme, but never while the player is up: a System flip (scheduled dark mode) waits until it closes. */
 export const needsRemount = (shown: Scheme, wanted: Scheme, playerUp: boolean) => shown !== wanted && !playerUp;
+
+export const playerChrome = {
+  video: overArt.black,
+  scrim: '#0005',
+  fadeStart: '#000c',
+  fadeEnd: '#000e',
+  // Translucent glass: Matro's #1a1a1c at about 80 %. React Native has no backdrop blur without a native module.
+  glass: '#1a1a1ccc',
+  glassLine: dark.hairline,
+  line: '#ffffff24',
+  fill: '#ffffff0e',
+  fillOn: '#ffffff1f',
+  track: '#ffffff24',
+  buffer: '#ffffff40',
+  tick: '#ffffffb0',
+  dimTime: '#ffffff4d',
+} as const;
