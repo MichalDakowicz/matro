@@ -653,7 +653,7 @@ function setupReel() {
   el.addEventListener('pointerleave', () => { if (reel.hover && !reel.drag) { reel.hover = null; updateReel(); } });
 }
 window.addEventListener('resize', () => { if (view === 'library') updateReel(); });
-const openTitlePage = site => { const m = selected && meta(selected); if (m) void api.openTitlePage({ site, type: m.type, tmdbId: m.tmdbId, imdbId: m.imdbId }); };
+const openTitlePage = site => { const m = selected && meta(selected); if (m) void api.openTitlePage({ site, type: m.type || (selected.kind === 'show' ? 'tv' : 'movie'), tmdbId: m.tmdbId, imdbId: m.imdbId }); };
 // Opening and closing a title hands focus to the Back button or the card so the keyboard keeps its place, without the
 // focus ring: nobody pointed at it, so it only looks like a stray selection. Tab still shows the ring as usual.
 function restoreFocus(element) { element?.focus({ preventScroll: true, focusVisible: false }); }
@@ -676,7 +676,7 @@ function detail(id, focus = true) {
       ${m?.rating ? `<div class="ratings"><div><p class="rating-label">TMDB</p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}</div>
     <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
       ${castPanel(m)}${productionPanel(m)}${filePanel(selected, m)}</div></div>`;
-  $('#title-links').hidden = !m; $('#imdb-link').hidden = !m?.imdbId;
+  $('#title-links').hidden = !m?.tmdbId; $('#imdb-link').hidden = !m?.imdbId;
   document.querySelectorAll('.detail').forEach(old => old.remove()); root.append(overlay); applyStyles(overlay);
   if (focus) restoreFocus($('.dock-back'));
 }

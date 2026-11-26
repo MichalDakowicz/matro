@@ -170,6 +170,123 @@ test('viewers see the catalog with no server paths', async () => {
   assert.equal(head.items[0].path.startsWith(mediaDir), true);
 });
 
+test('library scans publish local art and NFO details with TMDB disabled', async t => {
+  const isolated = path.join(root, 'local-artwork'), media = path.join(isolated, 'Films');
+  const source = path.join(media, 'Finished Film (2025)');
+  fs.mkdirSync(source, { recursive: true });
+  fs.writeFileSync(path.join(source, 'Finished Film (2025).mp4'), 'a catalog fixture');
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+  fs.writeFileSync(path.join(source, 'poster.jpg'), jpeg);
+  fs.writeFileSync(path.join(source, 'fanart.jpg'), jpeg);
+  const nfo = path.join(source, 'movie.nfo');
+  fs.writeFileSync(nfo, '<movie><title>My Film</title><year>2025</year><plot>A &amp; B</plot><tmdbid>412</tmdbid></movie>');
+  const { app, library, db, server } = createApp({ dataDir: path.join(isolated, 'data'), tmdb: {
+    env: { MATRO_METADATA: 'off' }, fetchImpl: () => assert.fail('TMDB must stay off'),
+  } });
+  t.after(() => { app.downloads.close(); app.scanner.close(); server.close(); db.close(); });
+  const { id } = await library.addFolder(media);
+  const item = db.prepare('SELECT id FROM active_items').get();
+  let meta = app.tmdb.snapshot()[item.id];
+  assert.equal(meta.title, 'My Film');
+  assert.equal(meta.overview, 'A & B');
+  assert.equal(meta.year, '2025');
+  assert.equal(meta.tmdbId, 412);
+  assert.match(meta.poster, /^artwork\/local-[0-9a-f]{64}\.jpg$/);
+  assert.equal(meta.backdrop, meta.poster);
+  assert.deepEqual(fs.readFileSync(app.tmdb.artworkFile(path.basename(meta.poster))), jpeg);
+  const revision = library.state.revision;
+  fs.writeFileSync(nfo, '<movie><title>Renamed Film</title></movie>');
+  await library.rescan(id);
+  assert.notEqual(library.state.revision, revision);
+  meta = app.tmdb.snapshot()[item.id];
+  assert.equal(meta.title, 'Renamed Film');
+  assert.equal(meta.tmdbId, undefined);
+});
+
+// Wraps the shared metadata store so a test can hold, or just watch, each local read.
+function watchLocalReads(t, { hold } = {}) {
+  const vendor = require('../../../packages/core/desktop/metadata.cjs'), create = vendor.createMetadata, reads = [];
+  vendor.createMetadata = options => {
+    const meta = create(options), read = meta.syncLocal;
+    meta.syncLocal = async (items, all) => { reads.push({ paths: items.map(item => item.path), all: !!all }); await hold?.(); return read(items, all); };
+    return meta;
+  };
+  t.after(() => { vendor.createMetadata = create; });
+  return reads;
+}
+const waitFor = async check => { for (let i = 0; i < 100 && !check(); i++) await new Promise(resolve => setTimeout(resolve, 20)); assert.ok(check()); };
+const filmIn = (media, name, poster) => {
+  const folder = path.join(media, name);
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, name + '.mp4'), 'a catalog fixture');
+  fs.writeFileSync(path.join(folder, 'poster.jpg'), poster);
+  return folder;
+};
+
+test('the first library load answers at once and the revision changes when local art is read', async t => {
+  const isolated = path.join(root, 'first-load'), media = path.join(isolated, 'Films'), data = path.join(isolated, 'data');
+  filmIn(media, 'Slow Film (2025)', Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+  const env = { MATRO_METADATA: 'off' };
+  const seeded = createApp({ dataDir: data, tmdb: { env } });
+  await seeded.library.addFolder(media);
+  seeded.server.close(); seeded.db.close();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  watchLocalReads(t, { hold: () => gate });
+  const restarted = createApp({ dataDir: data, tmdb: { env } }), { server, library, db } = restarted;
+  t.after(() => { release(); restarted.app.downloads.close(); restarted.app.scanner.close(); server.close(); db.close(); });
+  await restarted.app.createUser('head', 'correct horse', 'admin');
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}`, headers = { 'x-matro': '1', 'content-type': 'application/json' };
+  const login = await fetch(url + '/api/login', { method: 'POST', headers, body: JSON.stringify({ username: 'head', password: 'correct horse' }) });
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  const load = () => fetch(url + '/api/library', { headers: { ...headers, cookie }, signal: AbortSignal.timeout(2000) }).then(res => res.json());
+  const first = await load();
+  assert.equal(first.items.length, 1);
+  assert.deepEqual(first.metadata, {});
+  release();
+  await waitFor(() => library.state.revision !== first.catalogRevision);
+  const next = await load();
+  assert.notEqual(next.catalogRevision, first.catalogRevision);
+  assert.match(Object.values(next.metadata)[0].poster, /^artwork\/local-[0-9a-f]{64}\.jpg$/);
+});
+
+test('a folder scan reads only that folder and drops copies of art that changed', async t => {
+  const isolated = path.join(root, 'scoped-scan'), media = path.join(isolated, 'Films'), other = path.join(isolated, 'More');
+  const jpeg = tail => Buffer.from([0xff, 0xd8, 0xff, tail, 0xd9]);
+  const aFolder = filmIn(media, 'Film A (2020)', jpeg(1));
+  filmIn(other, 'Film B (2021)', jpeg(2));
+  const reads = watchLocalReads(t);
+  const { app: scoped, library, db, server } = createApp({ dataDir: path.join(isolated, 'data'), tmdb: { env: { MATRO_METADATA: 'off' } } });
+  t.after(() => { scoped.downloads.close(); scoped.scanner.close(); server.close(); db.close(); });
+  const a = await library.addFolder(media), b = await library.addFolder(other);
+  const idOf = title => db.prepare('SELECT id FROM active_items WHERE title LIKE ?').get(title + '%').id;
+  const posters = () => ({ a: scoped.tmdb.snapshot()[idOf('Film A')]?.poster, b: scoped.tmdb.snapshot()[idOf('Film B')]?.poster });
+  const before = posters();
+  assert.ok(before.a && before.b);
+  reads.length = 0;
+  fs.writeFileSync(path.join(aFolder, 'poster.jpg'), jpeg(3));
+  await library.rescan(a.id);
+  assert.equal(reads.length, 1);
+  assert.deepEqual(reads[0].paths, [path.join(aFolder, 'Film A (2020).mp4')]);
+  assert.equal(reads[0].all, true);
+  const after = posters();
+  assert.notEqual(after.a, before.a);
+  assert.equal(after.b, before.b);
+  const artwork = path.join(isolated, 'data', 'tmdb', 'artwork');
+  assert.equal(fs.existsSync(path.join(artwork, path.basename(before.a))), false);
+  assert.equal(fs.existsSync(path.join(artwork, path.basename(after.a))), true);
+  assert.equal(fs.existsSync(path.join(artwork, path.basename(before.b))), true);
+  // Dropping a folder removes its local data without reading the other folders.
+  reads.length = 0;
+  library.removeFolder(b.id);
+  await scoped.tmdb.refreshLocal(b.id);
+  assert.deepEqual(reads.map(read => read.paths), [[]]);
+  assert.equal(scoped.tmdb.snapshot()[idOf('Film A')].poster, after.a);
+  assert.equal(Object.keys(scoped.tmdb.snapshot()).length, 1);
+  assert.equal(fs.existsSync(path.join(artwork, path.basename(before.b))), false);
+});
+
 test('TMDB metadata is matched on the server and artwork is served to signed-in viewers', async () => {
   const { groups } = await catalog('sam');
   const film = groups[0][0], show = groups[1][0];

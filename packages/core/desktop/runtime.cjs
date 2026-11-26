@@ -58,6 +58,12 @@ async function downloadArtwork(items) {
   const cached = metadata.snapshot();
   return items.map((item, index) => ({ ...item, banner: cached[titles[index].id]?.backdrop || cached[titles[index].id]?.poster || null }));
 }
+async function refreshMetadata() {
+  if (!metadata) return;
+  const items = state.items;
+  await metadata.syncLocal(items.filter(item => !remote.isRemote(item.path))).catch(() => {});
+  await metadata.sync(items);
+}
 async function importFiles(files) {
   for (const file of files) {
     if (typeof file !== 'string' || !extensions.has(path.extname(file).slice(1).toLowerCase())) continue;
@@ -65,7 +71,7 @@ async function importFiles(files) {
     const item = describe(path.resolve(file));
     if (!state.items.some(i => i.id === item.id)) state.items.push(item);
   }
-  await persist(); scanner?.invalidate(); void metadata?.sync(state.items); return state;
+  await persist(); scanner?.invalidate(); void refreshMetadata(); return state;
 }
 // "Open with Matro": files named on the command line at launch, or by a second launch while Matro runs.
 // The renderer is pinged and takes the file when it is ready; the latest request wins.
@@ -129,7 +135,7 @@ async function scanFolders(roots) {
   }
   state.items = regroup([...new Map(state.items.map(item => [item.id, item])).values()]);
   state.libraryVersion = 2;
-  await persist(); scanner?.invalidate(); void metadata?.sync(state.items); return { ...state, warnings: results.filter(r => r.error).map(r => `${r.root}: ${r.error}`) };
+  await persist(); scanner?.invalidate(); void refreshMetadata(); return { ...state, warnings: results.filter(r => r.error).map(r => `${r.root}: ${r.error}`) };
 }
 async function importCompletedShow(job, config) {
   const localPath = file => destinationFile(downloadFiles, job.target, config, file);
@@ -166,7 +172,7 @@ app.whenReady().then(async () => {
     onComplete: async (job, config) => {
       if (job.release.kind === 'show') await importCompletedShow(job, config);
       else await upgrades.completed(job, config);
-      scanner?.invalidate(); void metadata?.sync(state.items); publishDownloads();
+      scanner?.invalidate(); void refreshMetadata(); publishDownloads();
     },
     checkPaths: createPathChecker(downloadFiles)
   });
@@ -260,7 +266,7 @@ app.whenReady().then(async () => {
     });
     return downloadArtwork(items);
   });
-  handle('library:load', async () => { await metadata.loaded; return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
+  handle('library:load', async () => { await metadata.loaded; void refreshMetadata(); return { ...state, scanner: scanner.snapshot(), metadata: metadata.snapshot(), metadataEnabled: metadata.enabled }; });
   handle('library:ssh', async options => {
     const root = remote.register(options);
     const wasSaved = state.folders.includes(root);
@@ -270,14 +276,14 @@ app.whenReady().then(async () => {
       state.sshConnections ||= [];
       if (!state.sshConnections.some(config => remote.register(config) === root)) state.sshConnections.push({ ...remote.configs.get(root), root });
       state.items = regroup(state.items.filter(item => item.root !== root).concat(items));
-      await persist(); scanner.invalidate(); void metadata.sync(state.items);
+      await persist(); scanner.invalidate(); void refreshMetadata();
       return state;
     } catch (error) {
       if (!wasSaved) remote.remove(root);
       throw new Error(`Could not read SSH media: ${error.message}. Check that SSH key login works in your terminal and Python 3 is installed on the server.`);
     }
   });
-  handle('library:folder', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (result.canceled) return state; const root = result.filePaths[0]; const items = await scanLibraryFolder(root); if (!state.folders.includes(root)) state.folders.push(root); const existing = new Map(state.items.map(i => [i.id, i])); for (const item of items) existing.set(item.id, item); state.items = regroup([...existing.values()]); await persist(); scanner.invalidate(); void metadata.sync(state.items); return state; });
+  handle('library:folder', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] }); if (result.canceled) return state; const root = result.filePaths[0]; const items = await scanLibraryFolder(root); if (!state.folders.includes(root)) state.folders.push(root); const existing = new Map(state.items.map(i => [i.id, i])); for (const item of items) existing.set(item.id, item); state.items = regroup([...existing.values()]); await persist(); scanner.invalidate(); void refreshMetadata(); return state; });
   handle('library:files', async () => { const result = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Media', extensions: [...extensions] }, { name: 'All files', extensions: ['*'] }] }); return result.canceled ? state : importFiles(result.filePaths); });
   handle('library:take-open', takeOpen);
   handle('library:import', files => { if (!Array.isArray(files) || files.length > 5000) throw new Error('Invalid file selection'); return importFiles(files); });
@@ -317,7 +323,7 @@ app.whenReady().then(async () => {
     if (!win.isDestroyed()) win.webContents.send('library:metadata', snapshot);
     return snapshot;
   });
-  handle('library:remove-folder', async root => { state.folders = state.folders.filter(f => f !== root); state.items = state.items.filter(i => i.root !== root); state.sshConnections = (state.sshConnections || []).filter(config => remote.register(config) !== root); remote.remove(root); await persist(); scanner.invalidate(); return state; });
+  handle('library:remove-folder', async root => { state.folders = state.folders.filter(f => f !== root); state.items = state.items.filter(i => i.root !== root); state.sshConnections = (state.sshConnections || []).filter(config => remote.register(config) !== root); remote.remove(root); await persist(); scanner.invalidate(); void refreshMetadata(); return state; });
   handle('library:save', async data => {
     const ids = new Set(state.items.map(i => i.id));
     if (data.progress && typeof data.progress === 'object') for (const [id, value] of Object.entries(data.progress)) if (ids.has(id) && value && Number.isFinite(value.position) && Number.isFinite(value.duration) && !(Number.isFinite(value.updated) && value.updated < (state.progress[id]?.updated || 0))) state.progress[id] = { position: Math.max(0, value.position), duration: Math.max(0, value.duration), updated: Number.isFinite(value.updated) ? value.updated : Date.now(), completed: !!value.completed, hidden: !!value.hidden };
@@ -404,7 +410,7 @@ app.whenReady().then(async () => {
   await win.loadURL('matro://app/');
   torrents.start();
   scanner.refresh();
-  void metadata.sync(state.items);
+  void refreshMetadata();
 });
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => { updateRequest?.abort(); torrents?.close(); streams?.close(); previews.close(); scanner?.close(); remote.close(); });

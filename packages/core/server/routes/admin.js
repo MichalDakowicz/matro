@@ -27,7 +27,7 @@ async function uploadParent(parts) {
 }
 
 function register(app) {
-  const { router, db, library, auth } = app;
+  const { router, db, library, auth, tmdb } = app;
   const q = {
     users: db.prepare(`SELECT u.id, u.username, u.role, u.created, (SELECT updated FROM user_state WHERE user_id = u.id) AS lastWatched,
       (SELECT COUNT(*) FROM subtitles WHERE user_id = u.id) AS subtitles FROM users u ORDER BY u.role, u.username`),
@@ -58,7 +58,11 @@ function register(app) {
 
   router.add('GET', '/api/admin/folders', { auth: 'admin' }, () => ({ folders: library.folders(), scanning: library.state.scanning, mediaDir: config.mediaDir }));
   router.add('POST', '/api/admin/folders', { auth: 'admin' }, async ctx => library.addFolder((await readJson(ctx.req)).path));
-  router.add('DELETE', '/api/admin/folders/:id', { auth: 'admin' }, ctx => { library.removeFolder(Number(ctx.params.id)); });
+  router.add('DELETE', '/api/admin/folders/:id', { auth: 'admin' }, async ctx => {
+    const id = Number(ctx.params.id);
+    library.removeFolder(id);
+    await tmdb.refreshLocal(id).catch(() => {});
+  });
   router.add('POST', '/api/admin/rescan', { auth: 'admin' }, async () => library.rescanAll());
 
   // Fixing a wrong TMDB match from the title page (the desktop's "Fix match").

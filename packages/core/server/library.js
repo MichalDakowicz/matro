@@ -24,7 +24,7 @@ async function sourceStat(file) {
 }
 
 // `autoProbe: false` is for one-shot tools such as the CLI, which should exit instead of probing every file.
-function createLibrary(db, { autoProbe = true, excludedFiles, onChange, probeFile = probe } = {}) {
+function createLibrary(db, { autoProbe = true, excludedFiles, onChange, onScan, probeFile = probe } = {}) {
   const q = {
     folders: db.prepare('SELECT id, path, added, (SELECT COUNT(*) FROM active_items WHERE folder_id = f.id) AS items FROM active_folders f ORDER BY path'),
     roots: db.prepare('SELECT id, path, canonical_path FROM active_folders ORDER BY length(path), path'),
@@ -95,7 +95,8 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, probeFil
       }
       if (!error) for (const id of known) { q.dropItem.run(id); catalogChanged = true; }
     });
-    if (catalogChanged) changed();
+    const metadataChanged = !error && await onScan?.(folderId).catch(() => false);
+    if (catalogChanged || metadataChanged) changed();
     if (autoProbe) probeSoon();
     if (error) return { folder: folder.path, ok: false, error, items: q.existing.all(folderId).length, removed: 0 };
     return { folder: folder.path, ok: true, items: live.length, removed: known.size };
@@ -229,7 +230,7 @@ function createLibrary(db, { autoProbe = true, excludedFiles, onChange, probeFil
       if (probeAgain) { probeAgain = false; probeSoon(); }
     });
   }
-  return { folders: () => q.folders.all(), addFolder, removeFolder, rescan, rescanAll, item: id => q.item.get(id), info, probeSoon, state,
+  return { changed, folders: () => q.folders.all(), addFolder, removeFolder, rescan, rescanAll, item: id => q.item.get(id), info, probeSoon, state,
     byPath: p => { const folder = q.byPath.get(p); return folder?.removed === 0 ? folder : undefined; }, coveringFolder };
 }
 module.exports = { createLibrary };

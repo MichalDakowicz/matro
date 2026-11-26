@@ -65,6 +65,51 @@ test('a failed browser logout survives reload and a replacement account gets a f
   }
 });
 
+test('receiver shows local title, artwork and plot without TMDB', async () => {
+  const f = await fixtures(), root = await fs.mkdtemp(path.join(f.dir, 'local-art-'));
+  const media = path.join(root, 'Movies', 'Home Film');
+  await fs.mkdir(media, { recursive: true });
+  await fs.copyFile(f.mkv, path.join(media, 'Home Film.mkv'));
+  const poster = path.join(media, 'poster.jpg');
+  await run(ffmpeg, ['-y', '-i', f.mkv, '-frames:v', '1', poster]);
+  await fs.copyFile(poster, path.join(media, 'fanart.jpg'));
+  const nfo = path.join(media, 'movie.nfo');
+  await fs.writeFile(nfo, '<movie><title>Family Film</title><year>2024</year><plot>A local synopsis.</plot></movie>');
+  const { app, server, db, library } = createApp({ dataDir: path.join(root, 'data'), tmdb: { env: { MATRO_METADATA: 'off' } } });
+  let browser;
+  try {
+    await app.createUser('head', 'local-art-test-pass', 'admin');
+    await library.addFolder(path.dirname(media));
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const env = { ...process.env, MATRO_USER_DATA: path.join(root, 'profile'), MATRO_WEB_URL: `http://127.0.0.1:${server.address().port}` };
+    delete env.ELECTRON_RUN_AS_NODE;
+    browser = await electron.launch({ args: [path.resolve(__dirname, 'web-host.cjs')], env });
+    const page = await browser.firstWindow();
+    await browser.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].show(); });
+    await page.getByRole('textbox', { name: 'Username', exact: true }).fill('head');
+    await page.getByLabel('Password', { exact: true }).fill('local-art-test-pass');
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await page.locator('.dock [data-tab="movie"]').click();
+    await page.evaluate(() => window.matroTheme.set('dark'));
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const card = page.getByRole('button', { name: /^Open Family Film/ });
+    await expect.poll(() => card.locator('img').evaluate(img => img.naturalWidth)).toBeGreaterThan(0);
+    await card.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('heading', { name: 'Family Film' })).toBeVisible();
+    await expect(page.getByText('A local synopsis.')).toBeVisible();
+    const backdrop = page.locator('.detail-hero img');
+    await expect.poll(() => backdrop.evaluate(img => img.naturalWidth)).toBeGreaterThan(0);
+    await page.evaluate(() => window.matroTheme.set('light'));
+    await page.setViewportSize({ width: 390, height: 800 });
+    await expect(page.getByRole('heading', { name: 'Family Film' })).toBeVisible();
+  } finally {
+    await browser?.close();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+  }
+});
+
 test('viewers request a movie and the owner searches for a release without starting a transfer', async () => {
   const root = await fs.mkdtemp(path.join(require('node:os').tmpdir(), 'matro-request-ui-'));
   const queries = [], hash = 'a'.repeat(40);
