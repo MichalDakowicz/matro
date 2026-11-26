@@ -88,6 +88,37 @@ test('desktop update checks require opt-in and remember the setting across launc
   }
 });
 
+test('desktop picture-in-picture keeps playback and watch progress on the same video', async ({}, testInfo) => {
+  const f = await fixtures(), profile = testInfo.outputPath('profile'), item = describe(f.mkv);
+  await fs.mkdir(profile, { recursive: true });
+  await fs.writeFile(path.join(profile, 'library.json'), JSON.stringify({ libraryVersion: 2, items: [item], folders: [] }));
+  const app = await electron.launch(launchOptions(profile));
+  try {
+    const page = await app.firstWindow();
+    const pip = page.getByRole('button', { name: 'Picture-in-picture', exact: true }), video = page.locator('video');
+    await page.getByRole('button', { name: 'Open Northbound', exact: true }).click();
+    await page.getByRole('button', { name: 'Play now', exact: true }).click();
+    const supported = await page.evaluate(() => document.pictureInPictureEnabled && typeof HTMLVideoElement.prototype.requestPictureInPicture === 'function');
+    if (!supported) { await expect(pip).toBeHidden(); return; }
+    await expect(pip).toBeVisible();
+    const inPictureInPicture = () => video.evaluate(v => document.pictureInPictureElement === v);
+    const saved = () => page.evaluate(async id => (await window.matro.load()).progress[id]?.position || 0, item.id);
+    const before = await saved();
+    await pip.press('Enter');
+    await expect.poll(inPictureInPicture).toBe(true);
+    await expect(pip).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(saved, { timeout: 9000 }).toBeGreaterThan(before + 1);
+    await pip.press('Enter');
+    await expect.poll(inPictureInPicture).toBe(false);
+    await expect(pip).toHaveAttribute('aria-pressed', 'false');
+    expect(await video.evaluate(v => v.currentTime)).toBeGreaterThan(before + 1);
+    await pip.click();
+    await expect.poll(inPictureInPicture).toBe(true);
+    await page.getByRole('button', { name: 'Back to library (Esc)' }).click();
+    await expect(video).toHaveCount(0);
+    expect(await page.evaluate(() => document.pictureInPictureElement)).toBeNull();
+  } finally { await app.close(); }
+});
 test('the selected movie metadata language updates the grid title and poster', async ({}, testInfo) => {
   test.skip(!!process.env.MATRO_EXECUTABLE, 'Packaged builds do not accept fixture TMDB endpoints');
   const profile = testInfo.outputPath('profile');

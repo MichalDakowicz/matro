@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 import { useVideoPlayer } from 'expo-video';
 import { inspect, mediaHeaders, playbackPath, playbackState, request, saveProgress, stopPlayback, updateWatchOptions, type Info, type Item, type Library, type Progress, type Track, type TrackPreference } from '../lib/server';
@@ -6,12 +6,13 @@ import { initialTracks, subtitleTracks, titleKey, trackKey } from '../../../../p
 import { isContinueDismissed, reachedCompletion, reachedPlaybackEnd } from '../../../../packages/core/client/watch-progress.js';
 import { parseVtt, type Cue } from '../../../../packages/core/client/subtitles';
 import { downloadPlayback } from './diskBuffer';
+import { createPictureInPictureLifecycle } from './pictureInPicture';
 import { loadQuality, progressRecovery, recoveryScope, saveQuality } from '../lib/storage';
 import { qualityOptions } from '../../../../packages/core/client/quality.js';
 import { savedTitle, type SavedMedia } from '../lib/offline';
 import { describePlayback, savedPlayback } from '../../../../packages/core/client/playback-info.js';
 
-export function usePlayback({ base, data, item, initialPosition, saved, offline = false, onEnd }: { base: string; data: Library; item: Item; initialPosition?: number; saved?: SavedMedia; offline?: boolean; onEnd: () => void }) {
+export function usePlayback({ base, data, item, initialPosition, saved, offline = false, supportsPiP, onEnd }: { base: string; data: Library; item: Item; initialPosition?: number; saved?: SavedMedia; offline?: boolean; supportsPiP: boolean; onEnd: () => void }) {
   const initial = initialPosition ?? (data.progress[item.id]?.completed ? 0 : data.progress[item.id]?.position || 0);
   const pref = data.preferences.tracks?.[trackKey(item)];
   const [info, setInfo] = useState<Info | null>(null), [busy, setBusy] = useState(true), [error, setError] = useState(''), [position, setPosition] = useState(initial), [buffered, setBuffered] = useState(initial), [playing, setPlaying] = useState(false), [caption, setCaption] = useState('');
@@ -81,6 +82,13 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     prefChanges.current = {};
     if (!offline && Object.keys(changes).length) void updateWatchOptions(base, dataRef.current.user, { preferences: { tracks: { [trackKey(item)]: changes } } }).catch(() => {});
   }, [base, item, offline]);
+  const pictureInPicture = useMemo(() => createPictureInPictureLifecycle(
+    () => { void persist().catch(() => {}); },
+    () => { intent.current = false; player.pause(); },
+  ), [persist, player]);
+  const allowPiP = supportsPiP && !!info?.video;
+  const autoPiP = allowPiP && Number(Platform.Version) >= 31 && playing && !busy && !error;
+  const autoPiPRef = useRef(autoPiP); autoPiPRef.current = autoPiP;
   const remember = (patch: TrackPreference) => {
     const preferences = dataRef.current.preferences, key = trackKey(item);
     preferences.tracks = { ...preferences.tracks, [key]: { ...preferences.tracks?.[key], ...patch } };
@@ -132,7 +140,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
         if (!mounted.current || run !== generation.current) return;
         pendingStart.current = { time: start, since: Date.now() };
         player.currentTime = start; player.playbackRate = rateRef.current; replacing.current = false; sourceReady.current = true;
-        if (intent.current && AppState.currentState === 'active') player.play(); else { player.pause(); setBusy(false); }
+        if (intent.current && (AppState.currentState === 'active' || pictureInPicture.isFloating())) player.play(); else { player.pause(); setBusy(false); }
       });
       replacement.current = apply;
       await apply;
@@ -149,7 +157,7 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
         replacing.current = false; setBusy(false); setError(e instanceof Error ? e.message : 'Could not play this file.');
       }
     }
-  }, [base, item.id, player, savedCopy, session, trySavedCopy]);
+  }, [base, item.id, player, savedCopy, session, trySavedCopy, pictureInPicture]);
   const recover = useCallback(async () => {
     if (!mounted.current || !intent.current || recovering.current) return;
     recovering.current = true;
@@ -227,14 +235,14 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
     const checkpoint = setInterval(() => { if (sourceReady.current && player.playing) sample(player.currentTime); }, 1000);
     const status = player.addListener('statusChange', event => {
       setBusy(event.status === 'loading');
-      if (event.status === 'loading' && intent.current && AppState.currentState === 'active') reportActivity(true, true);
+      if (event.status === 'loading' && intent.current && (AppState.currentState === 'active' || pictureInPicture.isFloating())) reportActivity(true, true);
       if (event.status === 'readyToPlay') { setError(''); moved.current = Date.now(); }
       if (event.status === 'error' && !replacing.current) recover();
     });
     const playing = player.addListener('playingChange', event => {
       if (!event.isPlaying) playbackStart.current = null;
       setPlaying(event.isPlaying);
-      const active = AppState.currentState === 'active';
+      const active = AppState.currentState === 'active' || pictureInPicture.isFloating();
       const buffering = active && intent.current && !event.isPlaying && player.status === 'loading';
       reportActivity((active && event.isPlaying) || buffering, buffering);
     });
@@ -247,16 +255,16 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
       intent.current = false; at.current = duration || at.current; reportActivity(false);
       void persist().catch(() => {}).then(() => endRef.current());
     });
-    const appState = AppState.addEventListener('change', state => { if (state !== 'active') { intent.current = false; player.pause(); reportActivity(false); void persist().catch(() => {}); } });
-    const timer = setInterval(() => { if (AppState.currentState === 'active' && intent.current && (player.playing || player.status === 'loading') && Date.now() - moved.current > 25000) { moved.current = Date.now(); recover(); } }, 2000);
+    const appState = AppState.addEventListener('change', state => pictureInPicture.appState(state === 'active', autoPiPRef.current));
+    const timer = setInterval(() => { if ((AppState.currentState === 'active' || pictureInPicture.isFloating()) && intent.current && (player.playing || player.status === 'loading') && Date.now() - moved.current > 25000) { moved.current = Date.now(); recover(); } }, 2000);
     const heartbeat = setInterval(() => {
       const buffering = player.status === 'loading';
       // A paused player still holds its prepared stream, so it keeps renewing the lease.
-      if (AppState.currentState === 'active' && intent.current && (player.playing || buffering)) reportActivity(true, buffering);
+      if ((AppState.currentState === 'active' || pictureInPicture.isFloating()) && intent.current && (player.playing || buffering)) reportActivity(true, buffering);
       else reportActivity(false);
     }, 20000);
-    return () => { clearInterval(heartbeat); clearInterval(checkpoint); time.remove(); status.remove(); playing.remove(); end.remove(); appState.remove(); clearInterval(timer); };
-  }, [base, player, persist, recover, reportsActivity, session]);
+    return () => { clearInterval(heartbeat); clearInterval(checkpoint); time.remove(); status.remove(); playing.remove(); end.remove(); appState.remove(); pictureInPicture.dispose(); clearInterval(timer); };
+  }, [base, player, persist, recover, pictureInPicture, reportsActivity, session]);
   const seek = useCallback((value: number) => {
     const duration = infoRef.current?.duration || 0; if (!duration) return;
     playbackStart.current = null;
@@ -292,5 +300,5 @@ export function usePlayback({ base, data, item, initialPosition, saved, offline 
   };
   const setSubtitleSize = (value: number) => { choices.current.size = value; setSubtitleSizeValue(value); remember({ size: value }); };
   const changeSpeed = () => { const values = [.75, 1, 1.25, 1.5, 2], next = values[(values.indexOf(rateRef.current) + 1) % values.length]; rateRef.current = next; player.playbackRate = next; setRate(next); };
-  return { player, info, diagnostics, markers, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, audioDelay, subtitleSize, rate, quality, qualities: savedCopy ? [] : qualityOptions(info?.video), chooseQuality, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setAudioDelay, setSubtitleSize, changeSpeed, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
+  return { player, info, diagnostics, markers, busy, error, playing: replacing.current && !error ? intent.current : playing, position, buffered, caption, audio, subtitle, delay, audioDelay, subtitleSize, rate, quality, qualities: savedCopy ? [] : qualityOptions(info?.video), chooseQuality, persist, toggle, seek, chooseAudio, chooseSubtitle, setDelay, setAudioDelay, setSubtitleSize, changeSpeed, allowPiP, autoPiP, pictureInPicture, retry: () => { retries.current = 0; intent.current = true; if (infoRef.current) void load(at.current, true); else setError('Leave the player and try opening the file again.'); } };
 }

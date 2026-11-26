@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import { playbackPath } from '../../../../packages/core/client/server.ts';
 import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
 import * as watchProgress from '../../../../packages/core/client/watch-progress.js';
+import { createPictureInPictureLifecycle } from '../player/pictureInPicture.ts';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -32,7 +33,7 @@ function harness(t: any, directPlay = false, savedAtOpen = false, markers: { typ
   const localCopy = { uri: 'file:///saved.mp4', info, text: {} };
   let available = savedAtOpen, inspections = 0;
   const modules: Record<string, any> = {
-    react: { useCallback: (fn: Function) => fn, useEffect: (fn: any) => effects.push(fn), useRef: (current: any) => ({ current }), useState: (initial: any) => { const value = typeof initial === 'function' ? initial() : initial; const i = states.push(value) - 1; return [value, (next: any) => { states[i] = next; }]; } },
+    react: { useCallback: (fn: Function) => fn, useEffect: (fn: any) => effects.push(fn), useMemo: (fn: Function) => fn(), useRef: (current: any) => ({ current }), useState: (initial: any) => { const value = typeof initial === 'function' ? initial() : initial; const i = states.push(value) - 1; return [value, (next: any) => { states[i] = next; }]; } },
     'react-native': { AppState: app, Platform: { OS: 'android' } },
     'expo-video': { useVideoPlayer: () => player },
     '../lib/server': { inspect: async () => { inspections++; return info; }, mediaHeaders: async () => ({}), playbackPath, request: async () => ({ markers: data.markers }), saveProgress: async (_: any, __: any, entry: any) => saved.push(entry),
@@ -43,6 +44,7 @@ function harness(t: any, directPlay = false, savedAtOpen = false, markers: { typ
     '../../../../packages/core/client/playback-info.js': require('../../../../packages/core/client/playback-info.js'),
     '../../../../packages/core/client/subtitles': { parseVtt },
     './diskBuffer': { downloadPlayback: (_: any, __: any, ready: any) => { const job = { ready, cancelled: false }; downloads.push(job); return () => { job.cancelled = true; }; } },
+    './pictureInPicture': { createPictureInPictureLifecycle },
     '../lib/storage': { recoveryScope: () => 'test', progressRecovery: { write: async () => {} }, loadQuality: async () => 'original', saveQuality: async () => {} },
     '../lib/offline': { savedTitle: async () => available ? localCopy : undefined },
   };
@@ -171,4 +173,18 @@ test('a failed native replacement does not block a later seek', async t => {
   assert.equal(h.pending.length, 2);
   h.pending[1].resolve(); await flush();
   assert.equal(h.player.playing, true);
+});
+
+test('a floating player keeps recording progress after a background source change', async t => {
+  const h = harness(t); await flush();
+  h.pending[0].resolve(); await flush();
+  h.hook.pictureInPicture.started();
+  h.app.currentState = 'background'; h.emit('appState', 'background');
+  assert.equal(h.player.playing, true);
+  h.hook.seek(30); await flush();
+  h.pending[1].resolve(); await flush();
+  assert.equal(h.player.playing, true);
+  h.player.currentTime = .5; h.emit('timeUpdate');
+  h.hook.pictureInPicture.stopped(); await flush();
+  assert.equal(h.saved.at(-1).position, 30.5);
 });
