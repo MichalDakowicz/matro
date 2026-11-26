@@ -8,12 +8,21 @@ export function compareEpisodes(a, b) {
     || a.title.localeCompare(b.title, undefined, { numeric: true }) || a.id.localeCompare(b.id);
 }
 
+/** Season 0 is Specials; an item with no season counts as season 1. @param {Item} item */
+export const seasonOf = item => item.season ?? 1;
+
+/** @param {number} season */
+export const seasonLabel = season => season === 0 ? 'Specials' : `Season ${season}`;
+
+/** @param {Item[]} items */
+export const seasonNumbers = items => [...new Set(items.map(seasonOf))].sort((a, b) => a - b);
+
 /** @param {Item[]} items */
 export function groupTitles(items) {
   /** @type {Map<string, Item[]>} */
   const groups = new Map();
   for (const item of items) {
-    const key = item.kind === 'show' ? item.groupId || item.group : item.id;
+    const key = item.kind === 'show' ? item.groupId || item.group : item.editionGroup || item.id;
     const group = groups.get(key);
     if (group) group.push(item);
     else groups.set(key, [item]);
@@ -35,6 +44,15 @@ export function normalizeProgress(progress) {
     const updated = Number.isFinite(entry.updated) ? entry.updated : 0;
     return [id, { ...entry, completed: isCompleted(entry), updated }];
   }));
+}
+
+/** @param {string[]} previous @param {string[]} next */
+export function queueChange(previous, next) {
+  // Appending the reordered suffix leaves any items added by other devices alone.
+  let prefix = 0;
+  for (const id of previous) if (id === next[prefix]) prefix++;
+  const kept = new Set(next.slice(0, prefix));
+  return { add: next.slice(prefix), remove: previous.filter(id => !kept.has(id)) };
 }
 
 /** @param {Progress | undefined} entry */
@@ -96,5 +114,5 @@ export function resumeTarget(items, progress, fallback = items[0]) {
   const unfinished = items.filter(item => !isCompleted(progress[item.id])).sort(compareEpisodes);
   const partial = unfinished.filter(item => progress[item.id]?.position > 0)
     .sort((a, b) => (progress[b.id].updated || 0) - (progress[a.id].updated || 0) || compareEpisodes(a, b))[0];
-  return partial || unfinished[0] || fallback;
+  return partial || (fallback?.editionGroup ? fallback : unfinished[0] || fallback);
 }
