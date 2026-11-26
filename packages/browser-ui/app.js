@@ -1,8 +1,15 @@
+import { savedPlayback as savedDiagnostics } from '../core/client/playback-info.js';
+import { scanMessage } from '../core/client/scan-status.js';
+import { browseTitles } from '../core/client/library-browse.js';
+import { listChoices, titleShelves } from '../core/client/title-shelves.js';
 import icons from './icons.json' with { type: 'json' };
 import { createDownloadBrowser } from './downloads.js';
 import { bufferPlayback, releaseBuffer, supportsFullBuffer } from './playback-buffer.js';
 import { createRecovery } from './recovery.js';
-import { compareEpisodes, continueWatching, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, normalizeProgress, resumeTarget } from '../core/client/watch-progress.js';
+import { randomReelStart } from '../core/client/reel-start.js';
+import { compareEpisodes, continueWatching, dayLabel, dismissedProgress, groupTitles, isCompleted, isContinueDismissed, markedProgress, normalizeProgress, queueChange, reachedCompletion, reachedOutro, reachedPlaybackEnd, resumeTarget, seasonLabel, watchHistory } from '../core/client/watch-progress.js';
+import { initialTracks, LANGUAGES, SUBTITLE_MODES, trackDefaults } from '../core/client/track-preferences.js';
+import { createAutoSkip } from '../core/client/auto-skip.js';
 const api = window.matro;
 if (api?.chooseSource && !document.querySelector('.desktop-source-button')) {
   const button = document.createElement('button'); button.className = 'pill desktop-source-button'; button.textContent = 'Server'; button.setAttribute('aria-label', 'Playback source');
@@ -48,11 +55,13 @@ $('#ssh-form').addEventListener('submit', async event => {
   } catch (error) { status.textContent = error.message || String(error); }
   finally { button.disabled = false; }
 });
+const browseOptions = new Map();
 let tab = 'home', query = '', view = 'library', selected = null, folderFilter = null, statusFilter = 'all';
-let current = null, info = null, video = null, offset = 0, audio = null, subtitle = null, subtitleText = null, subtitleUrl = null, delay = 0;
+let current = null, info = null, video = null, offset = 0, audio = null, subtitle = null, subtitleText = null, subtitleUrl = null, delay = 0, audioDelay = 0;
 let queueOpen = false, sidePanel = null, generation = 0, lastSave = 0, idleTimer, toastTimer, subtitleGeneration = 0;
 let loading = false, playbackError = '', trackCues = [];
-let playIntent = true, streamId = null, pendingStream = null, playerEvents;
+let audioDelayTimer, playIntent = true, streamId = null, pendingStream = null, diagnostics = null, playerEvents;
+let sleepMode = 'off', sleepTimer, sleepDeadline = 0;
 let showPlaybackAdvanced = false, rewatchingShow = false, dismissedShow = false;
 let segmentStatus = '', markerDraft = null;
 let scannerSummary = null;
@@ -80,8 +89,11 @@ function languageName(code) {
 }
 const bitmapTrack = () => info?.subtitles.find(track => track.index === subtitle && track.bitmap);
 function trackHeading(track) {
-  const title = track.title && ![track.language, languageName(track.language)].some(value => value.toLowerCase() === track.title.toLowerCase()) ? track.title : '';
-  return `<span class="track-heading"><strong>${esc(languageName(track.language))}</strong>${title ? `<span class="track-title">${esc(title)}</span>` : ''}</span>`;
+  // A track with no language is numbered by its place in its list instead of reading "Unknown language".
+  const known = languageName(track.language), list = info.audio.includes(track) ? info.audio : info.subtitles;
+  const name = known === 'Unknown language' ? `Track ${list.indexOf(track) + 1}` : known;
+  const title = track.title && ![track.language, known, name].some(value => value.toLowerCase() === track.title.toLowerCase()) ? track.title : '';
+  return `<span class="track-heading"><strong>${esc(name)}</strong>${title ? `<span class="track-title">${esc(title)}</span>` : ''}</span>`;
 }
 function hidePreview() { clearTimeout(previewTimer); previewVersion++; previewHovered = false; if ($('#seek-preview')) $('#seek-preview').hidden = true; }
 function hoverSeek(event) {
@@ -116,35 +128,59 @@ function hoverSeek(event) {
     if (version > previewShown && previewHovered && current?.id === id) show(frame);
   }, 50);
 }
-const finishMargin = duration => Math.min(10, duration * .05);
 function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 5000); }
 async function attempt(fn) { try { return await fn(); } catch (error) { toast(error.message || String(error)); return null; } }
-function save(options) {
-  if (!stateLoaded) return Promise.resolve();
+const pendingProgress = new Map();
+async function save(options) {
+  if (!stateLoaded) return;
+  if (api.savePreferences) {
+    if (!pendingProgress.size) return;
+    const progress = Object.fromEntries(pendingProgress);
+    recovery.persist(progress);
+    const result = await api.save({ progress }, options);
+    for (const [id, entry] of Object.entries(progress)) {
+      if (pendingProgress.get(id) === entry) pendingProgress.delete(id);
+      const confirmed = result?.progress?.[id];
+      if (!confirmed) continue;
+      recovery.confirm(id, entry, confirmed);
+      if (library.progress[id] === entry) library.progress[id] = normalizeProgress({ [id]: confirmed })[id];
+    }
+    return;
+  }
   for (const [id, entry] of Object.entries(library.progress)) recovery.write(id, entry);
   recovery.persist(library.progress);
   return api.save({ progress: library.progress, queue: library.queue, preferences: library.preferences, markers: library.markers || {} }, options);
+}
+const savePreferences = patch => api.savePreferences ? api.savePreferences(patch) : save();
+function saveQueue(previous) {
+  if (!api.changeQueue) return save();
+  const change = queueChange(previous, library.queue);
+  if (change.add.length || change.remove.length) return api.changeQueue(change);
 }
 const completed = id => isCompleted(library.progress[id]);
 const orderedEpisodes = item => library.items.filter(i => i.kind === 'show' && sameTitle(i, item)).sort(compareEpisodes);
 function statusLabel(id) { return completed(id) ? ' · Completed' : library.progress[id]?.position > 0 ? ' · In progress' : ''; }
 function trackChoice(t) { return t ? { language: t.language, title: t.title, codec: t.codec, channels: t.channels } : null; }
-function matchTrack(tracks, choice) {
-  if (!choice) return null;
-  const score = t => Number(t.title === choice.title) * 4 + Number(t.channels === choice.channels) * 2 + Number(t.codec === choice.codec);
-  return tracks.filter(t => t.language === choice.language).sort((a, b) => score(b) - score(a))[0] || null;
-}
-function rememberTracks() {
+function rememberTracks(changed) {
   library.preferences.tracks ||= {};
-  library.preferences.tracks[titleKey(current)] = { audio: trackChoice(info.audio.find(t => t.index === audio)), subtitle: trackChoice(info.subtitles.find(t => t.index === subtitle)), off: subtitle === null, delay };
+  const key = titleKey(current), fields = { audio: trackChoice(info.audio.find(t => t.index === audio)), subtitle: trackChoice(info.subtitles.find(t => t.index === subtitle)), off: subtitle === null, delay, audioDelay };
+  const patch = Object.fromEntries(changed.map(field => [field, fields[field]]));
+  library.preferences.tracks[key] = { ...library.preferences.tracks[key], ...patch };
   // A preloaded next episode used the old choice; prepare it again with this one.
-  discardPrepared(); void attempt(save);
+  discardPrepared(); void attempt(() => savePreferences({ tracks: { [key]: patch } }));
 }
 // Title metadata comes from TMDB when configured; everything falls back to file names.
 const metaKey = item => item.kind === 'show' ? titleKey(item) : item.id;
+const listKey = item => item.editionGroup || metaKey(item);
 const meta = item => metadata[metaKey(item)] || null;
 const displayName = item => meta(item)?.title || item.group;
-const episodeName = item => meta(item)?.episodes?.[item.season]?.[item.episode]?.name || item.title;
+// File names carry the show name and an S01E02 code; the row already shows both, so only the episode's own name is left.
+const plainEpisodeName = item => {
+  if (item.kind !== 'show' || item.prelude) return item.title;
+  const rest = item.title.replace(item.group ?? '', '').replace(/\bS\d{1,2}\s?E\d{1,3}\b/i, '').replace(/[._]+/g, ' ').replace(/^[\s\-–·:]+|[\s\-–·:]+$/g, '');
+  return rest || item.title;
+};
+const episodeName = item => meta(item)?.episodes?.[item.season]?.[item.episode]?.name || plainEpisodeName(item);
 const hash = text => { let h = 7; for (const c of String(text)) h = (h * 31 + c.codePointAt(0)) >>> 0; return h; };
 const artFor = item => `art v${hash(metaKey(item)) % 4}" data-hue="${hash(metaKey(item)) % 360}`;
 const searchText = items => `${items[0].group} ${meta(items[0])?.title || ''} ${(meta(items[0])?.people || []).join(' ')} ${items.map(i => i.title).join(' ')}`.toLowerCase();
@@ -159,27 +195,53 @@ async function markComplete(id) {
   const done = !completed(id);
   if (api.setCompleted) {
     const patch = normalizeProgress(await api.setCompleted(id, done, old));
-    if (patch[id].updated >= (library.progress[id]?.updated || 0)) applyProgress(patch);
+    if (!library.progress[id] || library.progress[id] === old) applyProgress(patch);
   } else {
     const hidden = item.kind === 'show' && (!!old.hidden || isContinueDismissed(orderedEpisodes(item), library.progress));
-    library.progress[id] = { ...old, completed: done, hidden, updated: Date.now() };
+    applyProgress({ [id]: { ...old, completed: done, hidden, updated: Date.now() } }, true);
     await save();
   }
   if (view === 'player') { renderQueue(); renderSegments(); }
   else { const selectedId = selected?.id; renderLibrary(); if (selectedId) detail(selectedId); }
 }
-function applyProgress(patch) {
+// Marks several episodes watched or unwatched. A server takes one batch request; standalone builds the same change and saves it once.
+async function markMany(list, done) {
+  const todo = list.filter(i => completed(i.id) !== done);
+  if (!todo.length) return;
+  const result = await api.setCompletedMany?.(todo.map(i => i.id), done);
+  if (result) {
+    const patch = normalizeProgress(result);
+    applyProgress(Object.fromEntries(Object.entries(patch).filter(([id, entry]) => entry.updated >= (library.progress[id]?.updated || 0))));
+  } else {
+    applyProgress(markedProgress(todo, library.progress, done, { episodesOf: orderedEpisodes }), true);
+    await save();
+  }
+  toast(todo.length === 1 ? (done ? 'Marked as watched.' : 'Marked as unwatched.') : `Marked ${todo.length} episodes ${done ? 'watched' : 'unwatched'}.`);
+  const selectedId = selected?.id; renderLibrary(); if (selectedId) detail(selectedId);
+}
+// The buttons beside a season, the whole show, or an episode: what they mark follows what the page shows.
+function markTargets(button) {
+  const items = selected ? orderedEpisodes(selected) : [];
+  if (button.dataset.markSeason) return items.filter(i => i.season === Number(button.dataset.markSeason));
+  if (button.dataset.markShow !== undefined) return items;
+  const at = items.findIndex(i => i.id === button.dataset.markBefore);
+  return items.slice(0, Math.max(0, at));
+}
+function applyProgress(patch, local = false) {
   Object.assign(library.progress, patch);
-  for (const [id, entry] of Object.entries(patch)) recovery.write(id, entry);
+  for (const [id, entry] of Object.entries(patch)) {
+    recovery.write(id, entry);
+    if (local && api.savePreferences) pendingProgress.set(id, entry);
+  }
   recovery.persist(patch);
 }
 async function removeContinue(id) {
   const item = library.items.find(i => i.id === id); if (!item) return;
   const siblings = item.kind === 'show' ? orderedEpisodes(item) : [item];
   const previous = { ...library.progress };
-  const resolved = api.dismissContinue ? normalizeProgress(await api.dismissContinue(id)) : {};
+  const resolved = api.dismissContinue ? normalizeProgress(await api.dismissContinue(id, previous)) : {};
   const patch = dismissedProgress(siblings, previous, library.progress, resolved);
-  applyProgress(patch);
+  applyProgress(patch, !api.dismissContinue);
   if (!api.dismissContinue) await save();
   if (view === 'library') rerender();
 }
@@ -204,15 +266,13 @@ function remember() {
   if (waitingForPlayback && (rewatchingShow || position === old.position)) return;
   // Paused seeks can save a new position without overriding a dismissal on the server.
   const hidden = waitingForPlayback ? (old.hidden || dismissedShow || undefined) : false;
-  // Reaching an outro (skipping it, or leaving during the credits) counts as watched, so Continue watching moves to the next episode.
-  // Only outros in the second half count, so a mis-detected early marker can't complete an episode.
-  const pastOutro = info.duration > 0 && (library.markers?.[current.id] || []).some(s => s.type === 'outro' && s.start > info.duration / 2 && position >= s.start);
-  const reachedEnd = !waitingForPlayback && (pastOutro || position >= info.duration - finishMargin(info.duration));
+  const reachedEnd = !waitingForPlayback && reachedCompletion(position, info.duration, library.markers?.[current.id]);
   const entry = { ...old, position, duration: info.duration, completed: (!rewatchingShow && !!old.completed) || (!hidden && reachedEnd), hidden, updated: Date.now() };
   rewatchingShow = false;
   const sameVisibility = current.kind === 'show' ? old.hidden === hidden : !!old.hidden === hidden;
-  if (old.position === position && old.duration === info.duration && old.completed === entry.completed && sameVisibility) entry.updated = old.updated;
+  if (old.position === position && old.duration === info.duration && old.completed === entry.completed && sameVisibility) return true;
   library.progress[current.id] = entry;
+  if (api.savePreferences) pendingProgress.set(current.id, entry);
   recovery.write(current.id, library.progress[current.id]);
   return true;
 }
@@ -221,6 +281,12 @@ function remember() {
 let saveTimer = null, settlePending = null;
 // A separate clock persists playback even when media events or control rendering stall.
 setInterval(() => { if (view === 'player' && video && !video.paused) checkpoint(); }, 1000);
+if (api.playbackHeartbeat) setInterval(() => {
+  if (view !== 'player' || !video) return;
+  const active = playIntent && !video.ended && !playbackError && (!video.paused || loading);
+  // A paused player still holds its prepared stream: renew it without counting as scanner activity.
+  void api.playbackHeartbeat(active ? { playing: true, buffering: loading } : { playing: false });
+}, 20000);
 function checkpoint(now = false) {
   if (!remember()) return;
   const wait = 1000 - (Date.now() - lastSave);
@@ -228,20 +294,18 @@ function checkpoint(now = false) {
   clearTimeout(saveTimer); saveTimer = null; void attempt(save); lastSave = Date.now();
 }
 function groups(kind) {
-  const map = new Map();
-  for (const item of library.items.filter(i => i.kind === kind && (!folderFilter || i.root === folderFilter))) {
-    const key = kind === 'show' ? titleKey(item) : item.id;
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(item);
-  }
   const words = tab === 'search' ? query.trim().toLowerCase() : '';
-  return [...map.values()].filter(items => searchText(items).includes(words));
+  return groupTitles(library.items.filter(i => i.kind === kind && (!folderFilter || i.root === folderFilter)))
+    .filter(items => searchText(items).includes(words));
 }
-const groupStatus = items => items.every(i => completed(i.id)) ? 'done' : items.some(i => completed(i.id) || library.progress[i.id]?.position > 0) ? 'progress' : 'new';
+const groupStatus = items => (items[0].editionGroup ? items.some(i => completed(i.id)) : items.every(i => completed(i.id))) ? 'done' : items.some(i => completed(i.id) || library.progress[i.id]?.position > 0) ? 'progress' : 'new';
 // A prelude is stored as episode 0 of the first season but is always labelled as the prelude.
 const code = item => item.prelude ? 'Prelude' : `S${item.season} E${item.episode}`;
-const itemMeta = item => item.kind === 'show' ? (item.prelude ? `Season ${item.season} · Prelude` : `Season ${item.season} · Episode ${item.episode}`) : item.kind === 'audio' ? `${item.format} · Audio` : `${item.format} · Movie`;
-const groupMeta = items => { const item = items[0], seasons = new Set(items.map(i => i.season)).size; return item.kind === 'show' ? `${seasons} ${seasons === 1 ? 'season' : 'seasons'} · ${items.length} episodes` : `${meta(item)?.year ? `${meta(item).year} · ` : ''}${itemMeta(item)}`; };
+const itemMeta = item => item.kind === 'show' ? (item.prelude ? `${seasonLabel(item.season)} · Prelude` : `${seasonLabel(item.season)} · Episode ${item.episode}`) : item.kind === 'audio' ? `${item.format} · Audio` : `${item.format} · Movie`;
+// Counts read "1 show", not "1 shows". Every list noun here ends in "s".
+const count = (n, noun) => `${n} ${n === 1 ? noun.slice(0, -1) : noun}`;
+// A movie's card says its year (the format is on the title page); a card for a movie with no year falls back to the format.
+const groupMeta = items => { const item = items[0], seasons = new Set(items.map(i => i.season)).size; return item.kind === 'show' ? `${seasons} ${seasons === 1 ? 'season' : 'seasons'} · ${items.length} episodes` : item.kind === 'movie' ? String(meta(item)?.year || item.format) : `${meta(item)?.year ? `${meta(item).year} · ` : ''}${itemMeta(item)}`; };
 function cover(item, extra = '') {
   const m = meta(item);
   return `<span class="cover ${artFor(item)}">${m?.poster ? `<img src="${esc(m.poster)}" alt="" loading="lazy">` : `<span class="cover-title">${esc(displayName(item))}</span>`}${extra}</span>`;
@@ -252,9 +316,10 @@ function poster(items) {
   const badge = status === 'done' ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : '';
   return `<button class="card" data-detail="${item.id}" aria-label="Open ${esc(displayName(item))}">${cover(item, badge + bar)}<span class="card-name">${esc(displayName(item))}</span><span class="card-meta">${esc(groupMeta(items))}</span></button>`;
 }
+const hideEpisodeSpoilers = item => library.preferences.spoilerSafe === true && item.kind === 'show' && !completed(item.id);
 function continueCard(i) {
   const p = library.progress[i.id] || { position: 0, duration: 0 }, backdrop = meta(i)?.backdrop;
-  return `<div class="continue-card"><button class="cw" data-play="${i.id}"><span class="cw-art ${artFor(i)}" data-frame="${i.kind === 'audio' ? '' : i.id}" data-time="${Math.max(0, (p.position || 0) - 1)}">${backdrop ? `<img src="${esc(backdrop)}" alt="">` : ''}<span class="cw-play">${icon('play')}</span><span class="cw-text"><span class="cw-line"><span class="card-name">${esc(displayName(i))}${i.kind === 'show' ? ` · ${code(i)}` : ''}</span><span class="card-meta">${p.duration ? `${fmt(p.duration - p.position)} left` : 'Up next'}</span></span><span class="progress-track"><span class="progress-fill" data-progress="${p.duration ? Math.min(100, p.position / p.duration * 100) : 0}"></span></span></span></span></button><button class="remove-continue" data-remove-continue="${i.id}" aria-label="Remove ${esc(i.group)} from Continue watching">×</button></div>`;
+  return `<div class="continue-card"><button class="cw" data-play="${i.id}"><span class="cw-art ${artFor(i)}" data-frame="${i.kind === 'audio' || hideEpisodeSpoilers(i) ? '' : i.id}" data-time="${Math.max(0, (p.position || 0) - 1)}">${backdrop ? `<img src="${esc(backdrop)}" alt="">` : ''}<span class="cw-play">${icon('play')}</span><span class="cw-text"><span class="cw-line"><span class="card-name">${esc(displayName(i))}${i.kind === 'show' ? ` · ${code(i)}` : ''}</span><span class="card-meta">${p.duration ? `${fmt(p.duration - p.position)} left` : 'Up next'}</span></span>${p.duration ? `<span class="progress-track"><span class="progress-fill" data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}</span></span></button><button class="remove-continue" data-remove-continue="${i.id}" aria-label="Remove ${esc(i.group)} from Continue watching">×</button></div>`;
 }
 // Real frames from one second before where you stopped (the moment you left, not a frame mid-cut), fetched one at a time (the preview decoder cancels overlapping requests).
 const frames = new Map();
@@ -275,45 +340,80 @@ function dock() {
   if (api.movieRequests || api.openMovieRequests) items.push(['movie-requests', api.movieRequests?.label || 'Movie requests', 'requests']);
   return `<div class="dock-wrap"><button class="dock-back" data-action="close-detail" aria-label="Close details" title="Back (Esc)">${icon('back')}</button><nav class="dock" aria-label="Library">${items.filter(([id]) => !api.hiddenTabs?.includes(id)).map(([id, label, glyph]) => `<button class="dock-item" data-tab="${id}" ${['downloads', 'movie-requests'].includes(id) ? `aria-label="${esc(label)}"` : ''} ${tab === id && !folderFilter ? `aria-current="page" title="Back to the landing page"` : ''}>${icon(glyph)}<span class="dock-label">${esc(label)}</span>${['movie', 'show', 'audio'].includes(id) ? `<span class="sr-only"> ${groups(id).length}</span>` : ''}</button>`).join('')}</nav></div>`;
 }
-let footerOpen = false;
-function footer() {
-  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
+let footerOpen = false, savingUpdateChecks = false;
+const SUBTITLE_MODE_LABELS = { off: 'Off', forced: 'Forced only', always: 'Always' };
+const languageLabel = code => { try { return new Intl.DisplayNames(undefined, { type: 'language' }).of(code) || code; } catch { return code; } };
+const languageOptions = (value, blank) => `<option value="">${blank}</option>${LANGUAGES.map(code => `<option value="${code}"${code === value ? ' selected' : ''}>${esc(languageLabel(code))}</option>`).join('')}`;
+// Where a title nothing was chosen for starts: the account's audio language and subtitle mode. Choices made per show still win.
+function trackDefaultsSetting() {
+  const d = trackDefaults(library.preferences);
+  return `<span class="theme-setting track-defaults" role="group" aria-label="Default audio and subtitles"><span>Audio</span><select data-track-default="audio" aria-label="Preferred audio language">${languageOptions(d.audio, 'Original')}</select><span>Subtitles</span>${SUBTITLE_MODES.map(mode => `<button class="chip" data-subtitle-mode="${mode}" aria-pressed="${d.subtitles === mode}">${SUBTITLE_MODE_LABELS[mode]}</button>`).join('')}<select id="subtitle-language" data-track-default="subtitleLanguage" aria-label="Preferred subtitle language" ${d.subtitles === 'always' ? '' : 'hidden'}>${languageOptions(d.subtitleLanguage, 'Choose…')}</select></span>`;
 }
-const sectionGrid = (title, items, count, more) => items.length ? `<section class="section"><div class="section-heading"><h2>${title}</h2><span>${count}${more ? ` · <button class="text-button" data-tab="${more}">See all</button>` : ''}</span></div><div class="grid">${items.map(poster).join('')}</div></section>` : '';
+function setTrackDefaults(change) {
+  library.preferences.trackDefaults = { ...trackDefaults(library.preferences), ...change };
+  discardPrepared(); void attempt(() => savePreferences({ trackDefaults: library.preferences.trackDefaults }));
+}
+
+function footer() {
+  const updatesEnabled = library.checkForUpdates === true;
+  const updates = api.setUpdateChecks ? `<span class="theme-setting"><span>Check for updates</span><button type="button" class="switch ${updatesEnabled ? 'on' : ''}" data-update-checks role="switch" aria-label="Check for updates" aria-checked="${updatesEnabled}"></button></span>` : '';
+  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span>${library.scanStatus ? `<span data-library-scan-status role="status">${esc(scanMessage(library.scanStatus))}</span>` : ''}<span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span>${trackDefaultsSetting()}${updates}<button class="chip spoiler-setting" data-action="spoiler-safe" aria-pressed="${library.preferences.spoilerSafe === true}">Hide episode spoilers</button><button class="text-button" data-action="history">Watch history</button><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
+}
+const sectionGrid = (title, items, count, more) => items.length ? `<section class="section"><div class="section-heading"><h2>${esc(title)}</h2><span>${count}${more ? ` · <button class="text-button" data-tab="${more}">See all</button>` : ''}</span></div><div class="grid">${items.map(poster).join('')}</div></section>` : '';
 const kinds = [['show', 'Shows', 'shows'], ['movie', 'Movies', 'titles'], ['audio', 'Music & audio', 'files']];
 function landingPage() {
   if (!library.items.length) return `<section class="welcome"><p class="show-kicker">Matro · local library</p><h1>Your collection.<br>Your kind of player.</h1><p>All your films, shows and favourite files in one quiet place. Add a folder to build your library, or drop media anywhere in this window — seasons and episodes are picked up from file names.</p><div class="show-actions"><button class="pill" data-action="ssh">${icon('network')}Connect SSH</button><button class="pill primary" data-action="folder">${icon('folder')}Add folder</button><button class="pill" data-action="files">${icon('plus')}Open files</button></div><div class="formats">${['MKV', 'MP4', 'AVI', 'MOV', 'WEBM', 'FLAC', '+ MORE'].map(f => `<span>${f}</span>`).join('')}</div></section>`;
   const continues = continueWatching(groupTitles(library.items), library.progress).filter(item => !folderFilter || item.root === folderFilter);
   const featured = !folderFilter ? featuredTitles() : [];
   return `${folderFilter ? `<div class="page-head"><div><h1 class="page-title">${esc(base(folderFilter))}</h1><p class="page-sub">${esc(folderFilter)}</p></div><button class="text-button" data-action="all-folders">Show all folders</button></div>` : ''}
-    ${continues.length ? `<section class="section"><div class="section-heading"><h2>Continue watching ${icon('chevron')}</h2><span>${continues.length} in progress</span></div><div class="cw-row">${continues.map(continueCard).join('')}</div></section>` : ''}
+    ${continues.length ? `<section class="section"><div class="section-heading"><h2>Continue watching</h2><span>${continues.length} in progress</span></div><div class="cw-row">${continues.map(continueCard).join('')}</div></section>` : ''}
     ${featured.length ? reelMarkup(featured) : ''}
-    ${kinds.map(([kind, title, noun]) => { const items = groups(kind); return sectionGrid(title, items, `${items.length} ${kind === 'show' ? 'shows' : noun}`, folderFilter ? '' : kind); }).join('')}`;
+    ${!folderFilter ? titleShelves(groupTitles(library.items), library.lists, listKey, meta).map(shelf => sectionGrid(shelf.name, shelf.groups, shelf.groups.length + ' titles')).join('') : ''}
+    ${!folderFilter && metadataEnabled ? sectionGrid('Following', groups('show').filter(([item]) => library.followed?.includes(titleKey(item))), '') : ''}
+    ${kinds.map(([kind, title, noun]) => { const items = groups(kind); return sectionGrid(title, items, count(items.length, noun), folderFilter ? '' : kind); }).join('')}`;
 }
 function browsePage(kind) {
-  const [, title, noun] = kinds.find(([k]) => k === kind), all = groups(kind), items = all.filter(g => statusFilter === 'all' || groupStatus(g) === statusFilter);
+  const [, title, noun] = kinds.find(([k]) => k === kind), all = groups(kind);
+  const options = { sort: 'title', genre: '', short: false, ...browseOptions.get(kind) };
+  const genres = [...new Set(all.flatMap(([item]) => meta(item)?.genres || []))].sort((a, b) => a.localeCompare(b));
+  const items = browseTitles(all.filter(group => statusFilter === 'all' || groupStatus(group) === statusFilter), options, meta, displayName, library.progress);
+  const sorts = [['title', 'Title'], ['added', 'Date added'], ['year', 'Year'], ['rating', 'Rating']];
+  const option = (value, label, current) => `<option value="${esc(value)}"${value === current ? ' selected' : ''}>${esc(label)}</option>`;
+  const filters = `<div class="library-filters">
+    <label>Sort by <select data-browse-option="sort">${sorts.map(([value, label]) => option(value, label, options.sort)).join('')}</select></label>
+    ${genres.length ? `<label>Genre <select data-browse-option="genre">${option('', 'All genres', options.genre)}${genres.map(name => option(name, name, options.genre)).join('')}</select></label>` : ''}
+    ${kind === 'movie' ? `<label class="short-filter"><input type="checkbox" data-browse-option="short"${options.short ? ' checked' : ''}> Under 40 minutes</label>` : ''}
+  </div>`;
   const chips = [['all', 'All'], ['new', kind === 'audio' ? 'Not played' : 'Unwatched'], ['progress', 'In progress'], ['done', kind === 'audio' ? 'Played' : 'Watched']];
-  return `<div class="page-head"><div><h1 class="page-title">${title}</h1><p class="page-sub">${all.length} ${kind === 'show' ? 'shows' : noun}${statusFilter !== 'all' ? ` · ${items.length} shown` : ''}</p></div><div class="chip-row" role="group" aria-label="Filter by status">${chips.map(([id, label]) => `<button class="chip" data-status-filter="${id}" aria-pressed="${statusFilter === id}">${label}</button>`).join('')}</div></div>
+  return `<div class="page-head"><div><h1 class="page-title">${title}</h1><p class="page-sub">${count(all.length, noun)}${items.length !== all.length ? ` · ${items.length} shown` : ''}</p></div><div class="chip-row" role="group" aria-label="Filter by status">${chips.map(([id, label]) => `<button class="chip" data-status-filter="${id}" aria-pressed="${statusFilter === id}">${label}</button>`).join('')}</div></div>
+    ${filters}
     ${kind === 'show' ? '<section class="shows-scan" id="shows-scan" aria-labelledby="shows-scan-title"><div class="scan-heading"><h2 id="shows-scan-title">Intro &amp; outro scanning</h2><span class="scan-count"></span></div><progress aria-label="Episodes checked for intros and outros" hidden></progress><p class="scan-activity"></p></section>' : ''}
     ${items.length ? `<div class="grid">${items.map(poster).join('')}</div>` : `<div class="empty-results"><h2>Nothing here yet.</h2><p>${all.length ? 'No titles match this filter.' : 'Add a folder or open files to fill this shelf.'}</p></div>`}`;
 }
 function searchPage() {
   const words = query.trim().toLowerCase();
-  const sections = kinds.map(([kind, title, noun]) => { const items = groups(kind); return sectionGrid(title, items, `${items.length} ${kind === 'show' ? 'shows' : noun}`); }).join('');
+  const sections = kinds.map(([kind, title, noun]) => { const items = groups(kind); return sectionGrid(title, items, count(items.length, noun)); }).join('');
   const files = words ? library.items.filter(i => i.path.toLowerCase().includes(words)).slice(0, 12) : [];
   const total = kinds.reduce((sum, [kind]) => sum + groups(kind).length, 0) + files.length;
-  return `<div class="search-hero"><label for="search">Search movies, shows, people and file names</label><div class="search-field">${icon('search')}<input id="search" type="search" placeholder="Try a title, a director, or a file name" aria-label="Search library" autocomplete="off" value="${esc(query)}"><kbd>Ctrl K</kbd></div><p class="search-summary">${words ? `${total} ${total === 1 ? 'result' : 'results'} across ${library.items.length} files` : 'Searching your whole library — titles, people and file names'}</p></div>
+  return `<div class="search-hero"><label for="search">Search movies, shows, people and file names</label><div class="search-field">${icon('search')}<input id="search" type="search" placeholder="Titles, people, file names" aria-label="Search library" autocomplete="off" value="${esc(query)}"><kbd>Ctrl K</kbd></div><p class="search-summary">${words ? `${total} ${total === 1 ? 'result' : 'results'} across ${library.items.length} files` : 'Searching your whole library — titles, people and file names'}</p></div>
     ${sections}${files.length ? `<section class="section"><div class="section-heading"><h2>Files</h2><span>${files.length}</span></div>${files.map(i => `<button class="file-row" data-play="${i.id}">${icon('file')}<span class="mono">${esc(sourcePath(i.path))}</span><small>${esc(i.format)}</small></button>`).join('')}</section>` : ''}
     ${words && !total ? '<div class="empty-results"><h2>No matches.</h2><p>Check the spelling, or search by part of a file name.</p></div>' : ''}`;
+}
+const scanErrorsMarkup = status => status.errors.map(row => `<li>${esc(row.folder)}: ${esc(row.error)}</li>`).join('');
+function renderLibraryScanStatus(status) {
+  if (!status) return;
+  document.querySelectorAll('[data-library-scan-status]').forEach(node => { node.textContent = scanMessage(status); });
+  document.querySelectorAll('[data-library-scan-errors]').forEach(node => { node.innerHTML = scanErrorsMarkup(status); });
 }
 function foldersPage() {
   const loose = library.items.filter(i => !library.folders.includes(i.root)).length;
   return `<div class="page-head"><div><h1 class="page-title">Folders</h1><p class="page-sub">${library.folders.length} ${library.folders.length === 1 ? 'source' : 'sources'} · ${library.items.length} items · local and SSH sources</p></div><div class="show-actions"><button class="pill" data-action="files">${icon('plus')}Open files</button><button class="pill" data-action="rescan" aria-label="Rescan folders">${icon('refresh')}Rescan</button><button class="pill" data-action="ssh">${icon('network')}Connect SSH</button><button class="pill primary" data-action="folder">${icon('plus')}Add folder</button></div></div>
+    ${library.scanStatus ? `<div class="section"><p class="muted" data-library-scan-status role="status">${esc(scanMessage(library.scanStatus))}</p><ul class="scan-errors" data-library-scan-errors>${scanErrorsMarkup(library.scanStatus)}</ul></div>` : ''}
     <ul class="sources">${library.folders.map((f, index) => `<li class="source-row"><span class="source-icon">${icon(/^\\\\|^\/\//.test(f) ? 'network' : 'folder')}</span><span class="min"><span class="source-name">${esc(base(f))}</span><span class="source-path mono" title="${esc(sourcePath(f))}">${esc(sourcePath(f))}</span></span><span class="source-count">${library.items.filter(i => i.root === f).length} items</span><span class="source-actions"><button class="pill small" data-folder="${index}" aria-label="Browse ${esc(base(f))}">Browse</button><button class="icon-button" data-remove-folder="${index}" aria-label="Remove ${esc(base(f))} from library">${icon('trash')}</button></span></li>`).join('')}
     ${loose ? `<li class="source-row"><span class="source-icon">${icon('file')}</span><span><span class="source-name">Opened files</span><span class="source-path">Added one by one or dropped into the window</span></span><span class="source-count">${loose} items</span><span></span></li>` : ''}</ul>
     ${!library.folders.length && !loose ? '<p class="page-sub">No folders yet. Add one to build your library — mounted network drives work too.</p>' : ''}
     <div class="drop-hint">${icon('upload')}Drop folders or files anywhere to import · scanning is recursive</div>
-    <p class="note">Removing a folder never deletes files on disk. Progress, queue and skip markers are kept for when you add it back.</p>`;
+    <p class="note">Removing a folder keeps its media files, progress, queue entries and skip markers. Add the same path to see them in your library again.${library.user ? ' Uploaded subtitles are kept too.' : ''}</p>`;
 }
 function renderLibrary() {
   downloads.unmount();
@@ -322,6 +422,7 @@ function renderLibrary() {
   if (tab === 'movie-requests' && !movieRequests) tab = 'home';
   const page = tab === 'movie-requests' ? '<div id="movie-requests"></div>' : tab === 'downloads' ? downloads.markup() : tab === 'search' ? searchPage() : tab === 'folders' ? foldersPage() : ['movie', 'show', 'audio'].includes(tab) ? browsePage(tab) : landingPage();
   root.innerHTML = `<div class="shell">${dock()}<main class="page">${page}</main>${footer()}</div>`;
+  if (api.configureSubtitleSearch) $('#library-footer').insertAdjacentHTML('beforeend', '<button class="text-button" data-action="subtitle-search-settings">OpenSubtitles settings</button>');
   applyStyles(root);
   $('#search')?.addEventListener('input', event => { const caret = event.target.selectionStart; query = event.target.value; renderLibrary(); $('#search').focus(); $('#search').setSelectionRange(caret, caret); });
   if (tab === 'downloads') void downloads.mount($('#download-browser'));
@@ -329,6 +430,12 @@ function renderLibrary() {
     downloads.openMovieSearch(request.title, request.year);
     goTab('downloads');
   });
+  root.querySelectorAll('[data-browse-option]').forEach(control => control.addEventListener('change', () => {
+    const key = control.dataset.browseOption;
+    browseOptions.set(tab, { ...browseOptions.get(tab), [key]: key === 'short' ? control.checked : control.value });
+    renderLibrary();
+    root.querySelector('[data-browse-option="' + key + '"]')?.focus();
+  }));
   setupReel(); renderScannerStatus(); void loadFrames();
 }
 function rerender() {
@@ -366,6 +473,17 @@ function featuredTitles() {
   return [...groups('show'), ...groups('movie')].sort((a, b) => recency(b) - recency(a) || (b[0].added || 0) - (a[0].added || 0));
 }
 function reelMarkup(list) {
+  if (!$('#reel')) {
+    const key = `matro.reelStart:${api.recoveryScope || 'desktop'}`;
+    const titles = list.map(([item]) => item.kind === 'show' ? titleKey(item) : item.id);
+    try { reel.previousStart = localStorage.getItem(key) ?? reel.previousStart; } catch {}
+    stopReel();
+    clearTimeout(reel.wheelTimer);
+    reel.pos = reel.target = randomReelStart(titles, reel.previousStart ?? null);
+    reel.mode = 'idle';
+    reel.previousStart = titles[reel.pos];
+    try { localStorage.setItem(key, reel.previousStart); } catch {}
+  }
   reel.list = list;
   // Enough repeats to fill both sides of a wide window, so the loop's wrap still happens beyond the faded edges.
   const copies = list.length > 1 ? Math.ceil(18 / list.length) : 1;
@@ -593,13 +711,16 @@ function setupReel() {
   el.addEventListener('pointerleave', () => { if (reel.hover && !reel.drag) { reel.hover = null; updateReel(); } });
 }
 window.addEventListener('resize', () => { if (view === 'library') updateReel(); });
-const openTitlePage = site => { const m = selected && meta(selected); if (m) void api.openTitlePage({ site, type: m.type, tmdbId: m.tmdbId, imdbId: m.imdbId }); };
+const openTitlePage = site => { const m = selected && meta(selected); if (m) void api.openTitlePage({ site, type: m.type || (selected.kind === 'show' ? 'tv' : 'movie'), tmdbId: m.tmdbId, imdbId: m.imdbId }); };
 // Opening and closing a title hands focus to the Back button or the card so the keyboard keeps its place, without the
 // focus ring: nobody pointed at it, so it only looks like a stray selection. Tab still shows the ring as usual.
 function restoreFocus(element) { element?.focus({ preventScroll: true, focusVisible: false }); }
 function detail(id, focus = true) {
   selected = library.items.find(i => i.id === id); if (!selected) return;
-  const items = selected.kind === 'show' ? orderedEpisodes(selected) : [selected];
+  const items = selected.kind === 'show' ? orderedEpisodes(selected)
+    : selected.editionGroup ? library.items.filter(item => item.editionGroup === selected.editionGroup) : [selected];
+  const canFollow = selected.kind === 'show' && metadataEnabled && meta(selected)?.tmdbId && api.followShow && api.canFollowShows !== false;
+  const following = canFollow && library.followed?.includes(titleKey(selected));
   const m = meta(selected), name = displayName(selected), seasons = new Set(items.map(i => i.season)).size;
   const target = resumeTarget(items, library.progress, selected), p = library.progress[target.id];
   const resume = p?.position > 0 && !completed(target.id) ? target : null;
@@ -612,24 +733,36 @@ function detail(id, focus = true) {
       <p class="detail-sub">${[...facts, selected.kind === 'show' ? 'Series' : selected.kind === 'audio' ? 'Audio' : 'Movie', selected.format].map(esc).join(' <span aria-hidden="true">·</span> ')}</p>
       ${m?.overview ? `<p class="detail-overview">${esc(m.overview)}</p>` : ''}
       <div class="detail-actions">${selected.kind === 'movie' && api.canCompareEditions !== false ? `<button class="pill" data-upgrade="${selected.id}">Find better quality / compare editions</button>` : ''}<button class="pill primary" data-play="${target.id}">${icon('play')}${resume ? `Resume<span class="resume-time" aria-hidden="true">${resume !== selected && selected.kind === 'show' ? `${code(resume)} · ` : ''}${fmt(p.position)}</span>${p.duration ? `<span class="resume-bar" aria-hidden="true"><span data-progress="${Math.min(100, p.position / p.duration * 100)}"></span></span>` : ''}` : 'Play now'}</button>
-      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}${api.offlineSave ? `<button class="pill" data-offline-save="${target.id}">${icon('download')}${selected.kind === 'show' ? 'Save episode offline' : 'Save offline'}</button>` : ''}${api.offlineSaveMany && selected.kind === 'show' ? offlineSeasonButtons(items, target) : ''}<button class="pill" data-enqueue="${selected.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${selected.id}">${icon('check')}${completed(selected.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
+      ${resume ? `<button class="pill" data-restart="${resume.id}">${icon('restart')}Play from start</button>` : ''}${offlineActions(items, target)}${api.editLists && api.canEditLists !== false ? '<button class="pill" data-action="title-lists">' + icon('plus') + 'Add to list</button>' : ''}${canFollow ? `<button class="pill" data-action="follow-show" aria-pressed="${Boolean(following)}">${following ? 'Following' : 'Follow show'}</button>` : ''}<button class="pill" data-enqueue="${target.id}">${icon('plus')}Add to queue</button><button class="pill" data-complete="${target.id}">${icon('check')}${completed(target.id) ? 'Mark incomplete' : 'Mark complete'}</button></div>
       ${m?.rating ? `<div class="ratings"><div><p class="rating-label">TMDB</p><strong>${m.rating.toFixed(1)}</strong><small>/10 · ${m.votes.toLocaleString()} votes</small></div></div>` : ''}</div>
-    <div class="detail-panels">${items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
+    <div class="detail-panels">${selected.kind === 'show' && items.length > 1 ? episodesPanel(selected, items, resume, target) : ''}
+      ${selected.editionGroup && items.length > 1 ? editionsPanel(items) : ''}
+      ${following ? '<section class="panel flat" aria-labelledby="episode-schedule-heading"><div class="panel-head"><h3 id="episode-schedule-heading">Episode schedule</h3></div><div data-episode-schedule></div></section>' : ''}
       ${castPanel(m)}${productionPanel(m)}${filePanel(selected, m)}</div></div>`;
-  $('#title-links').hidden = !m; $('#imdb-link').hidden = !m?.imdbId;
+  $('#title-links').hidden = !m?.tmdbId; $('#imdb-link').hidden = !m?.imdbId;
   document.querySelectorAll('.detail').forEach(old => old.remove()); root.append(overlay); applyStyles(overlay);
+  if (following) void renderEpisodeSchedule(overlay.querySelector('[data-episode-schedule]'), titleKey(selected));
   if (focus) restoreFocus($('.dock-back'));
+}
+// A phone action menu: the toggle shows on phones only, and on wider screens the buttons inside sit in the row as plain buttons (the CSS decides).
+const menu = (toggle, items, cls = '') => `<span class="menu ${cls}">${toggle}<span class="menu-items">${items}</span></span>`;
+const menuToggle = (cls, label, content) => `<button class="${cls} menu-toggle" data-menu aria-haspopup="true" aria-expanded="false" aria-label="${esc(label)}">${content}</button>`;
+// One Save offline button; on a show, a "Save offline" menu holding the episode and season saves.
+function offlineActions(items, target) {
+  const one = api.offlineSave ? `<button class="pill" data-offline-save="${target.id}">${icon('download')}${selected.kind === 'show' ? 'Save episode offline' : 'Save offline'}</button>` : '';
+  const many = api.offlineSaveMany && selected.kind === 'show' ? offlineSeasonButtons(items, target) : '';
+  return one && many ? menu(menuToggle('pill', 'Save offline', `${icon('download')}Save offline${icon('chevron')}`), one + many, 'save-menu') : one + many;
 }
 // One button for the current season and one for "from the current episode to the season's end" (current = what Play starts).
 function offlineSeasonButtons(items, target) {
   const season = items.filter(i => i.season === target.season), rest = season.filter(i => i.episode >= target.episode);
   const button = (label, list) => `<button class="pill" data-offline-many="${list.map(i => i.id).join(',')}">${icon('download')}${label}</button>`;
-  return button(`Save season ${target.season} offline`, season) + (rest.length > 1 ? button(`Save from ${code(target)} to season end`, rest) : '');
+  return button(`Save ${target.season === 0 ? 'specials' : `season ${target.season}`} offline`, season) + (rest.length > 1 ? button(`Save from ${code(target)} to season end`, rest) : '');
 }
 // Cast and production come from TMDB; a missing portrait gets the generated cover, like missing posters do.
 const castPanel = m => m?.cast?.length ? `<section class="panel flat cast-panel" aria-labelledby="cast-h"><div class="panel-head"><h3 id="cast-h">Cast</h3></div><div class="cast-grid">${m.cast.map(c => `<div class="cast-member"><span class="cast-photo art" data-hue="${hash(c.name) % 360}">${c.photo ? `<img src="${esc(c.photo)}" alt="" loading="lazy" draggable="false">` : icon('person')}</span><strong>${esc(c.name)}</strong>${c.role ? `<small>${esc(c.role)}</small>` : ''}</div>`).join('')}</div></section>` : '';
 // Where the file lives and what it is; it sits flat on the page like the other sections.
-const filePanel = (item, m) => `<section class="panel flat file" aria-labelledby="file-h"><div class="panel-head"><h3 id="file-h">File</h3></div><div class="facts"><div><p>Format</p><strong>${esc(item.format)}</strong><small>${item.kind === 'show' ? 'Series' : item.kind === 'audio' ? 'Audio' : 'Movie'}</small></div><div><p>Source</p><strong>${esc(item.root ? base(item.root) : 'Opened file')}</strong><small>${sshSource(item.path) ? 'SSH media' : 'Local file'}</small></div>${m?.cast?.length ? `<div><p>Starring</p><strong>${esc(m.cast.slice(0, 2).map(c => c.name).join(', '))}</strong>${m.cast[2] ? `<small>${esc(m.cast.slice(2, 5).map(c => c.name).join(', '))}</small>` : ''}</div>` : ''}</div><div class="path-box">${icon('folder')}<span class="mono">${esc(sourcePath(item.path))}</span></div><p class="note">Audio tracks, subtitles and chapters appear when playback starts. HDR is tone-mapped and surround plays as stereo.</p></section>`;
+const filePanel = (item, m) => `<section class="panel flat file" aria-labelledby="file-h"><div class="panel-head"><h3 id="file-h">File</h3></div><div class="facts"><div><p>Format</p><strong>${esc(item.format)}</strong><small>${item.kind === 'show' ? 'Series' : item.kind === 'audio' ? 'Audio' : 'Movie'}</small></div><div><p>Source</p><strong>${esc(item.root ? base(item.root) : 'Opened file')}</strong><small>${sshSource(item.path) ? 'SSH media' : 'Local file'}</small></div>${m?.cast?.length ? `<div><p>Starring</p><strong>${esc(m.cast.slice(0, 2).map(c => c.name).join(', '))}</strong>${m.cast[2] ? `<small>${esc(m.cast.slice(2, 5).map(c => c.name).join(', '))}</small>` : ''}</div>` : ''}</div><div class="path-box">${icon('folder')}<span class="mono">${esc(sourcePath(item.path))}</span></div><p class="note">Audio tracks, subtitles and chapters appear when playback starts. HDR plays as HDR on an HDR display when the file allows it, otherwise it is tone-mapped. 5.1 is kept when the output supports it.</p></section>`;
 const money = n => n >= 1e9 ? `$${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `$${Math.round(n / 1e6)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}K` : '';
 function productionPanel(m) {
   if (!m) return '';
@@ -639,19 +772,106 @@ function productionPanel(m) {
     m.countries?.length ? ['Made in', m.countries.join(', '), ''] : null].filter(Boolean);
   return facts.length ? `<section class="panel flat" aria-labelledby="production-h"><div class="panel-head"><h3 id="production-h">Production</h3></div><div class="facts">${facts.map(([label, value, sub]) => `<div><p>${esc(label)}</p><strong>${esc(value)}</strong>${sub ? `<small>${esc(sub)}</small>` : ''}</div>`).join('')}</div></section>` : '';
 }
+function editionsPanel(items) {
+  return `<section class="panel flat" aria-labelledby="editions-title"><div class="panel-head"><h3 id="editions-title">Editions</h3></div>
+    ${items.map(item => {
+      const size = item.size >= 1e9 ? (item.size / 1e9).toFixed(1) + ' GB' : Math.ceil(item.size / 1e6) + ' MB';
+      const p = library.progress[item.id], label = item.editionLabel || item.title;
+      return `<button class="match-row edition-row" data-play="${item.id}">
+        ${icon('play')}<span class="min"><strong>${esc(label)}</strong><small>${esc([item.format, size, p?.position > 0 && !completed(item.id) ? 'Resume at ' + fmt(p.position) : ''].filter(Boolean).join(' · '))}</small></span>
+      </button>`;
+    }).join('')}</section>`;
+}
+
+function openTitleLists() {
+  const titleId = listKey(selected);
+  const dialog = document.createElement('dialog');
+  dialog.className = 'match-dialog title-lists-dialog';
+  dialog.setAttribute('aria-labelledby', 'title-lists-heading');
+  dialog.innerHTML = `<div class="section-heading"><h2 id="title-lists-heading">Add to list</h2><button class="icon-button" aria-label="Close">${icon('close')}</button></div>
+    <div class="match-results"></div>
+    <form><label>New list <input name="name" maxlength="60" required></label><button class="pill" type="submit">Create and add</button></form>
+    <p class="match-note" role="status"></p>`;
+  document.body.append(dialog);
+  const rows = dialog.querySelector('.match-results'), form = dialog.querySelector('form'), status = dialog.querySelector('[role=status]');
+  const render = () => {
+    rows.innerHTML = listChoices(library.lists).map(list => `<div class="title-list-row">
+      <button class="match-row" data-list="${esc(list.id)}" aria-pressed="${list.titles.includes(titleId)}">${esc(list.name)}</button>
+      ${list.id !== 'watch-later' ? `<button class="icon-button" data-delete-list="${esc(list.id)}" aria-label="Delete ${esc(list.name)}">${icon('trash')}</button>` : ''}
+    </div>`).join('');
+  };
+  let busy = false;
+  async function update(change) {
+    if (busy) return false;
+    busy = true;
+    try {
+      library.lists = await api.editLists(change);
+      rerender();
+      if (dialog.open) {
+        render();
+        rows.querySelector(`[data-list="${CSS.escape(change.listId || '')}"]`)?.focus();
+        status.textContent = 'Lists saved.';
+      }
+      return true;
+    } catch (error) {
+      status.textContent = error.message;
+      return false;
+    } finally { busy = false; }
+  }
+  dialog.querySelector('.section-heading button').addEventListener('click', () => dialog.close());
+  rows.addEventListener('click', event => {
+    const button = event.target.closest('button');
+    if (button?.dataset.list) void update({ action: 'set', listId: button.dataset.list, titleId, present: button.getAttribute('aria-pressed') !== 'true' });
+    if (button?.dataset.deleteList && confirm('Delete this list?')) void update({ action: 'delete', listId: button.dataset.deleteList });
+  });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (await update({ action: 'create', name: form.elements.name.value, titleId })) form.reset();
+  });
+  dialog.addEventListener('close', () => {
+    dialog.remove();
+    root.querySelector('[data-action=title-lists]')?.focus();
+  }, { once: true });
+  render();
+  dialog.showModal();
+}
+const episodeSchedules = new Map();
+async function renderEpisodeSchedule(node, key) {
+  node.textContent = 'Loading episode schedule…';
+  try {
+    const cached = episodeSchedules.get(key);
+    const promise = cached?.expires > Date.now() ? cached.promise : api.showSchedule(key);
+    if (promise !== cached?.promise) episodeSchedules.set(key, { expires: Date.now() + 60000, promise });
+    const episodes = await promise;
+    if (!node.isConnected) return;
+    const canSearch = !api.hiddenTabs?.includes('downloads');
+    const section = (label, status) => {
+      const list = episodes.filter(episode => episode.status === status);
+      if (!list.length) return '';
+      return `<details ${status === 'upcoming' ? 'open' : ''}><summary>${label} · ${list.length}</summary>${list.map(episode => `
+        <div class="episode-schedule-row"><span><strong>S${episode.season} · E${episode.episode} ${esc(episode.title)}</strong><small>${esc(episode.airDate)}</small></span>
+        ${canSearch && status === 'missing' ? `<button class="pill" data-find-episode="${episode.season}:${episode.episode}" aria-label="Search releases for season ${episode.season} episode ${episode.episode}">Search releases</button>` : ''}</div>`).join('')}</details>`;
+    };
+    node.innerHTML = section('Upcoming', 'upcoming') + section('Missing', 'missing') || '<p class="muted">No missing or upcoming episodes with announced dates.</p>';
+  } catch (error) {
+    episodeSchedules.delete(key);
+    node.textContent = error.message;
+  }
+}
 // Episodes: one season at a time behind season tabs, each episode a card with its TMDB still, summary and progress.
 let detailSeason = null;
-const episodeInfo = item => meta(item)?.episodes?.[item.season]?.[item.episode] || null;
-function episodeCard(i, resume) {
+const episodeInfo = item => hideEpisodeSpoilers(item) ? null : meta(item)?.episodes?.[item.season]?.[item.episode] || null;
+function episodeCard(i, resume, firstUnwatched) {
   const e = episodeInfo(i), p = library.progress[i.id], done = completed(i.id), now = resume?.id === i.id, pct = p?.duration ? Math.min(100, p.position / p.duration * 100) : 0;
-  const facts = [e?.runtime ? `${e.runtime}m` : null, i.format, now ? `${fmt(p.position)} watched` : done ? 'Watched' : p?.position > 0 ? 'In progress' : null].filter(Boolean);
-  return `<div class="episode-entry ${now ? 'current' : ''}"><button class="episode-row" data-play="${i.id}"><span class="episode-still ${artFor(i)}">${e?.still ? `<img src="${esc(e.still)}" alt="" loading="lazy" draggable="false">` : ''}<span class="episode-code">${code(i)}</span>${done ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : ''}${pct && !done ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}<span class="episode-play">${icon('play')}</span></span><span class="episode-text min"><strong>${i.prelude ? '' : `${i.episode}. `}${esc(episodeName(i))}</strong><small>${facts.map(esc).join(' · ')}</small>${e?.overview ? `<span class="episode-overview">${esc(e.overview)}</span>` : ''}</span></button>${api.offlineSave ? `<button class="text-button" data-offline-save="${i.id}" aria-label="Save ${esc(episodeName(i))} offline">Save offline</button>` : ''}<button class="text-button" data-complete="${i.id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(i.title)}">${done ? 'Completed' : 'Mark complete'}</button></div>`;
+  const facts = [e?.runtime ? `${e.runtime}m` : null, i.format, now && p?.position ? `${fmt(p.position)} watched` : done ? 'Watched' : p?.position > 0 ? 'In progress' : null].filter(Boolean);
+  return `<div class="episode-entry ${now ? 'current' : ''}"><button class="episode-row" data-play="${i.id}"><span class="episode-still ${artFor(i)}">${e?.still ? `<img src="${esc(e.still)}" alt="" loading="lazy" draggable="false">` : ''}<span class="episode-code">${code(i)}</span>${done ? `<span class="status-badge" aria-label="Watched">${icon('check')}</span>` : ''}${pct && !done ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}<span class="episode-play">${icon('play')}</span></span><span class="episode-text min"><strong>${i.prelude ? '' : `${i.episode}. `}${esc(episodeName(i))}</strong><small>${facts.map(esc).join(' · ')}</small>${e?.overview ? `<span class="episode-overview">${esc(e.overview)}</span>` : ''}</span></button>${menu(menuToggle('icon-button', `More for ${episodeName(i)}`, icon('more')), `${api.offlineSave ? `<button class="text-button" data-offline-save="${i.id}" aria-label="Save ${esc(episodeName(i))} offline">Save offline</button>` : ''}<button class="text-button" data-complete="${i.id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(i.title)}">${done ? 'Completed' : 'Mark complete'}</button>`, 'episode-menu')}${firstUnwatched && compareEpisodes(firstUnwatched, i) < 0 ? `<button class="mark-before" data-mark-before="${i.id}" aria-label="Mark episodes before ${esc(code(i))} watched">Mark earlier watched</button>` : ''}</div>`;
 }
 function episodesPanel(selected, items, resume, target) {
   const seasons = [...new Set(items.map(i => i.season))], key = titleKey(selected);
   const open = detailSeason?.key === key && seasons.includes(detailSeason.season) ? detailSeason.season : (resume || target).season;
+  const firstUnwatched = items.find(i => !completed(i.id));
   const stats = s => { const eps = items.filter(i => i.season === s); return { eps, watched: eps.filter(i => completed(i.id)).length }; };
-  return `<section class="panel wide episodes" aria-labelledby="episodes-h"><div class="panel-head"><h3 id="episodes-h">Episodes</h3>${seasons.length > 1 ? `<div class="chip-row season-tabs" role="tablist" aria-label="Seasons">${seasons.map(s => { const { eps, watched } = stats(s); return `<button class="chip" role="tab" data-season-tab="${s}" aria-selected="${s === open}" aria-pressed="${s === open}">Season ${s}<span class="season-count">${watched}/${eps.length}</span></button>`; }).join('')}</div>` : ''}<span class="panel-actions">${preludeActions(items)}<button class="text-button" data-enqueue-show="${selected.id}">Queue all</button></span></div>${seasons.map(s => { const { eps, watched } = stats(s); return `<section class="season" data-season-panel="${s}" ${s === open ? '' : 'hidden'}><h3 class="season-heading">Season ${s} · ${eps.length} ${eps.length === 1 ? 'episode' : 'episodes'} · ${watched} watched</h3><div class="episode-grid">${eps.map(i => episodeCard(i, resume)).join('')}</div></section>`; }).join('')}</section>`;
+  return `<section class="panel wide episodes" aria-labelledby="episodes-h"><div class="panel-head"><h3 id="episodes-h">Episodes</h3>${seasons.length > 1 ? `<div class="chip-row season-tabs" role="tablist" aria-label="Seasons">${seasons.map(s => { const { eps, watched } = stats(s); return `<button class="chip" role="tab" data-season-tab="${s}" aria-selected="${s === open}" aria-pressed="${s === open}">${seasonLabel(s)}<span class="season-count">${watched}/${eps.length}</span></button>`; }).join('')}</div>` : ''}<span class="panel-actions">${preludeActions(items)}<button class="text-button" data-mark-show>${items.every(i => completed(i.id)) ? 'Mark show unwatched' : 'Mark show watched'}</button><button class="text-button" data-enqueue-show="${selected.id}">Queue all</button></span></div>${seasons.map(s => { const { eps, watched } = stats(s); return `<section class="season" data-season-panel="${s}" ${s === open ? '' : 'hidden'}><div class="season-bar"><h3 class="season-heading">${seasonLabel(s)} · ${eps.length} ${eps.length === 1 ? 'episode' : 'episodes'} · ${watched} watched</h3><button class="text-button" data-mark-season="${s}">${watched === eps.length ? 'Mark season unwatched' : 'Mark season watched'}</button></div><div class="episode-grid">${eps.map(i => episodeCard(i, resume, firstUnwatched)).join('')}</div></section>`; }).join('')}</section>`;
 }
 // Any file can be the prelude, whatever it is called: the picker opens in the show's folder.
 const preludeActions = items => items.some(i => i.prelude) ? `<button class="text-button" data-action="pick-prelude">Change prelude…</button><button class="text-button" data-action="clear-prelude">Remove prelude</button>` : '<button class="text-button" data-action="pick-prelude">Add prelude…</button>';
@@ -668,6 +888,28 @@ function showSeason(season) {
   document.querySelectorAll('[data-season-panel]').forEach(panel => { panel.hidden = Number(panel.dataset.seasonPanel) !== season; });
   document.querySelectorAll('[data-season-tab]').forEach(tab => { const on = Number(tab.dataset.seasonTab) === season; tab.setAttribute('aria-selected', String(on)); tab.setAttribute('aria-pressed', String(on)); });
 }
+// Watch history: what was played and when, newest first, from the same per-person progress that powers Continue watching.
+let historyDays = 7;
+function openHistory() {
+  let box = $('#history-dialog');
+  if (!box) { box = document.createElement('dialog'); box.id = 'history-dialog'; box.className = 'match-dialog'; box.setAttribute('aria-labelledby', 'history-title'); document.body.append(box); }
+  renderHistory(); box.showModal();
+}
+function renderHistory() {
+  const box = $('#history-dialog'); if (!box) return;
+  const rows = watchHistory(library.items, library.progress, { since: historyDays ? Date.now() - historyDays * 864e5 : 0 });
+  let last = '';
+  const list = rows.map(({ item, entry, at }) => {
+    const label = dayLabel(at), head = label === last ? '' : `<h3 class="season-heading">${esc(label)}</h3>`; last = label;
+    const when = new Date(at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    const state = completed(item.id) ? 'Finished' : `Stopped at ${fmt(entry.position)}${entry.duration ? ` of ${fmt(entry.duration)}` : ''}`;
+    return `${head}<button class="match-row history-row" data-history-item="${esc(item.id)}"><span class="min"><strong>${esc(displayName(item))}${item.kind === 'show' ? ` · ${code(item)}` : ''}</strong>${item.kind === 'show' ? `<small>${esc(episodeName(item))}</small>` : ''}<small>${esc(`${when} · ${state}`)}</small></span></button>`;
+  }).join('');
+  box.innerHTML = `<div class="section-heading"><h2 id="history-title">Watch history</h2><button class="icon-button" data-action="close-history" aria-label="Close">×</button></div>
+    <div class="chip-row" role="group" aria-label="Period">${[[7, 'Last 7 days'], [30, 'Last 30 days'], [0, 'All time']].map(([days, text]) => `<button class="chip" data-history-days="${days}" aria-pressed="${historyDays === days}">${text}</button>`).join('')}</div>
+    <div class="match-results" aria-live="polite"><p class="match-note">${rows.length ? `${rows.length} ${rows.length === 1 ? 'item' : 'items'} played` : historyDays ? 'Nothing played in this period.' : 'Your watch history is empty.'}</p>${list}</div>`;
+}
+document.addEventListener('matro:history', openHistory);
 // Manual TMDB matching: search, then pin a result (or none) to the title.
 let matchItem = null, matchTimer, matchRun = 0;
 const cleanName = text => String(text).replace(/[._]+/g, ' ').replace(/\s*[[(]?\b(?:19|20)\d{2}\b[\])]?.*$/, '').trim() || String(text);
@@ -754,27 +996,43 @@ function closeDetail() {
 function enqueue(id, all = false) {
   const item = library.items.find(i => i.id === id); if (!item) return;
   const ids = all ? library.items.filter(i => sameTitle(i, item) && i.kind === 'show').sort((a, b) => a.season - b.season || a.episode - b.episode).map(i => i.id) : [id];
-  library.queue = [...new Set([...library.queue, ...ids])]; void attempt(save); toast(`${all ? 'Episodes' : displayName(item)} added to queue`); if (view === 'player') renderQueue();
+  const previous = library.queue;
+  library.queue = [...new Set([...previous, ...ids])];
+  void attempt(() => api.changeQueue ? api.changeQueue({ add: ids, remove: [] }) : save());
+  toast(`${all ? 'Episodes' : displayName(item)} added to queue`); if (view === 'player') renderQueue();
 }
 function ib(name, label, action, extra = '') { return `<button class="icon-button ${extra}" data-action="${action}" aria-label="${label}" title="${label}">${icon(name)}</button>`; }
+let stopping = Promise.resolve();
+function stopPlayback(token, keepUrl, options) {
+  stopping = stopping.catch(() => {}).then(() => { if (token === generation) return api.stop(keepUrl, options); });
+  return stopping;
+}
 async function play(id, keepQueue = false, compareEdition = false) {
-  if (compareEdition) library.queue = [id];
-  else {
-    const editions = Object.values(library.movieEditions || {}).find(group => group.editions.includes(id));
-    if (editions?.favorite && library.items.some(item => item.id === editions.favorite)) {
-      id = editions.favorite;
-      library.queue = [...new Set(library.queue.map(queued => editions.editions.includes(queued) ? id : queued))];
-    }
-  }
+  const editions = !compareEdition && Object.values(library.movieEditions || {}).find(group => group.editions.includes(id));
+  const favorite = editions?.favorite && library.items.some(item => item.id === editions.favorite);
+  if (favorite) id = editions.favorite;
   const item = library.items.find(i => i.id === id); if (!item) return;
+  const token = ++generation; subtitleGeneration++;
+  if (sleepMode === 'episode' && current?.id !== id) setSleepTimer('off');
   // Starting playback from the library always opens with the queue closed; next, previous and autoplay keep it as it was.
   if (view !== 'player') queueOpen = false;
-  hidePreview(); remember(); await save(); const token = ++generation; subtitleGeneration++; loading = true; frameRun++; selected = null;
+  hidePreview(); remember();
+  const saved = await api.savedPlayback?.(id);
+  if (token !== generation) return;
+  if (!saved) await save();
+  if (token !== generation) return;
+  loading = true; frameRun++; selected = null;
   // A preloaded stream is used only if its track choice still matches what this title would pick now.
-  const fresh = prepared?.id === id && (({ audio: a, subtitle: s, delay: d }) => a === prepared.audio && s === prepared.subtitle && d === prepared.delay)(chooseTracks(item, prepared.info));
+  const fresh = prepared?.id === id && (!saved || prepared.url.split('#')[0] === saved.url)
+    && (({ audio: a, subtitle: s, delay: d, audioDelay: x }) => a === prepared.audio && s === prepared.subtitle && d === prepared.delay && x === prepared.audioDelay)(chooseTracks(item, prepared.info));
   const ready = fresh ? prepared : null; if (ready) prepared = null; discardPrepared();
-  resetPlayer();
-  await api.stop(ready?.url); current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
+  resetPlayer(); playIntent = true;
+  await stopPlayback(token, saved?.url || ready?.url, saved ? { background: true } : undefined);
+  if (token !== generation) { if (ready) releaseBuffer(ready.element); return; }
+  current = item; view = 'player'; sidePanel = null; subtitle = null; subtitleText = null; delay = 0; audioDelay = 0; playbackError = ''; markerDraft = null; segmentStatus = '';
+  const previousQueue = library.queue;
+  if (compareEdition) library.queue = [id];
+  else if (favorite) library.queue = [...new Set(library.queue.map(queued => editions.editions.includes(queued) ? id : queued))];
   if (item.kind === 'show') {
     rewatchingShow = completed(id);
     dismissedShow = isContinueDismissed(orderedEpisodes(item), library.progress);
@@ -785,41 +1043,45 @@ async function play(id, keepQueue = false, compareEdition = false) {
     const siblings = item.kind === 'show' ? library.items.filter(i => sameTitle(i, item) && i.kind === 'show').sort((a, b) => a.season - b.season || a.episode - b.episode).map(i => i.id) : [id];
     library.queue = [...new Set([...library.queue, ...siblings])];
   }
+  if (api.changeQueue) void attempt(() => saveQueue(previousQueue));
   info = { duration: 0, audio: [], subtitles: [], chapters: [] }; renderPlayer(ready?.element);
   try {
     if (ready) {
       // Preloaded: tracks were chosen and the stream has been buffering; the inspect call only tells the scanner what plays.
-      ({ info, audio, subtitle, delay, subtitleText } = ready); void api.inspect(id).catch(() => {});
+      ({ info, audio, subtitle, delay, audioDelay, subtitleText } = ready); if (!saved) void api.inspect(id).catch(() => {});
     } else {
-      const metadata = await api.inspect(id); if (token !== generation) return; info = metadata;
-      ({ audio, subtitle, delay } = chooseTracks(item, info));
+      const metadata = saved ? { ...saved.info, qualities: [] } : await api.inspect(id); if (token !== generation) return; info = metadata;
+      ({ audio, subtitle, delay, audioDelay } = chooseTracks(item, info));
       if (info.subtitles.find(t => t.index === subtitle)?.text) {
-        try { subtitleText = await api.subtitles({ id, index: subtitle }); } catch { subtitle = null; subtitleText = null; }
+        const text = saved ? saved.subtitles[subtitle] ?? null : await api.subtitles({ id, index: subtitle }).catch(() => null);
         if (token !== generation) return;
+        subtitleText = text;
+        if (text === null) subtitle = null;
       }
     }
-    if (item.kind !== 'show' && library.progress[id]) library.progress[id].hidden = false;
     updateMetadata();
     const start = startAt(item, info.duration);
     // Starting an already watched title begins a new viewing session with a resumable position.
-    if (item.kind !== 'show' && completed(id) && !start) library.progress[id] = { ...library.progress[id], position: 0, completed: false, updated: Date.now() };
-    if (ready) await adoptStream(ready, token); else await loadStream(start, true, token);
-    await save(); void detectMarkers(id);
+    if (item.kind !== 'show' && library.progress[id] && (library.progress[id].hidden || completed(id) && !start)) {
+      const entry = library.progress[id];
+      applyProgress({ [id]: { ...entry, ...(completed(id) && !start ? { position: 0, completed: false } : {}), hidden: false, updated: Date.now() } }, true);
+    }
+    if (ready) await adoptStream(ready, token); else await loadStream(start, playIntent, token, saved?.url);
+    if (token !== generation) return;
+    if (saved) void attempt(save);
+    else await save();
+    if (token === generation && !saved) void detectMarkers(id);
   } catch (error) { if (token === generation) { loading = false; playbackError = error.message; showMessage(); } }
 }
 function chooseTracks(item, details) {
   const choice = library.preferences.tracks?.[titleKey(item)];
-  return {
-    audio: matchTrack(details.audio, choice?.audio)?.index ?? details.audio.find(a => a.default)?.index ?? details.audio[0]?.index ?? null,
-    subtitle: choice?.off ? null : matchTrack(details.subtitles.filter(t => t.text || t.bitmap), choice?.subtitle)?.index ?? null,
-    delay: choice?.delay || 0
-  };
+  return { ...initialTracks(details, choice, library.preferences), delay: choice?.delay || 0, audioDelay: choice?.audioDelay || 0 };
 }
 function startAt(item, duration) {
   const progress = library.progress[item.id];
   if (!progress || completed(item.id)) return 0;
   if (item.kind === 'show') return Math.min(progress.position, Math.max(0, duration - .1));
-  return progress.position < duration - finishMargin(duration) ? progress.position : 0;
+  return reachedPlaybackEnd(progress.position, duration) ? 0 : progress.position;
 }
 // Near the end of an episode (the last 45 seconds, or once its outro starts) the next queue item is prepared: tracks are
 // chosen as play() would and its stream opens in a detached video element, so the first seconds are already buffered
@@ -830,7 +1092,7 @@ function discardPrepared() { preparing = null; if (!prepared) return; releaseBuf
 async function prepareNext(position) {
   if (!current || !info?.duration || preparing || loading) return;
   const id = nextInQueue(1); if (!id || prepared?.id === id) return;
-  const inOutro = (library.markers?.[current.id] || []).some(s => s.type === 'outro' && s.start > info.duration / 2 && position >= s.start);
+  const inOutro = reachedOutro(position, info.duration, library.markers?.[current.id] || []);
   if (info.duration - position > PRELOAD_LEAD && !inOutro) return;
   discardPrepared();
   const run = preparing = { id }, from = current.id, stale = () => preparing !== run || current?.id !== from;
@@ -841,24 +1103,30 @@ async function prepareNext(position) {
     if (details.subtitles.find(t => t.index === tracks.subtitle)?.text) { try { text = await api.subtitles({ id, index: tracks.subtitle }); } catch { tracks.subtitle = null; } }
     if (stale()) return;
     const bitmapSubtitle = details.video ? details.subtitles.find(t => t.index === tracks.subtitle && t.bitmap)?.index ?? null : null;
-    const result = await api.stream({ id, offset: startAt(item, details.duration), audio: tracks.audio, bitmapSubtitle, subtitleDelay: tracks.delay, preload: true, forceTranscode: supportsFullBuffer(!!details.video) });
+    const result = await api.stream({ id, offset: startAt(item, details.duration), audio: tracks.audio, bitmapSubtitle, subtitleDelay: tracks.delay, audioDelay: tracks.audioDelay, preload: true, ...playbackOptions(details, tracks.audio) });
     if (stale()) return;
-    const element = document.createElement('video'); element.playsInline = true; element.crossOrigin = 'anonymous'; element.preload = 'auto'; element.src = bufferPlayback(element, result.url, details.duration - result.offset, !!details.video); element.load();
-    prepared = { id, info: details, ...tracks, subtitleText: text, offset: result.offset, url: result.url, element };
+    const element = document.createElement('video'); element.playsInline = true; element.crossOrigin = 'anonymous'; element.preload = 'auto'; element.src = result.progressive ? result.url : bufferPlayback(element, result.url, details.duration - result.offset, !!details.video); element.load();
+    prepared = { id, info: details, ...tracks, subtitleText: text, offset: result.offset, url: result.url, diagnostics: result.diagnostics, element };
   } catch { /* Preloading only saves time; the next item still starts the regular way. */ }
   finally { if (preparing === run) preparing = null; }
 }
 async function adoptStream(ready, token) {
-  playIntent = true; offset = ready.offset; streamId = current.id; pendingStream = null; applySubtitle(); updateTime(); showMessage(); updateToggle();
-  try { await video.play(); } catch (error) { if (token === generation && error.name !== 'AbortError') { loading = false; playbackError = error.message; showMessage(); } }
+  diagnostics = ready.diagnostics; renderTracks();
+  offset = ready.offset; streamId = current.id; pendingStream = null; applySubtitle(); updateTime(); showMessage(); updateToggle();
+  if (playIntent) try { await video.play(); } catch (error) { if (token === generation && error.name !== 'AbortError') { loading = false; playbackError = error.message; showMessage(); } }
 }
+let autoSkip;
 function renderPlayer(adopt = null) {
+  autoSkip = createAutoSkip();
   document.body.classList.add('in-player');
-  const heading = current.kind === 'show' ? `${displayName(current)} · ${code(current)}` : itemMeta(current);
-  root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
+  const heading = current.kind === 'show' ? `${displayName(current)} · ${code(current)}` : current.kind === 'movie' ? [meta(current)?.year, meta(current)?.runtime ? `${meta(current).runtime}m` : null].filter(Boolean).join(' · ') || current.format : itemMeta(current);
+  root.innerHTML = `<div class="player-layout"><main class="stage"><video id="video" playsinline crossorigin="anonymous"></video><div id="subtitle-overlay" class="subtitle-overlay"><div id="subtitle-caption" class="subtitle-caption"></div></div><div class="player-top">${ib('back', 'Back to library (Esc)', 'library')}<div class="player-heading"><h1>${esc(current.kind === 'show' ? episodeName(current) : displayName(current))}</h1><p>${esc(heading)}</p><div class="player-chips" id="player-chips"></div></div><div class="player-actions" id="player-actions"></div></div><div class="stage-message" id="stage-message"></div><div class="player-controls"><div class="timeline"><span class="time time-pair"><span id="position">0:00</span><span class="time-sep" aria-hidden="true">/</span><span id="duration">0:00</span></span><div class="seek-area"><div class="seek-marks" id="seek-marks" aria-hidden="true"></div><input class="seek" id="seek" type="range" min="0" max="1" step=".1" value="0" aria-label="Seek"><div id="seek-preview" class="seek-preview" role="tooltip" aria-label="Seek preview" hidden><img id="seek-preview-image" alt="Frame preview" hidden><span id="seek-preview-status">Loading preview…</span><strong id="seek-preview-section" hidden></strong><output id="seek-preview-time"></output></div></div><span class="time" id="remaining" title="Time left">-0:00</span></div><div class="control-row"><div class="control-group">${ib('prev', 'Previous in queue', 'previous')}<button class="icon-button skip-button" data-action="backward" aria-label="Back ${SKIP} seconds" title="Back ${SKIP} seconds (←)">${skipIcon(true, SKIP)}</button><button class="icon-button play-toggle" id="play-toggle" data-action="toggle" aria-label="Play">${icon('play')}</button><button class="icon-button skip-button" data-action="forward" aria-label="Forward ${SKIP} seconds" title="Forward ${SKIP} seconds (→)">${skipIcon(false, SKIP)}</button>${ib('next', 'Next in queue', 'next')}${ib('volume', 'Mute (M)', 'mute')}<input id="volume" class="volume" type="range" min="0" max="${MAX_VOLUME}" step=".01" value="${library.preferences.volume}" aria-label="Volume"><output class="volume-value" id="volume-value"></output></div><div class="control-group"><button class="icon-button speed" data-action="speed" aria-label="Change playback speed">1×</button><button class="icon-button" id="tracks-button" data-action="tracks" aria-label="Audio and subtitles" title="Audio and subtitles">${icon('tracks')}</button>${ib('queue', 'Queue', 'queue', queueOpen ? 'active' : '')}${ib('fullscreen', 'Fullscreen (F)', 'fullscreen')}</div></div></div><div id="segment-tools" class="segment-tools"></div><div id="tracks"></div></main><aside id="queue" class="queue-panel" aria-label="Queue" ${queueOpen ? '' : 'hidden'}></aside></div>`;
   if (adopt) { $('#video').replaceWith(adopt); adopt.id = 'video'; adopt.dataset.preloaded = String(adopt.readyState); }
   video = $('#video'); applyVolume(library.preferences.volume); updateVolume(); applySubStyle();
   const player = video, events = playerEvents = new AbortController();
+  setupSubtitleOverlay(events.signal);
+  startMediaSession();
+  let skipping = false;
   let recoveryTimer, recoveryAttempts = 0;
   const recover = () => {
     clearTimeout(recoveryTimer);
@@ -872,8 +1140,19 @@ function renderPlayer(adopt = null) {
   };
   const watchBuffering = () => { clearTimeout(recoveryTimer); const token = generation; recoveryTimer = setTimeout(() => { if (token === generation) recover(); }, 25000); };
   const listen = (name, callback) => player.addEventListener(name, event => { if (video === player && view === 'player') callback(event); }, { signal: events.signal });
-  listen('timeupdate', () => { checkpoint(); updateTime(); void prepareNext(offset + video.currentTime); });
+  listen('timeupdate', () => {
+    if (sleepDeadline && Date.now() >= sleepDeadline) expireSleepTimer();
+    checkpoint(); updateTime();
+    const position = offset + player.currentTime;
+    void prepareNext(position);
+    if (skipping || !playIntent || player.paused || player.seeking || loading || pendingStream || library.preferences.autoSkip !== true) return;
+    const target = autoSkip.target(library.markers?.[current.id] || [], position, info.duration);
+    if (target === null) return;
+    skipping = true;
+    void attempt(() => seek(target, true)).finally(() => { skipping = false; });
+  });
   listen('progress', updateTime);
+  listen('ratechange', updateTime);
   listen('playing', () => { clearTimeout(recoveryTimer); if (playIntent && !video.paused) void api.playbackState(true); loading = false; playbackError = ''; showMessage(); updateToggle(); scheduleIdle(); });
   listen('pause', () => { if (!playIntent) void api.playbackState(false); loading = false; showMessage(); updateToggle(); $('.stage')?.classList.remove('idle'); if (remember()) void attempt(save); });
   listen('waiting', () => { loading = playIntent && !video.paused; if (loading) { void api.playbackState({ playing: true, buffering: true }); watchBuffering(); } showMessage(); });
@@ -882,8 +1161,11 @@ function renderPlayer(adopt = null) {
     // A truncated response is not the end of the movie. Keep the queue and
     // resume position intact and recover from the original media timeline.
     if (loading || !info?.duration) return;
-    if (offset + player.currentTime < info.duration - finishMargin(info.duration)) { recover(); return; }
-    playIntent = false; void api.playbackState(false); remember(); void attempt(save); if (library.preferences.autoplay) void step(1); updateToggle();
+    if (!reachedPlaybackEnd(offset + player.currentTime, info.duration)) { recover(); return; }
+    const stop = sleepMode === 'episode' || (sleepDeadline && Date.now() >= sleepDeadline);
+    if (stop) expireSleepTimer();
+    else setPlaying(false);
+    remember(); void attempt(save); if (!stop && library.preferences.autoplay) void step(1);
   });
   listen('error', recover);
   listen('click', () => toggle());
@@ -902,12 +1184,26 @@ const fillRange = input => input.style.setProperty('--fill', `${(Number(input.va
 // built once the boost is first used, since routing an element through Web Audio can't be undone for that element.
 const MAX_VOLUME = 1.5;
 let audioContext = null, boost = null;
+function playbackOptions(details, track, force = false) {
+  const player = video || document.createElement('video');
+  const hdr = !!details.hdrDirectMime && (matchMedia('(video-dynamic-range: high)').matches || matchMedia('(dynamic-range: high)').matches)
+    && player.canPlayType(details.hdrDirectMime) === 'probably';
+  let channels = 2;
+  if ((details.audio.find(audio => audio.index === track)?.channels ?? 0) >= 6 && player.canPlayType('audio/mp4; codecs="mp4a.40.2"')) {
+    try {
+      audioContext ||= new AudioContext();
+      if (audioContext.destination.maxChannelCount >= 6) channels = 6;
+    } catch { /* Default to stereo without a reported audio output. */ }
+  }
+  return { hdr, channels, forceTranscode: force || (!hdr && supportsFullBuffer(!!details.video)) };
+}
 function applyVolume(value) {
   if (!video) return;
   video.volume = Math.min(1, value);
   if (value > 1 && boost?.element !== video) {
     try {
       audioContext ||= new AudioContext();
+      if (audioContext.destination.maxChannelCount >= 6) audioContext.destination.channelCount = 6;
       const gain = audioContext.createGain(); audioContext.createMediaElementSource(video).connect(gain).connect(audioContext.destination);
       boost = { element: video, gain };
     } catch { boost = null; }
@@ -918,12 +1214,13 @@ const currentVolume = () => boost?.element === video ? video.volume * boost.gain
 function updateVolume() { const input = $('#volume'), output = $('#volume-value'); if (!input || !video) return; const volume = currentVolume(); input.value = volume; fillRange(input); output.textContent = video.muted ? 'Muted' : `${Math.round(volume * 100)}%`; output.classList.toggle('boosted', !video.muted && volume > 1.005); }
 function scheduleIdle() { clearTimeout(idleTimer); idleTimer = setTimeout(() => { if (view === 'player' && !video.paused && !sidePanel && !loading && !previewHovered && !$('.stage').querySelector(':focus-visible')) $('.stage').classList.add('idle'); }, 3200); }
 function updateMetadata() {
-  $('#player-chips').innerHTML = `<span class="chip">${esc(current.format)}</span>${info.video ? `<span class="chip">${info.video.height}p · ${esc(info.video.codec.toUpperCase())}</span>` : '<span class="chip">Audio</span>'}${info.audio.length ? `<span class="chip">${esc(info.audio.find(a => a.index === audio)?.codec.toUpperCase())} · Stereo output</span>` : ''}`;
+  $('#player-chips').innerHTML = `<span class="chip">${esc(current.format)}</span>${info.video ? `<span class="chip">${info.video.height}p · ${esc(info.video.codec.toUpperCase())}</span>` : '<span class="chip">Audio</span>'}${info.audio.length ? `<span class="chip">${esc(info.audio.find(a => a.index === audio)?.codec.toUpperCase())}</span>` : ''}`;
   $('#seek').max = info.duration || 1; $('#duration').textContent = fmt(info.duration); showTimes(offset + (video?.currentTime || 0)); renderSeekMarks();
 }
-async function loadStream(position, shouldPlay = true, token = generation) {
+async function loadStream(position, shouldPlay = true, token = generation, savedUrl) {
   playIntent = shouldPlay; loading = true; playbackError = ''; showMessage(); updateToggle(); pendingStream = { id: current.id, position };
-  const result = await api.stream({ id: current.id, offset: position, audio, bitmapSubtitle: bitmapTrack()?.index ?? null, subtitleDelay: delay, forceTranscode: supportsFullBuffer(!!info.video) || video.dataset.forceTranscode === 'true' }); if (token !== generation) return;
+  const result = savedUrl ? { url: savedUrl, offset: 0, diagnostics: savedDiagnostics } : await api.stream({ id: current.id, offset: position, audio, bitmapSubtitle: bitmapTrack()?.index ?? null, subtitleDelay: delay, audioDelay, ...playbackOptions(info, audio, video.dataset.forceTranscode === 'true') }); if (token !== generation) return;
+  diagnostics = result.diagnostics; if (sidePanel === 'tracks') renderTracks();
   offset = result.offset; streamId = current.id;
   const player = video, start = Math.max(0, position - offset);
   // Preserve the target until this source has reached it. load() emits zero-time
@@ -940,14 +1237,16 @@ async function loadStream(position, shouldPlay = true, token = generation) {
   settlePending = settle;
   player.addEventListener('loadedmetadata', () => { if (token === generation && video === player && start) player.currentTime = start; }, { once: true });
   player.addEventListener('timeupdate', settle);
-  video.src = bufferPlayback(video, result.url, info.duration - offset, !!info.video); video.load(); applySubtitle(); updateTime();
+  releaseBuffer(video);
+  video.src = result.progressive ? result.url : bufferPlayback(video, result.url, info.duration - offset, !!info.video); video.load(); applySubtitle(); updateTime();
   if (playIntent) { try { await video.play(); } catch (error) { if (token === generation && error.name !== 'AbortError') { loading = false; playbackError = error.message; showMessage(); } } }
   // A paused stream only gets its first frame now; re-apply cue timings so the subtitle for this moment appears without pressing play.
   else { video.addEventListener('loadeddata', () => { loading = false; showMessage(); adjustCues(); }, { once: true }); }
 }
-async function seek(position) {
+async function seek(position, automatic = false) {
   if (!info.duration || !current) return;
   const target = Math.max(0, Math.min(info.duration - .1, position));
+  if (!automatic) autoSkip.seek(target);
   const shouldPlay = playIntent;
   const relative = target - offset;
   // Fragmented streams can buffer frames before Chromium exposes a seekable range.
@@ -968,10 +1267,66 @@ function updateTime() {
   const loaded = video.dataset.bufferComplete === 'true' ? info.duration : offset + (video.buffered.length ? video.buffered.end(video.buffered.length - 1) : 0);
   seek.style.setProperty('--buffered', `${info.duration ? Math.min(100, loaded / info.duration * 100) : 0}%`);
   fillRange(seek); updateSkip(position);
+  if (Number.isFinite(info.duration) && info.duration > 0) navigator.mediaSession?.setPositionState?.({
+    duration: info.duration, position: Math.min(info.duration, Math.max(0, pendingStream?.position ?? position)), playbackRate: video.playbackRate
+  });
 }
-function updateToggle() { const btn = $('#play-toggle'); if (!btn) return; btn.innerHTML = icon(playIntent ? 'pause' : 'play'); btn.setAttribute('aria-label', playIntent ? 'Pause' : 'Play'); }
-function toggle() { if (!video || !video.getAttribute('src')) return; playIntent = !playIntent; void api.playbackState(playIntent); if (playIntent) void attempt(() => video.play()); else video.pause(); updateToggle(); }
-function setVolume(value) { if (!video) return; const volume = Math.round(Math.max(0, Math.min(MAX_VOLUME, value)) * 100) / 100; applyVolume(volume); video.muted = false; library.preferences.volume = volume; updateVolume(); const btn = document.querySelector('[data-action="mute"]'); if (btn) btn.innerHTML = icon('volume'); void attempt(save); }
+function updateToggle() {
+  const btn = $('#play-toggle'); if (!btn) return;
+  btn.innerHTML = icon(playIntent ? 'pause' : 'play'); btn.setAttribute('aria-label', playIntent ? 'Pause' : 'Play');
+  if (navigator.mediaSession) navigator.mediaSession.playbackState = video.paused ? 'paused' : 'playing';
+}
+function setPlaying(value) {
+  if (!video) return;
+  playIntent = value; void api.playbackState(value);
+  if (!value) video.pause();
+  else if (video.getAttribute('src')) void attempt(() => video.play());
+  updateToggle();
+}
+function toggle() { if (video?.getAttribute('src')) setPlaying(!playIntent); }
+function setSleepTimer(mode) {
+  clearTimeout(sleepTimer); sleepMode = mode;
+  const delayMs = Number(mode) * 60_000;
+  sleepDeadline = delayMs > 0 ? Date.now() + delayMs : 0;
+  if (sleepDeadline) sleepTimer = setTimeout(expireSleepTimer, delayMs);
+  const select = $('#sleep-timer'); if (select) select.value = mode;
+}
+function expireSleepTimer() {
+  setSleepTimer('off'); setPlaying(false); toast('Sleep timer ended.');
+}
+const mediaActions = ['play', 'pause', 'seekbackward', 'seekforward', 'seekto', 'previoustrack', 'nexttrack'];
+function startMediaSession() {
+  const session = navigator.mediaSession; if (!session) return;
+  if (typeof MediaMetadata === 'function') {
+    const show = current.kind === 'show', artwork = meta(current)?.poster;
+    session.metadata = new MediaMetadata({
+      title: show ? episodeName(current) : displayName(current),
+      artist: show ? displayName(current) : 'Matro',
+      album: show ? `Season ${current.season}` : '',
+      artwork: artwork ? [{ src: new URL(artwork, document.baseURI).href }] : []
+    });
+  }
+  const jump = (by) => seek(offset + video.currentTime + by);
+  const handlers = {
+    play: () => setPlaying(true), pause: () => setPlaying(false),
+    seekbackward: ({ seekOffset = SKIP }) => jump(-seekOffset),
+    seekforward: ({ seekOffset = SKIP }) => jump(seekOffset),
+    seekto: ({ seekTime }) => { if (Number.isFinite(seekTime)) return seek(seekTime); },
+    previoustrack: () => step(-1), nexttrack: () => step(1)
+  };
+  for (const action of mediaActions) {
+    try { session.setActionHandler(action, detail => void attempt(() => handlers[action](detail))); }
+    catch { /* Browser support varies by action. */ }
+  }
+}
+function stopMediaSession() {
+  const session = navigator.mediaSession; if (!session) return;
+  for (const action of mediaActions) {
+    try { session.setActionHandler(action, null); } catch { /* Unsupported action. */ }
+  }
+  session.setPositionState?.(); session.playbackState = 'none'; session.metadata = null;
+}
+function setVolume(value) { if (!video) return; const volume = Math.round(Math.max(0, Math.min(MAX_VOLUME, value)) * 100) / 100; applyVolume(volume); video.muted = false; library.preferences.volume = volume; updateVolume(); const btn = document.querySelector('[data-action="mute"]'); if (btn) btn.innerHTML = icon('volume'); void attempt(() => savePreferences({ volume })); }
 function showMessage() {
   const message = $('#stage-message'); if (!message) return;
   message.classList.toggle('error', !!playbackError);
@@ -986,11 +1341,11 @@ function renderQueue() {
   const row = (item, index) => {
     const id = item.id, previous = items[index - 1], now = id === current.id, done = completed(id), p = library.progress[id], pct = p?.duration && !done ? Math.min(100, p.position / p.duration * 100) : 0;
     const still = episodeInfo(item)?.still || (item.kind !== 'show' ? meta(item)?.backdrop : null), runtime = episodeInfo(item)?.runtime;
-    const heading = item.kind === 'show' && (!previous || !sameTitle(previous, item) || previous.season !== item.season) ? `<h3 class="season-heading">${esc(displayName(item))} · Season ${item.season}</h3>` : '';
-    return `${heading}<div class="queue-row ${now ? 'current' : ''} ${done ? 'done' : ''}"><button class="qplay" data-play="${id}" aria-label="Play ${esc(item.title)}"><span class="queue-thumb ${artFor(item)}">${still ? `<img src="${esc(still)}" alt="" draggable="false">` : ''}<span class="queue-code">${item.kind === 'show' ? (item.prelude ? 'Pre' : `E${item.episode}`) : esc(item.format)}</span>${pct ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}</span><span class="queue-info"><small class="kicker">${now ? '<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>Now playing' : done ? 'Watched' : item.kind === 'show' ? (item.prelude ? 'Prelude' : `S${item.season} · E${item.episode}`) : 'Movie'}</small><strong>${esc(item.kind === 'show' ? episodeName(item) : displayName(item))}</strong><small>${esc([runtime ? `${runtime}m` : null, item.format].filter(Boolean).join(' · '))}</small></span></button><span class="queue-actions"><button class="icon-button" data-complete="${id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(item.title)}" title="${done ? 'Mark incomplete' : 'Mark complete'}">${icon('check')}</button><button class="icon-button" data-remove-queue="${id}" aria-label="Remove ${esc(item.title)} from queue" title="Remove from queue">${icon('close')}</button></span></div>`;
+    const heading = item.kind === 'show' && (!previous || !sameTitle(previous, item) || previous.season !== item.season) ? `<h3 class="season-heading">${esc(displayName(item))} · ${seasonLabel(item.season)}</h3>` : '';
+    return `${heading}<div class="queue-row ${now ? 'current' : ''} ${done ? 'done' : ''}"><button class="qplay" data-play="${id}" aria-label="Play ${esc(item.title)}"><span class="queue-thumb ${artFor(item)}">${still ? `<img src="${esc(still)}" alt="" draggable="false">` : ''}<span class="queue-code ${item.kind === 'show' ? '' : 'queue-format'}">${item.kind === 'show' ? (item.prelude ? 'Pre' : `E${item.episode}`) : esc(item.format)}</span>${pct ? `<span class="progress-track"><span class="progress-fill" data-progress="${pct}"></span></span>` : ''}</span><span class="queue-info"><small class="kicker">${now ? '<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>Now playing' : done ? 'Watched' : item.kind === 'show' ? (item.prelude ? 'Prelude' : `S${item.season} · E${item.episode}`) : 'Movie'}</small><strong>${esc(item.kind === 'show' ? episodeName(item) : displayName(item))}</strong><small>${esc([runtime ? `${runtime}m` : null, item.format].filter(Boolean).join(' · '))}</small></span></button><span class="queue-actions"><button class="icon-button" data-complete="${id}" aria-label="${done ? 'Mark incomplete' : 'Mark complete'} ${esc(item.title)}" title="${done ? 'Mark incomplete' : 'Mark complete'}">${icon('check')}</button><button class="icon-button" data-remove-queue="${id}" aria-label="Remove ${esc(item.title)} from queue" title="Remove from queue">${icon('close')}</button></span></div>`;
   };
-  panel.innerHTML = `<div class="queue-header"><div><h2>Up next</h2><p>${left} to go · ${items.length} in queue</p></div><button class="text-button" data-action="clear-watched">Clear watched</button></div><div class="queue-items">${items.map(row).join('') || '<p class="queue-empty">Nothing queued. Add titles from a title page.</p>'}</div><div class="autoplay"><div><strong>Autoplay next</strong><small>Plays the next episode when one ends</small></div><button class="switch ${library.preferences.autoplay ? 'on' : ''}" data-action="autoplay" aria-label="Autoplay next" aria-pressed="${library.preferences.autoplay}"></button></div>`;
-  applyStyles(panel);
+  panel.innerHTML = `<div class="queue-header"><div><h2>Up next</h2><p>${left} to go · ${items.length} in queue</p></div><button class="text-button" data-action="clear-watched">Clear watched</button></div><div class="queue-items">${items.map(row).join('') || '<p class="queue-empty">Nothing queued. Add titles from a title page.</p>'}</div><div class="autoplay"><div><strong>Autoplay next</strong><small>Plays the next ${current?.kind === 'show' ? 'episode' : 'item'} when one ends</small></div><button class="switch ${library.preferences.autoplay ? 'on' : ''}" data-action="autoplay" aria-label="Autoplay next" aria-pressed="${library.preferences.autoplay}"></button></div>`;
+  applyStyles(panel); updateSkip(offset + (video?.currentTime || 0));
 }
 function nextInQueue(direction) {
   const queue = current?.kind === 'show' ? library.queue.filter(id => { const item = library.items.find(i => i.id === id); return item?.kind === 'show' && sameTitle(item, current); }) : library.queue;
@@ -1033,7 +1388,7 @@ async function detectMarkers(id, force = false) {
 function renderSegments() {
   const actionsPanel = $('#player-actions'), tools = $('#segment-tools'); if (!actionsPanel || !tools || !current) return;
   actionsPanel.innerHTML = `<button class="pill" data-action="complete-current">${completed(current.id) ? 'Completed ✓' : 'Mark complete'}</button><button class="pill ${sidePanel === 'segments' ? 'active' : ''}" id="segments-button" data-action="segments" aria-label="Skip segment settings" aria-expanded="${sidePanel === 'segments'}">Skip segments${isScanning(current.id) ? ' · Scanning…' : ''}</button>`;
-  tools.innerHTML = '<button class="pill" id="skip-segment" data-action="skip-segment" aria-keyshortcuts="Enter" hidden></button>';
+  if (!$('#skip-segment')) tools.innerHTML = '<button class="pill" id="skip-segment" data-action="skip-segment" aria-keyshortcuts="Enter" hidden></button><button class="pill" id="credits-next" data-action="next" hidden>Next episode</button>';
   renderSeekMarks(); updateSkip(offset + (video?.currentTime || 0));
 }
 // Seek bar sections: skip ranges are drawn and labelled on the bar, chapters get a tick at each start. Hovering names the
@@ -1054,8 +1409,14 @@ function renderSeekMarks() {
 }
 function updateSkip(position) {
   const button = $('#skip-segment'); if (!button || !current) return;
-  const marker = (library.markers?.[current.id] || []).find(s => position >= s.start && position < s.end);
-  button.hidden = !marker; if (marker) button.innerHTML = `Skip ${esc(marker.type)}<kbd class="key-hint" aria-hidden="true">Enter</kbd>`;
+  const marker = activeMarker(position);
+  const next = $('#credits-next');
+  next.hidden = current.kind !== 'show' || !nextInQueue(1) || !reachedOutro(position, info?.duration, library.markers?.[current.id] || []);
+  button.hidden = !marker;
+  if (!button.hidden) button.innerHTML = `Skip ${esc(marker.type)}<kbd class="key-hint" aria-hidden="true">Enter</kbd>`;
+}
+function activeMarker(position) {
+  return (library.markers?.[current?.id] || []).find(s => position >= s.start && position < s.end);
 }
 function openPanel(name) {
   sidePanel = sidePanel === name ? null : name;
@@ -1065,6 +1426,7 @@ function segmentsPanel() {
   const markers = library.markers?.[current.id] || [];
   const rows = markers.map((s, index) => `<div class="marker-row"><span class="marker-type">${esc(s.type)}</span><span class="mono">${fmt(s.start)} – ${fmt(s.end)}</span><span class="dim">${s.source === 'automatic' ? 'Detected' : 'Manual'}</span><button class="text-button" data-marker-seek="${index}">Jump</button><button class="text-button" data-marker-remove="${index}" aria-label="Remove ${esc(s.type)} marker">Remove</button></div>`).join('');
   return `<section class="tracks-panel segments-panel" aria-label="Skip segments"><div class="tracks-heading"><h3>Skip segments</h3><button class="icon-button" data-action="segments" aria-label="Close skip segments">×</button></div>
+    <label class="player-setting"><span>Auto-skip intros and recaps</span><input id="auto-skip" type="checkbox" ${library.preferences.autoSkip === true ? 'checked' : ''}></label>
     <p class="scan-note">A skip button appears while playback is inside one of these ranges.${current.kind === 'show' ? ' Matro compares episodes of this season to find intros, recaps and outros.' : ''}</p>
     <div class="marker-list">${rows || '<p class="scan-note">No skip ranges for this file yet.</p>'}</div>
     <div class="marker-actions">${markerDraft ? `<span>${esc(markerDraft.type)} starts at ${fmt(markerDraft.start)} — seek to its end</span><button class="pill" data-action="marker-end">Save end here</button><button class="text-button" data-action="marker-cancel">Cancel</button>` : ['intro', 'outro', 'recap'].map(type => `<button class="text-button" data-marker-start="${type}">Mark ${type} start</button>`).join('')}</div>
@@ -1077,53 +1439,209 @@ function renderTracks() {
   const segments = $('#segments-button'); if (segments) { segments.classList.toggle('active', sidePanel === 'segments'); segments.setAttribute('aria-expanded', String(sidePanel === 'segments')); }
   if (!sidePanel) { panel.innerHTML = ''; return; }
   $('.stage').classList.remove('idle');
-  if (sidePanel === 'segments') { panel.innerHTML = segmentsPanel(); return; }
+  if (sidePanel === 'segments') {
+    panel.innerHTML = segmentsPanel();
+    $('#auto-skip').addEventListener('change', event => { library.preferences.autoSkip = event.target.checked; void attempt(() => savePreferences({ autoSkip: library.preferences.autoSkip })); });
+    return;
+  }
   const bitmap = !!bitmapTrack();
-  const audioRows = info.audio.map(a => `<button class="track-option ${a.index === audio ? 'selected' : ''}" data-audio="${a.index}" aria-pressed="${a.index === audio}"><span class="radio"></span><span class="track-copy">${trackHeading(a)}<small>${esc(a.codec.toUpperCase())} · ${a.channels} ch${a.channels > 2 ? ' · plays as stereo' : ''}${a.default ? ' · Default' : ''}</small></span></button>`).join('');
+  const audioRows = info.audio.map(a => `<button class="track-option ${a.index === audio ? 'selected' : ''}" data-audio="${a.index}" aria-pressed="${a.index === audio}"><span class="radio"></span><span class="track-copy">${trackHeading(a)}<small>${esc(a.codec.toUpperCase())} · ${a.channels} ch${a.default ? ' · Default' : ''}</small></span></button>`).join('');
   const subtitleRows = info.subtitles.map(s => `<button class="track-option ${s.index === subtitle ? 'selected' : ''}" data-subtitle="${s.index}" aria-pressed="${s.index === subtitle}" ${s.text || s.bitmap ? '' : 'disabled'}><span class="radio"></span><span class="track-copy">${trackHeading(s)}<small>${esc(s.codec.toUpperCase())} · ${s.sidecar ? 'File next to video' : s.bitmap ? 'Bitmap' : s.text ? 'Text' : 'Unsupported format'}</small></span></button>`).join('');
   panel.innerHTML = `<section class="tracks-panel" aria-label="Audio and subtitles">
     <div class="tracks-heading"><h3>Audio & subtitles</h3><button class="icon-button" data-action="tracks" aria-label="Close audio and subtitles">×</button></div>
+    ${diagnostics ? `<details class="sub-style" ${panel.querySelector('details')?.open ? 'open' : ''}><summary>Playback info · ${esc(diagnostics.mode)}</summary><p class="scan-note">${esc(diagnostics.reason)}</p></details>` : ''}
     <div class="track-columns"><div><h3>Audio</h3>${audioRows || '<p class="scan-note">No audio tracks</p>'}</div>
     <div><h3>Subtitles</h3><button class="track-option ${subtitle === null ? 'selected' : ''}" data-subtitle="off" aria-pressed="${subtitle === null}"><span class="radio"></span><span><strong>Off</strong><small>No subtitles</small></span></button>${subtitleRows}
     ${subtitle === 'external' ? '<button class="track-option selected" disabled><span class="radio"></span><span><strong>External file</strong><small>Loaded subtitles</small></span></button>' : ''}</div></div>
+    ${qualityRow()}
     <div class="track-bottom"><div class="delay-controls"><span>Sub delay</span><button class="icon-button" data-action="delay-down" aria-label="Subtitles earlier by 0.1 seconds">−</button><output>${delay > 0 ? '+' : ''}${delay.toFixed(1)} s</output><button class="icon-button" data-action="delay-up" aria-label="Subtitles later by 0.1 seconds">+</button></div>
-    <button class="text-button" data-action="subtitle-file">Load subtitle file…</button></div>
+    <button class="text-button" data-action="subtitle-file">Load subtitle file…</button>${onlineSubtitles ? '<button class="text-button" data-action="find-subtitles">Find subtitles…</button>' : ''}</div>
+    <div class="track-bottom"><div class="audio-delay"><span>Audio delay</span><button class="icon-button" data-action="audio-delay-down" aria-label="Audio earlier by 0.1 seconds">−</button><output>${audioDelay > 0 ? '+' : ''}${audioDelay.toFixed(1)} s</output><button class="icon-button" data-action="audio-delay-up" aria-label="Audio later by 0.1 seconds">+</button></div>${audioDelay ? '<button class="text-button" data-action="audio-delay-reset">Reset</button>' : ''}</div>
     ${subStylePanel(bitmap)}
-    ${bitmap ? '<p class="bitmap-note">Bitmap subtitles keep their original appearance. Track or delay changes briefly reload playback.</p>' : ''}
+    ${bitmap ? '<p class="bitmap-note">Bitmap subtitles are part of the picture. Track or delay changes briefly reload playback.</p>' : ''}
+    <label class="player-setting"><span>Sleep timer</span><select id="sleep-timer"><option value="off">Off</option><option value="episode">End of episode</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option></select></label>
     ${info.chapters.length ? `<div class="player-chapters">${info.chapters.map((c, index) => `<button class="chapter-button" data-chapter="${index}">${esc(c.title)} · ${fmt(c.start)}</button>`).join('')}</div>` : ''}</section>`;
+  const timer = $('#sleep-timer'); timer.value = sleepMode;
+  timer.addEventListener('change', () => setSleepTimer(timer.value));
+}
+let onlineSubtitles = false;
+async function openTracks() {
+  openPanel('tracks');
+  if (sidePanel !== 'tracks' || !api.subtitleSearchStatus) return;
+  const id = current.id;
+  const status = await api.subtitleSearchStatus().catch(() => ({ enabled: false }));
+  if (sidePanel === 'tracks' && current?.id === id && onlineSubtitles !== status.enabled) {
+    onlineSubtitles = status.enabled; renderTracks();
+  }
+}
+
+function subtitleDialog(title, content) {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'match-dialog'; dialog.setAttribute('aria-label', title);
+  dialog.innerHTML = `<div class="section-heading"><h2>${esc(title)}</h2><button class="icon-button" type="button" aria-label="Close">×</button></div>${content}`;
+  dialog.querySelector('.icon-button').onclick = () => dialog.close();
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  document.body.append(dialog); dialog.showModal();
+  return dialog;
+}
+async function configureSubtitleSearch() {
+  const { enabled } = await api.subtitleSearchStatus();
+  const dialog = subtitleDialog('OpenSubtitles', `<p class="muted">Search is ${enabled ? 'on' : 'off'}. A search sends the title and language to OpenSubtitles.</p>
+    <form><label class="search-field small"><input aria-label="OpenSubtitles API key" type="password" required autocomplete="off" maxlength="200" placeholder="OpenSubtitles API key"></label>
+    <p role="status"></p><div class="show-actions"><button class="pill primary">Save key</button>${enabled ? '<button class="pill" type="button" data-disable-search>Turn off</button>' : ''}</div></form>`);
+  const update = async key => {
+    try { const status = await api.configureSubtitleSearch(key); onlineSubtitles = status.enabled; dialog.close(); }
+    catch (error) { dialog.querySelector('[role=status]').textContent = error.message; }
+  };
+  dialog.querySelector('form').onsubmit = event => { event.preventDefault(); void update(dialog.querySelector('input').value); };
+  dialog.querySelector('[data-disable-search]')?.addEventListener('click', () => void update(''));
+}
+async function findOnlineSubtitles() {
+  const id = current.id, token = ++subtitleGeneration;
+  const languages = new Intl.DisplayNames(navigator.languages, { type: 'language' });
+  const options = 'ar bg ca cs da de el en es et fa fi fr he hi hr hu id it ja ko lt lv nl no pl pt ro ru sk sl sr sv th tr uk vi zh'.split(' ')
+    .map(code => ({ code, name: languages.of(code) })).sort((a, b) => a.name.localeCompare(b.name));
+  const preferred = (info.subtitles.find(track => track.index === subtitle)?.language || navigator.language).split('-')[0];
+  const initial = options.some(option => option.code === preferred) ? preferred : 'en';
+  const dialog = subtitleDialog('Find subtitles', `<form><div class="show-actions"><select aria-label="Subtitle language">${options.map(({ code, name }) => `<option value="${code}" ${code === initial ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select><button class="pill primary">Search OpenSubtitles</button></div></form>
+    <p class="muted" role="status"></p><div class="match-results"></div>`);
+  const form = dialog.querySelector('form'), status = dialog.querySelector('[role=status]'), results = dialog.querySelector('.match-results');
+  form.onsubmit = async event => {
+    event.preventDefault(); results.replaceChildren(); form.querySelector('button').disabled = true; status.textContent = 'Searching OpenSubtitles…';
+    try {
+      const matches = await api.searchSubtitles({ id, language: form.querySelector('select').value });
+      status.textContent = matches.length ? '' : 'No subtitles found.';
+      for (const match of matches) {
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = 'track-option'; button.textContent = match.name;
+        button.onclick = async () => {
+          const buttons = results.querySelectorAll('button'); buttons.forEach(b => { b.disabled = true; });
+          form.querySelector('button').disabled = true; status.textContent = 'Saving subtitles…';
+          try {
+            const loaded = await api.downloadSubtitle({ id, token: match.token });
+            if (!dialog.open || current?.id !== id || token !== subtitleGeneration) return;
+            if (loaded.refreshTracks) {
+              const { subtitles } = await api.inspect(id);
+              if (!dialog.open || current?.id !== id || token !== subtitleGeneration) return;
+              info.subtitles = subtitles;
+            }
+            dialog.close(); await useLoadedSubtitle(loaded, 'Subtitles saved.');
+          } catch (error) {
+            status.textContent = error.message;
+            buttons.forEach(b => { b.disabled = false; });
+            form.querySelector('button').disabled = false;
+          }
+        };
+        results.append(button);
+      }
+    } catch (error) { status.textContent = error.message; }
+    finally { form.querySelector('button').disabled = false; }
+  };
+}
+
+async function useLoadedSubtitle(loaded, message) {
+  const wasBitmap = !!bitmapTrack(); subtitleText = loaded.text;
+  if (loaded.track) {
+    if (!info.subtitles.some(t => t.index === loaded.track.index)) info.subtitles.push(loaded.track);
+    subtitle = loaded.track.index; rememberTracks(['subtitle', 'off']); toast(loaded.warning || message);
+  } else { subtitle = 'external'; if (loaded.warning) toast(loaded.warning); }
+  applySubtitle(); renderTracks(); if (wasBitmap) await restartStream();
+}
+
+function qualityRow() {
+  if (!(info.qualities?.length > 1)) return '';
+  const chosen = api.quality();
+  return `<div class="sub-style"><div class="sub-style-row"><span>Quality</span><div class="size-options" role="group" aria-label="Stream quality">${info.qualities.map(q => `<button class="${chosen === q.id ? 'selected' : ''}" data-quality="${q.id}" aria-pressed="${chosen === q.id}" title="${esc(q.detail)}">${esc(q.label)}</button>`).join('')}</div></div></div>`;
 }
 // Subtitle look is one global preference: size (50–200%), font, background box, weight/slant and an edge effect.
-// It is applied through CSS variables that video::cue reads, so restyling never reloads the track.
+// The caption overlay reads these CSS variables, so restyling never reloads the track.
 const SUB_FONTS = [['sans', 'Sans', "Geist, 'Segoe UI', system-ui, sans-serif"], ['classic', 'Classic', 'Arial, Helvetica, sans-serif'], ['serif', 'Serif', "Georgia, 'Times New Roman', serif"], ['mono', 'Mono', "'Geist Mono', Consolas, monospace"], ['casual', 'Casual', "'Comic Sans MS', 'Segoe Print', cursive"]];
 const SUB_BACKGROUNDS = [['none', 'Off', 0], ['light', 'Light', .45], ['dark', 'Dark', .75], ['solid', 'Solid', 1]];
 const SUB_EDGES = [['none', 'None', 'none'], ['outline', 'Outline', '-1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000, 0 0 3px #000'], ['shadow', 'Shadow', '2px 2px 4px #000, 0 0 8px #000c']];
 const subStyle = () => ({ size: 1, font: 'sans', background: 'light', bold: false, italic: false, edge: 'none', ...library.preferences.subtitles });
 function applySubStyle() {
   if (!video) return; const style = subStyle();
-  const set = (name, value) => video.style.setProperty(name, value);
+  const set = (name, value) => $('.stage').style.setProperty(name, value);
   set('--cue-scale', String(style.size)); set('--cue-font', SUB_FONTS.find(([id]) => id === style.font)?.[2] || SUB_FONTS[0][2]);
   set('--cue-bg', `rgb(0 0 0 / ${SUB_BACKGROUNDS.find(([id]) => id === style.background)?.[2] ?? .45})`);
   set('--cue-weight', style.bold ? '700' : '400'); set('--cue-style', style.italic ? 'italic' : 'normal'); set('--cue-shadow', SUB_EDGES.find(([id]) => id === style.edge)?.[2] || 'none');
 }
-function setSubStyle(change, render = true) { library.preferences.subtitles = { ...subStyle(), ...change }; applySubStyle(); if (render) renderTracks(); void attempt(save); }
+function setSubStyle(change, render = true) { library.preferences.subtitles = { ...subStyle(), ...change }; applySubStyle(); if (render) renderTracks(); void attempt(() => savePreferences({ subtitles: change })); }
 function subStylePanel(bitmap) {
   const style = subStyle(), off = bitmap ? 'disabled title="Bitmap subtitles keep their original look"' : '';
   const chips = (label, key, options) => `<div class="size-options" role="group" aria-label="${label}">${options.map(([id, name]) => `<button class="${style[key] === id ? 'selected' : ''}" data-sub-style="${key}:${id}" aria-pressed="${style[key] === id}" ${off}>${name}</button>`).join('')}</div>`;
   const row = (label, body) => `<div class="sub-style-row"><span>${label}</span>${body}</div>`;
   return `<div class="sub-style">${row('Size', `<input id="sub-size" class="volume" type="range" min=".5" max="2" step=".05" value="${style.size}" aria-label="Subtitle size" ${off}><output>${Math.round(style.size * 100)}%</output>`)}
     ${row('Font', chips('Subtitle font', 'font', SUB_FONTS))}${row('Background', chips('Subtitle background', 'background', SUB_BACKGROUNDS))}
-    ${row('Style', `<div class="size-options" role="group" aria-label="Subtitle text style">${[['bold', 'Bold'], ['italic', 'Italic']].map(([key, name]) => `<button class="${style[key] ? 'selected' : ''}" data-sub-style="${key}:on" aria-pressed="${style[key]}" ${off}>${name}</button>`).join('')}</div>${chips('Subtitle edge', 'edge', SUB_EDGES)}`)}</div>`;
+    ${row('Style', `<div class="size-options" role="group" aria-label="Subtitle text style">${[['bold', 'Bold'], ['italic', 'Italic']].map(([key, name]) => `<button class="${style[key] ? 'selected' : ''}" data-sub-style="${key}:on" aria-pressed="${style[key]}" ${off}>${name}</button>`).join('')}</div>${chips('Subtitle edge', 'edge', SUB_EDGES)}`)}
+    ${row('Position', `<div class="size-options" role="group" aria-label="Subtitle position presets">${Object.keys(SUBTITLE_PRESETS).map(name => `<button data-sub-position="${name}" aria-pressed="${atSubtitlePreset(name)}" ${off}>${name}</button>`).join('')}</div><button class="text-button" data-sub-position="Reset" ${off}>Reset position</button>`)}
+    ${row('Horizontal', subtitlePositionSlider('x', 'Horizontal subtitle position', off))}
+    ${row('Vertical', subtitlePositionSlider('y', 'Vertical subtitle position', off))}</div>`;
+}
+const SUBTITLE_PRESETS = { Bottom: { x: 50, y: 100 }, Top: { x: 50, y: 0 } };
+const SUBTITLE_POSITION_KEY = 'matro.subtitlePosition';
+const validSubtitleAxis = (value, fallback) => Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : fallback;
+let subtitlePosition = SUBTITLE_PRESETS.Bottom;
+try {
+  const saved = JSON.parse(localStorage.getItem(SUBTITLE_POSITION_KEY));
+  if (saved) subtitlePosition = { x: validSubtitleAxis(saved.x, 50), y: validSubtitleAxis(saved.y, 100) };
+} catch {}
+function atSubtitlePreset(name) {
+  const preset = SUBTITLE_PRESETS[name];
+  return subtitlePosition.x === preset.x && subtitlePosition.y === preset.y;
+}
+function subtitlePositionSlider(axis, label, disabled) {
+  return `<input class="volume" type="range" min="0" max="100" value="${subtitlePosition[axis]}" style="--fill:${subtitlePosition[axis]}%" data-sub-position-axis="${axis}" aria-label="${label}" ${disabled}>`;
+}
+function applySubtitlePosition() {
+  const overlay = $('#subtitle-overlay');
+  overlay.style.setProperty('--caption-x', `${subtitlePosition.x}%`);
+  overlay.style.setProperty('--caption-y', `${subtitlePosition.y}%`);
+}
+function setSubtitlePosition(position) {
+  subtitlePosition = position;
+  applySubtitlePosition();
+  try { localStorage.setItem(SUBTITLE_POSITION_KEY, JSON.stringify(position)); } catch {}
+  document.querySelectorAll('[data-sub-position-axis]').forEach(input => { input.value = position[input.dataset.subPositionAxis]; fillRange(input); });
+  document.querySelectorAll('.size-options [data-sub-position]').forEach(button => button.setAttribute('aria-pressed', String(atSubtitlePreset(button.dataset.subPosition))));
+}
+function setupSubtitleOverlay(signal) {
+  const stage = $('.stage'), heading = $('.player-top'), timeline = $('.timeline'), segmentTools = $('#segment-tools');
+  const updateBounds = () => {
+    const { top, bottom, height } = stage.getBoundingClientRect();
+    const headerEnd = Math.max(...Array.from(heading.children, child => child.getBoundingClientRect().bottom));
+    const segmentHeight = segmentTools.offsetHeight;
+    const aboveTimeline = bottom - timeline.getBoundingClientRect().top + 8;
+    const aboveSegment = segmentHeight ? parseFloat(getComputedStyle(segmentTools).bottom) + segmentHeight + 8 : 0;
+    const topInset = Math.min(Math.max(12, headerEnd - top + 8), height / 2);
+    stage.style.setProperty('--caption-top', `${topInset}px`);
+    stage.style.setProperty('--caption-bottom', `${Math.max(12, Math.min(height - topInset, Math.max(aboveTimeline, aboveSegment)))}px`);
+  };
+  const observer = new ResizeObserver(updateBounds);
+  for (const element of [stage, timeline, segmentTools, ...heading.children]) observer.observe(element);
+  signal.addEventListener('abort', () => observer.disconnect(), { once: true });
+  applySubtitlePosition();
+  updateBounds();
 }
 document.addEventListener('input', event => {
+  const axis = event.target.dataset.subPositionAxis;
+  if (axis) { setSubtitlePosition({ ...subtitlePosition, [axis]: Number(event.target.value) }); return; }
   if (event.target.id !== 'sub-size') return;
   const size = Number(event.target.value); event.target.nextElementSibling.textContent = `${Math.round(size * 100)}%`; fillRange(event.target); setSubStyle({ size }, false);
 });
-// Chromium keeps drawing the cues that were active when a track element is removed, and nothing ever ends them, so each
-// skip would leave its line stuck on screen. Empty and disable the old track first.
 function dropSubtitleTrack() {
   const old = $('#subtitle-track'), textTrack = old?.track;
   if (textTrack) { for (const cue of [...(textTrack.cues || [])]) textTrack.removeCue(cue); textTrack.mode = 'disabled'; }
   old?.remove();
+  $('#subtitle-caption')?.replaceChildren();
+}
+function renderSubtitleCaption(track) {
+  const caption = $('#subtitle-caption');
+  if (!caption) return;
+  caption.replaceChildren(...Array.from(track.activeCues || [], cue => {
+    const line = document.createElement('div'), text = document.createElement('span');
+    text.append(cue.getCueAsHTML()); line.append(text); return line;
+  }));
 }
 function applySubtitle() {
   dropSubtitleTrack(); if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); subtitleUrl = null; trackCues = []; cueTrack = null;
@@ -1131,8 +1649,15 @@ function applySubtitle() {
   subtitleUrl = URL.createObjectURL(new Blob([subtitleText], { type: 'text/vtt' }));
   const track = document.createElement('track'); track.id = 'subtitle-track'; track.kind = 'subtitles'; track.label = 'Selected subtitles'; track.src = subtitleUrl; track.default = true;
   // A track replaced by a quicker seek may still finish loading; only the current one may take over the cues.
-  track.addEventListener('load', () => { if (!track.isConnected) return; track.track.mode = 'showing'; cueTrack = track.track; trackCues = [...cueTrack.cues].map(cue => { cue.line = -5; return { cue, start: cue.startTime, end: cue.endTime }; }); adjustCues(); });
+  track.track.addEventListener('cuechange', () => { if (track.isConnected) renderSubtitleCaption(track.track); });
+  track.addEventListener('load', () => {
+    if (!track.isConnected) return;
+    track.track.mode = 'hidden'; cueTrack = track.track;
+    trackCues = [...cueTrack.cues].map(cue => ({ cue, start: cue.startTime, end: cue.endTime }));
+    adjustCues(); renderSubtitleCaption(cueTrack);
+  });
   video.append(track);
+  track.track.mode = 'hidden';
 }
 // Cue times are relative to the current stream, which starts at `offset`. Every timing change (a new stream after a seek
 // or skip, or a delay change) rebuilds the track's cue list: lines that ended before the stream start are left off, so
@@ -1158,26 +1683,41 @@ function refreshCues() {
 async function pickSubtitle(value) {
   const token = ++subtitleGeneration; const id = current.id;
   const wasBitmap = !!bitmapTrack();
-  if (value === 'off') { subtitle = null; subtitleText = null; rememberTracks(); applySubtitle(); renderTracks(); if (wasBitmap) await restartStream(); return; }
+  if (value === 'off') { subtitle = null; subtitleText = null; rememberTracks(['subtitle', 'off']); applySubtitle(); renderTracks(); if (wasBitmap) await restartStream(); return; }
   const selectedTrack = info.subtitles.find(track => track.index === Number(value));
-  if (selectedTrack?.bitmap) { subtitle = selectedTrack.index; subtitleText = null; rememberTracks(); applySubtitle(); renderTracks(); await restartStream(); return; }
+  if (selectedTrack?.bitmap) { subtitle = selectedTrack.index; subtitleText = null; rememberTracks(['subtitle', 'off']); applySubtitle(); renderTracks(); await restartStream(); return; }
   const text = await api.subtitles({ id, index: Number(value) }); if (token !== subtitleGeneration || current.id !== id) return;
-  subtitle = Number(value); subtitleText = text; rememberTracks(); applySubtitle(); renderTracks();
+  subtitle = Number(value); subtitleText = text; rememberTracks(['subtitle', 'off']); applySubtitle(); renderTracks();
   if (wasBitmap) await restartStream();
 }
-async function restartStream() { const token = ++generation; await loadStream(offset + video.currentTime, playIntent, token); }
-async function changeSubtitleDelay(change) { delay = Math.max(-60, Math.min(60, Math.round((delay + change) * 10) / 10)); adjustCues(); renderTracks(); rememberTracks(); if (bitmapTrack()) await restartStream(); }
+// Audio offset needs FFmpeg, so a change reloads the stream at the current position (direct play falls back to a transcode).
+async function changeAudioDelay(change, reset = false) {
+  const next = reset ? 0 : Math.max(-10, Math.min(10, Math.round((audioDelay + change) * 10) / 10));
+  if (next === audioDelay) return;
+  audioDelay = next; renderTracks(); rememberTracks(['audioDelay']); clearTimeout(audioDelayTimer);
+  audioDelayTimer = setTimeout(() => void attempt(restartStream), 350);
+}
+async function restartStream() { const token = ++generation; await loadStream(pendingStream?.id === current.id ? pendingStream.position : offset + video.currentTime, playIntent, token); }
+async function changeSubtitleDelay(change) { delay = Math.max(-60, Math.min(60, Math.round((delay + change) * 10) / 10)); adjustCues(); renderTracks(); rememberTracks(['delay']); if (bitmapTrack()) await restartStream(); }
 function resetPlayer() {
+  clearTimeout(audioDelayTimer);
+  diagnostics = null;
   // load() resets currentTime and queues media events. Invalidate the stream
   // first so those events cannot overwrite the checkpoint we just saved.
   streamId = null; pendingStream = null; settlePending = null;
   showPlaybackAdvanced = false; rewatchingShow = false; dismissedShow = false;
   playerEvents?.abort();
+  stopMediaSession();
   clearTimeout(saveTimer); saveTimer = null;
   if (video) { video.pause(); releaseBuffer(video); video.removeAttribute('src'); video.load(); }
 }
 async function backToLibrary() {
-  hidePreview(); discardPrepared(); if (fullscreenActive) await api.window('fullscreen'); remember(); await save(); ++generation; ++subtitleGeneration; resetPlayer(); await api.stop();
+  setSleepTimer('off');
+  const token = ++generation; ++subtitleGeneration;
+  hidePreview(); discardPrepared(); if (fullscreenActive) await api.window('fullscreen');
+  if (token !== generation) return;
+  remember(); await save(); if (token !== generation) return;
+  resetPlayer(); await stopPlayback(token); if (token !== generation) return;
   if (subtitleUrl) URL.revokeObjectURL(subtitleUrl); current = null; video = null; renderLibrary();
 }
 // Page transitions run through the View Transitions API and are skipped when motion is reduced.
@@ -1231,24 +1771,41 @@ const actions = {
   'all-folders': () => { folderFilter = null; renderLibrary(); }, 'close-detail': closeDetail,
   about: () => { footerOpen = !footerOpen; $('#library-footer')?.classList.toggle('open', footerOpen); $('.help-button')?.setAttribute('aria-expanded', String(footerOpen)); },
   'fix-match': () => openMatch(selected), 'open-tmdb': () => openTitlePage('tmdb'), 'open-imdb': () => openTitlePage('imdb'), 'pick-prelude': () => setPrelude(false), 'clear-prelude': () => setPrelude(true), 'close-match': () => { $('#match-dialog')?.close(); matchItem = null; },
+  'spoiler-safe': async () => {
+    library.preferences.spoilerSafe = library.preferences.spoilerSafe !== true;
+    rerender();
+    await savePreferences({ spoilerSafe: library.preferences.spoilerSafe });
+    root.querySelector('[data-action=spoiler-safe]')?.focus();
+  },
+  history: openHistory, 'close-history': () => $('#history-dialog')?.close(),
+  'title-lists': openTitleLists,
+  'follow-show': async () => {
+    if (!selected) return;
+    const groupId = titleKey(selected), follow = !library.followed?.includes(groupId);
+    try { library.followed = await api.followShow({ groupId, follow }); }
+    catch (error) { toast(error.message || 'Could not update followed shows.'); return; }
+    rerender();
+    root.querySelector('[data-action=follow-show]')?.focus();
+  },
   shortcuts: () => $('#shortcuts').showModal(), library: backToLibrary,
   toggle, backward: () => seek(offset + video.currentTime - SKIP), forward: () => seek(offset + video.currentTime + SKIP),
   previous: () => step(-1), next: () => step(1), fullscreen: () => api.window('fullscreen'),
   queue: () => { if (fullscreenActive) fullscreenQueueOpen = !fullscreenQueueOpen; else queueOpen = !queueOpen; renderQueue(); },
-  tracks: () => openPanel('tracks'), segments: () => openPanel('segments'), mute: () => { video.muted = !video.muted; const btn = document.querySelector('[data-action="mute"]'); btn.innerHTML = icon(video.muted ? 'mute' : 'volume'); btn.setAttribute('aria-label', video.muted ? 'Unmute (M)' : 'Mute (M)'); updateVolume(); },
+  tracks: openTracks, segments: () => openPanel('segments'), mute: () => { video.muted = !video.muted; const btn = document.querySelector('[data-action="mute"]'); btn.innerHTML = icon(video.muted ? 'mute' : 'volume'); btn.setAttribute('aria-label', video.muted ? 'Unmute (M)' : 'Mute (M)'); updateVolume(); },
   speed: () => { const rates = [.5, .75, 1, 1.25, 1.5, 2]; video.playbackRate = rates[(rates.indexOf(video.playbackRate) + 1) % rates.length]; document.querySelector('[data-action="speed"]').textContent = `${video.playbackRate}×`; },
-  autoplay: async () => { library.preferences.autoplay = !library.preferences.autoplay; await save(); renderQueue(); },
-  'clear-watched': async () => { library.queue = library.queue.filter(id => id === current.id || !completed(id)); await save(); renderQueue(); },
+  autoplay: async () => { library.preferences.autoplay = !library.preferences.autoplay; await savePreferences({ autoplay: library.preferences.autoplay }); renderQueue(); },
+  'clear-watched': async () => { const previous = library.queue; library.queue = previous.filter(id => id === current.id || !completed(id)); await saveQueue(previous); renderQueue(); },
+  'audio-delay-down': () => changeAudioDelay(-.1),
+  'audio-delay-up': () => changeAudioDelay(.1),
+  'audio-delay-reset': () => changeAudioDelay(0, true),
   'delay-down': () => changeSubtitleDelay(-.1),
   'delay-up': () => changeSubtitleDelay(.1),
+  'find-subtitles': findOnlineSubtitles,
+  'subtitle-search-settings': configureSubtitleSearch,
   'subtitle-file': async () => {
     const id = current.id, token = ++subtitleGeneration; const loaded = await api.loadSubtitle(id);
     if (!loaded || current?.id !== id || token !== subtitleGeneration) return;
-    const wasBitmap = !!bitmapTrack(); subtitleText = loaded.text;
-    // Saved next to the video, it is a regular track from now on and is remembered like one.
-    if (loaded.track) { if (!info.subtitles.some(t => t.index === loaded.track.index)) info.subtitles.push(loaded.track); subtitle = loaded.track.index; rememberTracks(); toast(loaded.warning || 'Subtitles saved next to the video.'); }
-    else { subtitle = 'external'; if (loaded.warning) toast(loaded.warning); }
-    applySubtitle(); renderTracks(); if (wasBitmap) await restartStream();
+    await useLoadedSubtitle(loaded, 'Subtitles saved next to the video.');
   },
   'marker-end': async () => {
     const end = offset + video.currentTime;
@@ -1273,7 +1830,7 @@ const actions = {
     await saveManualMarkers(copies, true); toast(`Manual marks saved for ${copies.length + 1} episodes in this season.`);
   },
   'marker-cancel': () => { markerDraft = null; renderTracks(); },
-  'skip-segment': () => { const position = offset + video.currentTime; const marker = (library.markers?.[current.id] || []).find(s => position >= s.start && position < s.end); if (marker) return seek(marker.end); },
+  'skip-segment': () => { const marker = activeMarker(offset + video.currentTime); if (marker) return seek(marker.end); },
   'complete-current': () => markComplete(current.id),
   'detect-segments': () => detectMarkers(current.id, true),
   retry: () => loadStream(offset + video.currentTime)
@@ -1284,18 +1841,37 @@ document.addEventListener('matro:saved-title', event => {
 });
 document.addEventListener('click', event => {
   const btn = event.target.closest('button'); if (!btn || btn.disabled) return;
+  if (btn.dataset.markSeason || btn.dataset.markShow !== undefined || btn.dataset.markBefore) {
+    const targets = markTargets(btn);
+    return void attempt(() => markMany(targets, btn.dataset.markBefore ? true : !targets.every(i => completed(i.id))));
+  }
   void attempt(async () => {
     if (btn.dataset.offlineMany && api.offlineSaveMany) {
-      const ids = btn.dataset.offlineMany.split(',');
+      const ids = await api.offlineUnsaved(btn.dataset.offlineMany.split(','));
+      if (!ids.length) return toast('These episodes are already saved on this device.');
+      const choices = await api.offlineSaveOptions(ids);
+      if (!choices) return;
       toast(`Preparing ${ids.length} episodes to save offline. See progress in your profile.`);
-      try { await api.offlineSaveMany(ids); toast('Saved for offline playback.'); }
+      try { await api.offlineSaveMany(ids, choices); toast('Saved for offline playback.'); }
       catch (error) { if (error.name !== 'AbortError') throw error; }
       return;
     }
     if (btn.dataset.offlineSave && api.offlineSave) {
+      const id = btn.dataset.offlineSave;
+      if (!(await api.offlineUnsaved([id])).length) return toast('This title is already saved on this device.');
+      const choices = await api.offlineSaveOptions([id]);
+      if (!choices) return;
       toast('Preparing to save offline. See progress in your profile.');
-      try { await api.offlineSave(btn.dataset.offlineSave); toast('Saved for offline playback.'); }
+      try { await api.offlineSave(id, choices); toast('Saved for offline playback.'); }
       catch (error) { if (error.name !== 'AbortError') throw error; }
+      return;
+    }
+    if (btn.dataset.historyDays) { historyDays = Number(btn.dataset.historyDays); renderHistory(); $(`[data-history-days="${historyDays}"]`)?.focus(); return; }
+    if (btn.dataset.historyItem) { $('#history-dialog')?.close(); return openDetail(btn.dataset.historyItem); }
+    if (btn.dataset.findEpisode && selected && !api.hiddenTabs?.includes('downloads')) {
+      const [season, episode] = btn.dataset.findEpisode.split(':');
+      downloads.openSeriesSearch(displayName(selected), season, episode);
+      goTab('downloads');
       return;
     }
     if (btn.dataset.complete) return markComplete(btn.dataset.complete);
@@ -1308,7 +1884,7 @@ document.addEventListener('click', event => {
     if (btn.dataset.seasonTab) return showSeason(Number(btn.dataset.seasonTab));
     if (btn.dataset.matchPick) return assignMatch(Number(btn.dataset.matchPick));
     if (btn.dataset.matchNone !== undefined) return assignMatch(null);
-    if (btn.dataset.restart) { const old = library.progress[btn.dataset.restart]; if (old) library.progress[btn.dataset.restart] = { ...old, position: 0, updated: Date.now() }; return play(btn.dataset.restart); }
+    if (btn.dataset.restart) { const id = btn.dataset.restart, old = library.progress[id]; if (old) applyProgress({ [id]: { ...old, position: 0, updated: Date.now() } }, true); return play(id); }
     if (btn.dataset.upgrade && api.canCompareEditions !== false) { await downloads.openUpgrade(btn.dataset.upgrade); goTab('downloads'); return; }
     if (btn.dataset.play) return play(btn.dataset.play, !!btn.closest('.queue-panel'));
     if (btn.dataset.detail) return openDetail(btn.dataset.detail, btn);
@@ -1316,28 +1892,61 @@ document.addEventListener('click', event => {
     if (btn.dataset.enqueueShow) return enqueue(btn.dataset.enqueueShow, true);
     if (btn.dataset.tab) return goTab(btn.dataset.tab);
     if (btn.dataset.themeMode) { window.matroTheme.set(btn.dataset.themeMode); return; }
+    if (btn.hasAttribute('data-update-checks') && api.setUpdateChecks) {
+      if (savingUpdateChecks) return;
+      savingUpdateChecks = true;
+      try {
+        const enabled = await api.setUpdateChecks(library.checkForUpdates !== true);
+        library.checkForUpdates = enabled;
+        const control = $('[data-update-checks]');
+        control?.classList.toggle('on', enabled);
+        control?.setAttribute('aria-checked', String(enabled));
+      } finally {
+        savingUpdateChecks = false;
+      }
+      return;
+    }
+    if (btn.dataset.subtitleMode) {
+      setTrackDefaults({ subtitles: btn.dataset.subtitleMode });
+      document.querySelectorAll('[data-subtitle-mode]').forEach(chip => chip.setAttribute('aria-pressed', String(chip === btn)));
+      $('#subtitle-language').hidden = btn.dataset.subtitleMode !== 'always'; return;
+    }
     if (btn.dataset.motion) {
-      library.preferences.motion = btn.dataset.motion; applyMotion(); await save();
+      library.preferences.motion = btn.dataset.motion; applyMotion(); await savePreferences({ motion: library.preferences.motion });
       document.querySelectorAll('[data-motion]').forEach(chip => chip.setAttribute('aria-pressed', String(chip.dataset.motion === btn.dataset.motion)));
       reel.hover = null; updateReel(); return;
     }
     if (btn.dataset.statusFilter) { statusFilter = btn.dataset.statusFilter; renderLibrary(); return; }
     if (btn.dataset.folder !== undefined) { folderFilter = library.folders[Number(btn.dataset.folder)]; tab = 'home'; renderLibrary(); $('.shell')?.scrollTo(0, 0); return; }
     if (btn.dataset.removeFolder !== undefined) { library = await api.removeFolder(library.folders[Number(btn.dataset.removeFolder)]); renderLibrary(); return; }
-    if (btn.dataset.removeQueue) { library.queue = library.queue.filter(id => id !== btn.dataset.removeQueue); await save(); renderQueue(); return; }
-    if (btn.dataset.audio) { const position = offset + video.currentTime, playing = playIntent; audio = Number(btn.dataset.audio); rememberTracks(); updateMetadata(); renderTracks(); const token = ++generation; await loadStream(position, playing, token); return; }
+    if (btn.dataset.removeQueue) { const previous = library.queue; library.queue = previous.filter(id => id !== btn.dataset.removeQueue); await saveQueue(previous); renderQueue(); return; }
+    if (btn.dataset.audio) { const position = offset + video.currentTime, playing = playIntent; audio = Number(btn.dataset.audio); rememberTracks(['audio']); updateMetadata(); renderTracks(); const token = ++generation; await loadStream(position, playing, token); return; }
+    if (btn.dataset.quality) { if (btn.dataset.quality === api.quality()) return; api.setQuality(btn.dataset.quality); discardPrepared(); renderTracks(); await restartStream(); return; }
     if (btn.dataset.subtitle) return pickSubtitle(btn.dataset.subtitle);
+    if (btn.dataset.subPosition) { setSubtitlePosition(SUBTITLE_PRESETS[btn.dataset.subPosition] || SUBTITLE_PRESETS.Bottom); return; }
     if (btn.dataset.subStyle) { const [key, value] = btn.dataset.subStyle.split(':'); const style = subStyle(); setSubStyle({ [key]: ['bold', 'italic'].includes(key) ? !style[key] : value }); return; }
     if (btn.dataset.chapter !== undefined) return seek(info.chapters[Number(btn.dataset.chapter)].start);
     const action = actions[btn.dataset.action]; if (action) { btn.classList.add('busy'); try { await action(); } finally { btn.classList.remove('busy'); } }
   });
 });
+// Phone menus (Save offline, per-episode ⋯): a tap on the toggle opens or closes it; a tap anywhere else, choosing an item or Escape closes it.
+const closeMenus = keep => document.querySelectorAll('.menu.open').forEach(open => { if (open !== keep) { open.classList.remove('open'); open.querySelector('[data-menu]').setAttribute('aria-expanded', 'false'); } });
+document.addEventListener('click', event => {
+  const toggle = event.target.closest('[data-menu]'), owner = toggle?.closest('.menu');
+  closeMenus(owner);
+  if (owner) toggle.setAttribute('aria-expanded', String(owner.classList.toggle('open')));
+});
+document.addEventListener('change', event => { const select = event.target.closest?.('[data-track-default]'); if (select) setTrackDefaults({ [select.dataset.trackDefault]: select.value }); });
 document.addEventListener('keydown', event => {
-  const typing = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) && event.target.type !== 'range';
+  const open = document.querySelector('.menu.open'); if (event.key !== 'Escape' || !open) return;
+  event.stopPropagation(); closeMenus(); open.querySelector('[data-menu]').focus();
+}, true);
+document.addEventListener('keydown', event => {
+  const typing = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) && (event.target.type !== 'range' || event.target.dataset.subPositionAxis);
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); void attempt(actions.files); return; }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && view === 'library') { event.preventDefault(); if (tab !== 'search') goTab('search'); $('#search')?.focus(); return; }
-  if (event.key === 'Escape') { if ($('#shortcuts').open || $('#match-dialog')?.open || $('#ssh-dialog').open) return; if (footerOpen && view === 'library') { actions.about(); return; } if (fullscreenActive) { void api.window('fullscreen'); return; } if (selected) closeDetail(); else if (sidePanel) { sidePanel = null; renderTracks(); } else if (view === 'player') void attempt(backToLibrary); return; }
-  if (typing || $('#shortcuts').open || $('#ssh-dialog').open || view !== 'player') return;
+  if (event.key === 'Escape') { if ($('dialog[open]')) return; if (footerOpen && view === 'library') { actions.about(); return; } if (fullscreenActive) { void api.window('fullscreen'); return; } if (selected) closeDetail(); else if (sidePanel) { sidePanel = null; renderTracks(); } else if (view === 'player') void attempt(backToLibrary); return; }
+  if (typing || $('dialog[open]') || view !== 'player') return;
   // Enter takes a visible skip (intro, recap, outro) unless a control has focus and Enter belongs to it.
   if (event.key === 'Enter' && !$('#skip-segment')?.hidden && !event.target.closest('button, a, input, select, textarea')) { event.preventDefault(); void attempt(actions['skip-segment']); return; }
   const key = event.key.toLowerCase(); const keyActions = { ' ': toggle, arrowleft: actions.backward, arrowright: actions.forward, arrowup: () => setVolume(currentVolume() + .05), arrowdown: () => setVolume(currentVolume() - .05), f: actions.fullscreen, m: actions.mute };
@@ -1349,7 +1958,7 @@ document.addEventListener('dragover', event => event.preventDefault());
 document.addEventListener('dragleave', event => { event.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; $('#drop-overlay')?.remove(); } });
 document.addEventListener('drop', event => { event.preventDefault(); dragDepth = 0; $('#drop-overlay')?.remove(); const files = Array.from(event.dataTransfer.files); void attempt(async () => { const before = new Set(library.items.map(i => i.id)); library = await api.importDrop(files); const item = library.items.find(i => !before.has(i.id)); if (item) await play(item.id); else toast('No new supported media files found. Use Add folder for directories.'); }); });
 window.addEventListener('beforeunload', () => { remember(); void save({ keepalive: true }).catch(() => {}); });
-window.addEventListener('pagehide', () => { if (video) releaseBuffer(video); discardPrepared(); });
+window.addEventListener('pagehide', () => { if (video) { void api.playbackHeartbeat?.(false); releaseBuffer(video); } discardPrepared(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { remember(); void attempt(save); } });
 // Closing the window waits for the latest position to be written before the app quits.
 api?.onClosing?.(async () => { try { remember(); await save(); } finally { void api.window('close'); } });
@@ -1357,7 +1966,8 @@ api?.onFullscreen(active => { fullscreenActive = active; fullscreenQueueOpen = f
 api?.onDownloads?.(state => {
   library = { ...library, ...state };
   if (state.metadata) metadata = state.metadata;
-  rerender();
+  renderLibraryScanStatus(state.scanStatus);
+  if (state.items || state.folders || state.metadata) rerender();
 });
 api?.onMetadata?.(update => { metadata = update || {}; rerender(); });
 api?.onSegments(update => {
@@ -1368,11 +1978,22 @@ api?.onSegments(update => {
   segmentStatus = update.stage === 'decoding' ? `Scanning ${update.scanTitle} · ${update.percent}%${scannerSummary?.playback ? ' · Video has priority' : ''}` : update.stage === 'done' ? 'Markers saved. Background scanning continues through your library.' : update.stage === 'error' ? `Detection unavailable: ${update.message}` : update.stage === 'fingerprint' ? 'Scanning this episode…' : update.stage === 'unavailable' ? `Episode unavailable: ${update.message}. Continuing with other episodes…` : update.stage === 'started' ? (update.mode === 'quick' ? 'Checking opening and ending first…' : 'Checking full episode for more matches…') : `Compared ${update.completed} of ${update.total} season episodes. ${library.markers?.[update.id]?.length || 0} markers available; scanning continues…`;
   renderSegments(); renderTracks();
 });
+// "Open with Matro": a file handed over at launch, or by a second launch while this window is open.
+let openReady = false;
+async function playRequested() {
+  if (!openReady || !api.takeOpen) return;
+  const id = await api.takeOpen(); if (!id) return;
+  library.items = (await api.load()).items; await play(id);
+}
+api?.onOpen?.(() => void attempt(playRequested));
 if (!api) { root.innerHTML = '<main class="page"><h1 class="page-title">Open Matro in its desktop app.</h1><p class="page-sub">Run npm start from the project folder.</p></main>'; }
 else void attempt(async () => { library = await api.load();
-  const restored = await recovery.restore(library.progress, library.items.map(item => item.id)); library.progress = normalizeProgress(restored.progress); stateLoaded = true;
+  const original = library.progress;
+  const restored = await recovery.restore(original, library.items.map(item => item.id)); library.progress = normalizeProgress(restored.progress); stateLoaded = true;
+  if (api.savePreferences && restored.recovered) for (const [id, entry] of Object.entries(restored.progress)) if (entry !== original[id]) pendingProgress.set(id, library.progress[id]);
   metadata = library.metadata || {}; metadataEnabled = !!library.metadataEnabled;
   scannerSummary = library.scanner || await api.scannerStatus();
   library.markers ||= {};
   if (api.movieRequests?.openOnLoad) tab = 'movie-requests';
-  applyMotion(); renderLibrary(); if (restored.recovered) void attempt(save); });
+  applyMotion(); renderLibrary(); if (restored.recovered) void attempt(save);
+  openReady = true; await playRequested(); });
