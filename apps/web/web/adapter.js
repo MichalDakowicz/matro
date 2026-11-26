@@ -30,7 +30,7 @@ export function createAdapter(session) {
     updates = update;
     return update;
   };
-  const scope = accountScope(session.user), offline = createOffline(session.user, { inspect: inspectRemote, subtitles: fetchSubtitles, sendSubtitle });
+  const scope = accountScope(session.user), offline = createOffline(session.user, { inspect: inspectRemote, subtitlePath, sendSubtitle });
   function checkAccount(data) {
     if (accountScope(data.user) === scope) return;
     location.reload();
@@ -140,8 +140,8 @@ export function createAdapter(session) {
       throw error;
     }
   }
-  async function inspectRemote(id, { signal } = {}) {
-    const info = await api('GET', `/api/items/${id}/info`, undefined, { signal });
+  async function inspectRemote(id, { signal, deadline } = {}) {
+    const info = await api('GET', `/api/items/${id}/info`, undefined, { signal, deadline });
     const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay, hdrDirectMime: info.hdrDirectMime, hdrToneMap: info.hdrToneMap, qualities: qualityOptions(info.video),
       subtitles: [...info.embedded, ...info.uploaded.map(u => track(u)), ...(info.files || []).map(f => ({ index: FILE + f.id, language: f.language, title: f.title, codec: f.codec, text: true, bitmap: false, sidecar: true, forced: f.forced, sdh: f.sdh }))] };
     details.set(id, result);
@@ -207,8 +207,11 @@ export function createAdapter(session) {
       throw error;
     }
   }
+  function subtitlePath(id, index) {
+    return `/api/items/${id}/subtitles/${index >= FILE ? `f${index - FILE}` : index >= SIDECAR ? `u${index - SIDECAR}` : `e${index}`}`;
+  }
   async function fetchSubtitles({ id, index, signal }) {
-    const res = await fetch(`/api/items/${id}/subtitles/${index >= FILE ? `f${index - FILE}` : index >= SIDECAR ? `u${index - SIDECAR}` : `e${index}`}`, { credentials: 'same-origin', signal });
+    const res = await fetch(subtitlePath(id, index), { credentials: 'same-origin', signal });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not load subtitles.');
     return res.text();
   }

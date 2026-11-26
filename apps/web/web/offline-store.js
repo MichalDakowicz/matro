@@ -1,7 +1,8 @@
 // Saved-for-offline files, kept apart from the browser: a key-value backend (IndexedDB in the page, a Map in tests) holds one
 // record per title plus its pieces. A file is pulled in CHUNK-sized byte ranges, so a dropped connection resumes where it
 // stopped instead of starting over, and nothing larger than one piece is ever held in memory while downloading.
-export const CHUNK = 8 * 1024 * 1024;
+import { CHUNK, PREFETCH_PIECES, chunkCount, chunkRange } from '../../../packages/core/client/offline-rules.js';
+export { CHUNK, chunkCount, chunkRange };
 export const newRequestId = () => Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
 
 export const metaKey = id => `meta:${id}`;
@@ -9,9 +10,6 @@ const chunkPrefix = id => `piece:${encodeURIComponent(id)}:`;
 const chunkKey = (record, n) => record.transfer
   ? `${chunkPrefix(record.id)}${encodeURIComponent(record.version ?? '')}:${record.size}:${n}`
   : `chunk:${record.id}:${n}`; // Existing completed saves use these keys.
-export const chunkCount = size => Math.ceil(size / CHUNK);
-export const chunkRange = (size, n) => ({ start: n * CHUNK, end: Math.min(size, (n + 1) * CHUNK) - 1 });
-
 // SRT and WebVTT can be shown as they are with a small fix; anything else (ASS/SSA) needs the server to convert it.
 export function toVtt(text, filename = '') {
   const t = String(text).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
@@ -103,7 +101,7 @@ export function createStore(backend) {
     };
     for (let n = record.have; n < total; n++) {
       signal?.throwIfAborted();
-      for (let k = n; k < Math.min(total, n + 3); k++) request(k);
+      for (let k = n; k < Math.min(total, n + PREFETCH_PIECES); k++) request(k);
       const { start, end } = chunkRange(size, n), blob = await request(n); ahead.delete(n);
       if (blob.size !== end - start + 1) throw new Error('The server sent an incomplete piece.');
       await backend.transaction('readwrite', async tx => {

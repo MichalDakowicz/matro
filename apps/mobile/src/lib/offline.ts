@@ -2,17 +2,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isSmartBatch } from './smart-plan';
 import { Directory, File, Paths } from 'expo-file-system';
 import { fetch } from 'expo/fetch';
-import { fetchWithDeadline, inspect, mediaHeaders, request, ServerError, type Info, type Item, type Library, type MatroUser } from './server';
+import { inspect, mediaHeaders, request, type Info, type Item, type Library, type MatroUser } from './server';
 import { cachedLibrary, progressRecovery, recoveryScope } from './storage';
 export { forgetOfflineAccount } from './storage';
 import { offlineAccount as account, offlineMediaPrefix as prefix } from './offline-storage';
 import { holdService, offlineNotice } from './offline-notifications';
 
-const PIECE = 8 * 1024 * 1024;
-const AHEAD = 3;
-const SLOTS = 2;
-const PREPARATION_IDLE_MS = 30 * 60 * 1000;
-const RETRY_DELAY_MS = 30_000;
+import {
+  CHUNK, DOWNLOAD_SLOTS, PREFETCH_PIECES, RETRY_DELAY_MS, RetryableDownloadError, chunkRange,
+  fetchPiece, isTextCaption, offlinePath, optionalCaption, prepareDownload, retrying,
+} from '../../../../packages/core/client/offline-rules.js';
 const recordKey = (scope: string, id: string) => prefix(scope) + id;
 const decode = <T>(raw: string | null): T | null => {
   try { return raw ? JSON.parse(raw) as T : null; } catch { return null; }
@@ -29,31 +28,10 @@ type RecordState = {
 export type OfflineRecord = RecordState & Partial<Media>;
 export type SavedMedia = RecordState & Media;
 type OfflineJob = { id: string; title: string; have: number; size: number; prepared: number | null; controller: AbortController; task: Promise<void> };
-type Preparation = { state: 'preparing'; progress?: number | null } | { state: 'ready'; size: number; type: string; version: string };
-
-class RetryableDownloadError extends Error {}
 class DiskFullError extends Error {
   constructor() { super('Not enough storage to save this title. Free up space, then resume.'); }
 }
 const diskFull = (error: unknown) => /ENOSPC|no space left on device|not enough (?:disk )?(?:space|storage)|out of (?:disk )?space/i.test(String(error));
-const wait = (ms: number, signal: AbortSignal) => new Promise<void>(resolve => {
-  if (signal.aborted) { resolve(); return; }
-  const finish = () => { clearTimeout(timer); signal.removeEventListener('abort', finish); resolve(); };
-  const timer = setTimeout(finish, ms);
-  signal.addEventListener('abort', finish);
-});
-
-async function retrying<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
-  for (let tries = 0;; tries++) {
-    if (signal.aborted) throw new Error('Download cancelled.');
-    try { return await run(); }
-    catch (error) {
-      if (signal.aborted || error instanceof ServerError && error.status && error.status < 500) throw error;
-      if (tries >= 6) throw new RetryableDownloadError(error instanceof Error ? error.message : 'Could not reach the server.');
-      await wait(Math.min(RETRY_DELAY_MS, 1500 * 2 ** tries), signal);
-    }
-  }
-}
 
 const jobs = new Map<string, OfflineJob>();
 const holds = new Map<string, () => void>();
@@ -107,7 +85,7 @@ async function drain(base: string, scope: string, retry = false) {
   try {
     const pending = (await recordsFor(scope)).filter(record => !record.complete && !record.paused && !jobs.has(recordKey(scope, record.id)));
     const ready = pending.filter(record => !record.retryAt || retry && record.retryAt <= Date.now());
-    const available = SLOTS - scopedJobs(scope).length;
+    const available = DOWNLOAD_SLOTS - scopedJobs(scope).length;
     for (const record of ready.slice(0, available)) {
       if (!holds.has(scope)) holds.set(scope, holdService()); // Android must keep the service alive between titles.
       startDownload(base, scope, record);
@@ -131,7 +109,7 @@ export function resumeInterrupted(base: string, user: MatroUser) {
 }
 export function retryInterrupted(base: string, user: MatroUser) {
   const scope = account(base, user);
-  if ((retryDue.get(scope) ?? Infinity) <= Date.now() && scopedJobs(scope).length < SLOTS) {
+  if ((retryDue.get(scope) ?? Infinity) <= Date.now() && scopedJobs(scope).length < DOWNLOAD_SLOTS) {
     return resumeInterrupted(base, user);
   }
 }
@@ -212,41 +190,30 @@ function startDownload(base: string, scope: string, record: OfflineRecord) {
   const key = recordKey(scope, record.id), controller = new AbortController(), { signal } = controller;
   const job: OfflineJob = { id: record.id, title: record.title, have: 0, size: 0, prepared: record.prepared ?? null, controller, task: Promise.resolve() };
   const notice = offlineNotice(key, record.title);
-  const route = `/api/items/${encodeURIComponent(record.id)}`;
+  const route = offlinePath(record.id);
   const persist = () => AsyncStorage.setItem(key, JSON.stringify(record));
   async function download() {
     record.state = 'preparing';
     record.progressAt ??= Date.now();
     await persist();
     notice.preparing(job.prepared);
-    let preparation: Preparation;
-    for (;;) {
-      preparation = await retrying(signal, () => request(base, route + '/offline', { signal }));
-      if (preparation?.state === 'ready') break;
-      if (preparation?.state !== 'preparing') throw new Error('Invalid preparation status.');
-      const progress = preparation.progress;
-      if (typeof progress === 'number' && Number.isFinite(progress) && progress !== record.prepared) {
-        if (progress > (record.prepared ?? 0)) record.progressAt = Date.now();
+    const preparation = await prepareDownload(signal, () => request(base, route, { signal }), async (progress, advancedAt) => {
+      if (progress !== undefined && (progress !== record.prepared || advancedAt !== record.progressAt)) {
         record.prepared = progress;
+        record.progressAt = advancedAt;
         await persist();
       }
-      if (Date.now() - record.progressAt >= PREPARATION_IDLE_MS) {
-        throw new RetryableDownloadError('Server preparation has not advanced for 30 minutes.');
-      }
-      job.prepared = record.prepared ?? null;
+      job.prepared = progress ?? null;
       notice.preparing(job.prepared); changed();
-      await wait(2000, signal);
-    }
-
+    }, { lastProgress: record.prepared, advancedAt: record.progressAt });
     const { size, version, type } = preparation;
-    if (!Number.isSafeInteger(size) || size < 1 || !/^[a-f0-9]{64}$/.test(version)) throw new Error('Invalid prepared file.');
     Object.assign(record, { state: 'downloading', prepared: undefined, progressAt: undefined });
     const directory = Array.from(scope, character => character.charCodeAt(0).toString(16).padStart(2, '0')).join('');
     const dir = new Directory(Paths.document, 'matro-saved', ...(directory.match(/.{1,100}/g) || []));
     const file = new File(dir, `${encodeURIComponent(record.id)}-${version}.${type === 'video/webm' ? 'webm' : 'mp4'}`);
     if (record.uri && record.uri !== file.uri) { const old = new File(record.uri); if (old.exists) old.delete(); }
     const existing = file.exists ? file.size : 0;
-    const have = existing <= size && (existing === size || existing % PIECE === 0) ? existing : 0;
+    const have = existing <= size && (existing === size || existing % CHUNK === 0) ? existing : 0;
     const reserved = [...jobs.values()].reduce((bytes, other) => other === job ? bytes : bytes + other.size - other.have, 0);
     const reclaimable = have === 0 ? existing : 0;
     if (have < size && size - have > Paths.availableDiskSpace + reclaimable - reserved) throw new DiskFullError();
@@ -255,20 +222,13 @@ function startDownload(base: string, scope: string, record: OfflineRecord) {
     const headers = await mediaHeaders(base);
     const info = await retrying(signal, () => inspect(base, record.id, signal)), text: Record<string, string> = {};
     const captions: Info['embedded'] = [], uploads: Info['uploaded'] = [];
-    const fetchBody = <T>(path: string, readBody: (response: Awaited<ReturnType<typeof fetch>>, touch: () => void) => Promise<T>, extraHeaders = {}) =>
-      retrying(signal, () => fetchWithDeadline(
-        requestSignal => fetch(base + route + path, { headers: { ...headers, ...extraHeaders }, signal: requestSignal }),
-        readBody, { signal },
-      ));
-    const caption = (track: string) => fetchBody('/subtitles/' + track, async response => {
-      if (!response.ok) throw new ServerError(`Could not download subtitles (HTTP ${response.status}).`, response.status);
-      return response.text();
-    }).catch(error => {
-      if (error instanceof ServerError && error.status === 404) return undefined; // The track was removed after inspection.
-      throw error;
-    });
+    const send = (path: string, extraHeaders: Record<string, string>, requestSignal: AbortSignal) =>
+      fetch(base + path, { headers: { ...headers, ...extraHeaders }, signal: requestSignal });
+    const caption = (track: string) => optionalCaption(
+      requestSignal => send(`/api/items/${encodeURIComponent(record.id)}/subtitles/${track}`, {}, requestSignal), signal,
+    );
     for (const track of info.embedded) {
-      if (!track.text || track.bitmap) continue;
+      if (!isTextCaption(track)) continue;
       const vtt = await caption('e' + track.index);
       if (vtt !== undefined) { text[track.index] = vtt; captions.push(track); }
     }
@@ -287,36 +247,16 @@ function startDownload(base: string, scope: string, record: OfflineRecord) {
     if (!file.exists || have !== existing) file.create({ overwrite: true });
     notice.progress(have, size); changed();
 
-    const fetchPiece = (start: number) => {
-      const end = Math.min(start + PIECE, size) - 1;
-      const piece = fetchBody('/offline/file?version=' + version, async (response, touch) => {
-        if (response.status === 401) throw new ServerError('Sign in again to finish the download.', 401);
-        if (response.status === 409) throw new ServerError('The prepared file changed. Retry the download.', 409);
-        if (!response.ok) throw new ServerError(`Could not download media (HTTP ${response.status}).`, response.status);
-        if (response.status !== 206 || response.headers.get('content-range') !== `bytes ${start}-${end}/${size}`) {
-          throw new ServerError('The server returned an invalid byte range.', 422);
-        }
-        // Read chunk by chunk so the body deadline is an idle limit: a slow link may take minutes per piece.
-        const bytes = new Uint8Array(end - start + 1), reader = response.body?.getReader();
-        let got = 0;
-        if (!reader) { const whole = new Uint8Array(await response.arrayBuffer()); if (whole.length === bytes.length) bytes.set(whole); got = whole.length; }
-        for (;;) {
-          const chunk = await reader?.read();
-          if (!chunk || chunk.done) break;
-          if (got + chunk.value.length > bytes.length) throw new Error('The server sent too much data.');
-          bytes.set(chunk.value, got); got += chunk.value.length; touch();
-        }
-        if (got !== bytes.length) throw new Error('The server stopped sending the file.');
-        return bytes;
-      }, { range: `bytes=${start}-${end}` });
+    const requestPiece = (start: number) => {
+      const piece = fetchPiece(send, route, preparation, chunkRange(size, start / CHUNK), signal);
       void piece.catch(() => {}); // A prefetched piece may fail before its turn to be written.
       return piece;
     };
     const ahead = new Map<number, Promise<Uint8Array>>();
     for (let start = have; start < size; start = record.have) {
       if (signal.aborted) return;
-      for (let next = start; next < Math.min(size, start + AHEAD * PIECE); next += PIECE) {
-        if (!ahead.has(next)) ahead.set(next, fetchPiece(next));
+      for (let next = start; next < Math.min(size, start + PREFETCH_PIECES * CHUNK); next += CHUNK) {
+        if (!ahead.has(next)) ahead.set(next, requestPiece(next));
       }
       const bytes = await ahead.get(start)!;
       ahead.delete(start);

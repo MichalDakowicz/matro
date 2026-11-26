@@ -7,6 +7,7 @@ import vm from 'node:vm';
 import * as smartPlan from './smart-plan.ts';
 import * as client from '../../../../packages/core/client/server.ts';
 import * as offlineStorage from './offline-storage.ts';
+import * as offlineRules from '../../../../packages/core/client/offline-rules.js';
 
 const ts = createRequire(import.meta.url)('typescript');
 const transpile = (path: string) => ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
@@ -67,6 +68,7 @@ function setup(entries = new Map<string, string>(), files = new Map<string, numb
     '@react-native-async-storage/async-storage': fixture.storage,
     'expo-file-system': fixture,
     'expo/fetch': { fetch: (...args: Parameters<typeof fixture.fetch>) => fixture.fetch(...args) },
+    '../../../../packages/core/client/offline-rules.js': offlineRules,
     './offline-storage': offlineStorage,
     './storage': { recoveryScope: offlineStorage.recoveryScope, progressRecovery: { snapshot: async (_: string, _items: unknown, progress: unknown) => ({ progress }) } },
     './offline-notifications': {
@@ -148,12 +150,13 @@ test('smart cleanup keeps manual saves and does not stop an active smart downloa
 test('a stalled caption and a 502 or stalled range retry before completing', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { offline, fixture, records } = setup();
-  fixture.info.embedded = [{ index: 1, text: true }];
+  fixture.info.embedded = [{ index: 1, text: true }, { index: 2, text: true }];
   let captions = 0, ranges = 0;
   const signals: AbortSignal[] = [];
   fixture.fetch = async (url, { signal }) => {
     signals.push(signal!);
-    if (url.includes('/subtitles/')) return ++captions === 1 ? never() : new Response('WEBVTT');
+    if (url.endsWith('/subtitles/e1')) return ++captions === 1 ? never() : new Response('WEBVTT');
+    if (url.endsWith('/subtitles/e2')) return new Response(null, { status: 410 });
     if (++ranges === 1) return new Response(null, { status: 502 });
     if (ranges === 2) {
       return new Response(new ReadableStream({ pull: never }), { status: 206, headers: { 'content-range': 'bytes 0-2/3' } });
@@ -173,10 +176,11 @@ test('a stalled caption and a 502 or stalled range retry before completing', asy
   await setImmediate();
   t.mock.timers.tick(30000);
   await setImmediate();
-  assert.ok(signals[3].aborted);
+  assert.ok(signals[4].aborted);
   t.mock.timers.tick(3000);
   await until(async () => (await records())[0]?.complete === true);
-  assert.equal((await offline.savedTitle(base, user, 'one'))?.text[1], 'WEBVTT');
+  const saved = await offline.savedTitle(base, user, 'one');
+  assert.deepEqual({ ...saved?.text }, { 1: 'WEBVTT' });
   assert.equal(ranges, 3);
 });
 
@@ -220,17 +224,23 @@ test('after a connection outage and relaunch, a download resumes at its last com
   assert.equal((await next.offline.savedTitle(base, user, 'one'))?.size, size);
 });
 
-test('preparation can exceed 30 minutes while advancing and a stalled record retries on reconnect', async t => {
+test('preparation persists a server restart and retries a stalled record', async t => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
   const { offline, fixture, records } = setup();
-  let progress = 0.2;
+  let progress = 0.8;
   fixture.request = async () => ({ state: 'preparing', progress });
   await offline.saveOffline(base, user, items('one')[0], 'One');
-  await until(async () => (await records())[0]?.prepared === 0.2);
+  await until(async () => (await records())[0]?.prepared === 0.8);
+  await setImmediate();
+  progress = 0.1;
+  t.mock.timers.tick(15 * 60 * 1000);
+  await until(async () => (await records())[0]?.prepared === 0.1);
+  assert.equal((await records())[0]?.progressAt, 1000);
   await setImmediate();
   progress = 0.3;
-  t.mock.timers.tick(31 * 60 * 1000);
+  t.mock.timers.tick(16 * 60 * 1000);
   await until(async () => (await records())[0]?.prepared === 0.3);
+  assert.equal((await records())[0]?.progressAt, Date.now());
   assert.equal(offline.activeDownloads(base, user).length, 1);
   await setImmediate();
   t.mock.timers.tick(31 * 60 * 1000);

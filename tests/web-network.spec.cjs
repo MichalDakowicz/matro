@@ -8,7 +8,7 @@ async function withWebPage(respond, run) {
   const server = http.createServer(async (req, res) => {
     if (['/adapter.js', '/http.js', '/dom.js', '/offline.js', '/offline-store.js', '/movie-requests.js'].includes(req.url)) {
       res.writeHead(200, { 'Content-Type': 'text/javascript' }).end(await fs.readFile(path.join(__dirname, '../apps/web/web', req.url.slice(1))));
-    } else if (['/packages/browser-ui/recovery.js', '/packages/core/client/watch-progress.js', '/packages/core/client/quality.js', '/packages/core/client/playback-info.js'].includes(req.url)) {
+    } else if (['/packages/browser-ui/recovery.js', '/packages/core/client/watch-progress.js', '/packages/core/client/quality.js', '/packages/core/client/playback-info.js', '/packages/core/client/offline-rules.js'].includes(req.url)) {
       res.writeHead(200, { 'Content-Type': 'text/javascript' }).end(await fs.readFile(path.join(__dirname, '..', req.url.slice(1))));
     } else if (req.url.startsWith('/api/')) await respond(req, res);
     else res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><title>Network regression</title><div id="toast"></div>');
@@ -122,19 +122,23 @@ test('browser migrates legacy offline saves and checkpoints only for an eligible
 });
 
 test('reloading resumes both preparing and waiting episodes in an offline save batch', async () => {
-  const ids = ['one', 'two', 'three'], requested = new Set();
+  const ids = ['one', 'two', 'three'], requested = new Set(), version = 'a'.repeat(64);
   const user = { id: 1, username: 'viewer', role: 'viewer' };
-  let preparing = true;
+  let preparing = true, ranges = 0, captions = 0;
   await withWebPage((req, res) => {
     const json = body => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
     if (req.url === '/api/library') return json({ user, items: ids.map(id => ({ id, title: id })), metadata: {}, progress: {} });
     const [, id, route] = req.url.match(/^\/api\/items\/([^/]+)\/(.+)$/) || [];
-    if (route === 'info') return json({ duration: 1, audio: [], embedded: [], uploaded: [] });
+    if (route === 'info') return json({ duration: 1, audio: [], embedded: id === 'one' ? [{ index: 2, text: true }] : [], uploaded: [] });
     if (route === 'offline') {
       requested.add(id);
-      return json(preparing ? { state: 'preparing', progress: .2 } : { state: 'ready', size: 1, version: '1', type: 'video/mp4' });
+      return json(preparing ? { state: 'preparing', progress: .2 } : { state: 'ready', size: 1, version, type: 'video/mp4' });
     }
-    if (route === 'offline/file?version=1') return res.writeHead(206, { 'Content-Range': 'bytes 0-0/1' }).end('x');
+    if (route === 'subtitles/e2') return res.writeHead(++captions === 1 ? 502 : 404).end();
+    if (route === 'offline/file?version=' + version) {
+      const body = id === 'one' && ++ranges === 1 ? '' : 'x';
+      return res.writeHead(206, { 'Content-Range': 'bytes 0-0/1' }).end(body);
+    }
     res.writeHead(404).end();
   }, async page => {
     const load = () => page.evaluate(async user => {
@@ -150,7 +154,11 @@ test('reloading resumes both preparing and waiting episodes in an offline save b
     preparing = false;
     await page.reload();
     await load();
-    await expect.poll(state).toEqual({ one: 'complete', two: 'complete', three: 'complete' });
+    await expect.poll(state, { timeout: 10000 }).toEqual({ one: 'complete', two: 'complete', three: 'complete' });
+    expect(ranges).toBe(2);
+    expect(captions).toBe(2);
+    const saved = await page.evaluate(() => window.adapter.offline.store.meta('one'));
+    expect(saved.info.subtitles).toEqual([]);
   });
 });
 
