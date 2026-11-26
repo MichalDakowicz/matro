@@ -1,6 +1,6 @@
 // The one page the desktop app does not have: who you are, what you have added, your password, and for the head account the people.
 import { scanMessage } from '../../../packages/core/client/scan-status.js';
-import { get, post, patch, del } from './http.js';
+import { get, post, put, patch, del } from './http.js';
 import { h, say, dialog, languageSelect, languageName, copyText, selectText } from './dom.js';
 
 const hue = name => { let n = 2166136261; for (const c of name) n = Math.imul(n ^ c.codePointAt(0), 16777619); return (n >>> 0) % 360; };
@@ -33,7 +33,7 @@ export function openProfile({ session, getState, forgetTracks, signOut, openSave
     subtitleStatus.textContent = `Search is ${enabled ? 'on' : 'off'}. A search sends the title and language to OpenSubtitles.`;
   };
   async function configureSubtitles(key) {
-    try { showSubtitleStatus(await put('/api/admin/subtitle-search', { key })); subtitleKey.value = ''; }
+    try { showSubtitleStatus(await put('/api/admin/subtitle-search', { key }, { accountId: user.id })); subtitleKey.value = ''; }
     catch (error) { subtitleStatus.textContent = error.message; }
   }
   const subtitleSettings = h('form', { onsubmit: event => { event.preventDefault(); void configureSubtitles(subtitleKey.value); } },
