@@ -252,6 +252,30 @@ test('probes back off after errors and recover after repeated failures', async t
   assert.equal(library.item(id).probe_failures, 0);
 });
 
+test('an older probe is kept while its HDR refresh fails or backs off', async t => {
+  const root = await temporaryDirectory(t);
+  const file = path.join(root, 'Film.mkv'), id = idFor(file);
+  await fs.writeFile(file, 'film');
+  const db = open(':memory:');
+  t.after(() => db.close());
+  let attempts = 0, fail = true;
+  const library = createLibrary(db, { autoProbe: false, probeFile: async () => {
+    attempts++;
+    if (fail) throw new Error('Temporary I/O error');
+    return { duration: 30, video: { codec: 'hevc' }, colorVersion: 1 };
+  } });
+  await library.addFolder(root);
+  db.prepare('UPDATE items SET probe = ? WHERE id = ?').run(JSON.stringify({ duration: 20, video: { codec: 'h264' } }), id);
+  const info = () => library.info(library.item(id));
+  assert.equal((await info()).duration, 20);
+  assert.equal(library.item(id).probe_failures, 1);
+  assert.equal((await info()).duration, 20);
+  assert.equal(attempts, 1);
+  fail = false;
+  db.prepare('UPDATE items SET retry_probe_after = NULL WHERE id = ?').run(id);
+  assert.equal((await info()).duration, 30);
+});
+
 test('cuts and encodes of one movie in a folder become editions of a single movie, not a show', async t => {
   const base = await temporaryDirectory(t), root = path.join(base, 'Media'), movie = path.join(root, 'Film (2020)'), other = path.join(root, 'Shows', 'Show');
   await fs.mkdir(movie, { recursive: true });
