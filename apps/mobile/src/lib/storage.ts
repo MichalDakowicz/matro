@@ -1,5 +1,6 @@
 import { forgetFromHistory, rememberServer } from './server-history';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { knownQuality } from '../../../../packages/core/client/quality.js';
 import { createProgressRecovery } from '../../../../packages/core/client/recovery';
 import type { Library, MatroUser, Progress } from '../../../../packages/core/client/server';
 import { activeOfflineAccountKey as active, migrateOfflineAccount, offlineAccount, offlineLibraryKey as libraryKey } from './offline-storage';
@@ -16,6 +17,9 @@ export const loadServerHistory = async (): Promise<string[]> => {
 export const addServerToHistory = async (base: string) => AsyncStorage.setItem(HISTORY, JSON.stringify(rememberServer(await loadServerHistory(), base))).catch(() => {});
 export const removeServerFromHistory = async (base: string) => AsyncStorage.setItem(HISTORY, JSON.stringify(forgetFromHistory(await loadServerHistory(), base))).catch(() => {});
 export const forgetServer = () => AsyncStorage.removeItem(KEY).catch(() => {});
+// Stream quality is a per-device choice (a phone and a TV on the same account want different tiers).
+export const loadQuality = (): Promise<string> => AsyncStorage.getItem('matro.quality').then(value => knownQuality(value), () => 'original');
+export const saveQuality = (quality: string) => AsyncStorage.setItem('matro.quality', quality).catch(() => {});
 export const progressRecovery = createProgressRecovery(AsyncStorage);
 export async function readStored<T>(key: string): Promise<T | null> {
   const raw = await AsyncStorage.getItem(key);

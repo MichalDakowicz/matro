@@ -178,3 +178,37 @@ test('seeking replaces the same viewer’s preparation without exhausting capaci
     assert.equal(entry.error, null);
   }
 });
+
+test('a quality tier scales the picture down, caps the bitrate and is part of the cache key', async t => {
+  const options = { input: 'movie.mkv', info: { video: { codec: 'h264', pixelFormat: 'yuv420p' } } };
+  assert.ok(argumentsFor(options).includes('copy'));
+  const tier = argumentsFor({ ...options, quality: '480p' });
+  assert.equal(tier.includes('copy'), false);
+  assert.equal(tier[tier.indexOf('-vf') + 1], "scale=w='min(iw,854)':h='min(ih,480)':force_original_aspect_ratio=decrease:force_divisible_by=2");
+  assert.equal(tier[tier.indexOf('-maxrate') + 1], '1500k');
+  for (const name of ['h264_nvenc', 'h264_qsv', 'h264_vaapi']) {
+    const hw = argumentsFor({ ...options, quality: '480p' }, ['-c:v', name, '-global_quality', '21']);
+    assert.equal(hw[hw.indexOf('-c:v') + 1], name);
+    assert.equal(hw.includes('-global_quality'), false);
+    assert.equal(hw[hw.indexOf('-b:v') + 1], '1125k');
+    assert.equal(hw[hw.indexOf('-maxrate') + 1], '1500k');
+    assert.equal(hw[hw.indexOf('-bufsize') + 1], '3000k');
+  }
+  assert.equal(argumentsFor({ ...options, quality: 'bogus' }).includes('copy'), true);
+  const bitmap = argumentsFor({ ...options, quality: '720p', burn: 3 });
+  assert.match(bitmap[bitmap.indexOf('-filter_complex') + 1], /scale=w='min\(iw,1280\)':h='min\(ih,720\)':force_original_aspect_ratio=decrease:force_divisible_by=2\[video\]$/);
+
+  const encoder = process.env.MATRO_VIDEO_ENCODER; process.env.MATRO_VIDEO_ENCODER = 'software';
+  t.after(() => { if (encoder === undefined) delete process.env.MATRO_VIDEO_ENCODER; else process.env.MATRO_VIDEO_ENCODER = encoder; });
+  const f = await fixtures(), info = await probe(f.mkv), dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-quality-'));
+  const cache = createPlaybackCache({ ffmpeg, dir });
+  t.after(async () => { cache.close(); await fs.rm(dir, { recursive: true, force: true }); });
+  const base = { file: f.mkv, input: f.mkv, info, offset: 0, audio: null, burn: null, delay: 0 };
+  const [original, small] = [await cache.get(base), await cache.get({ ...base, quality: '480p' })];
+  assert.notEqual(original, small);
+  assert.equal(await cache.get({ ...base, quality: 'original' }), original);
+  await until(() => small.done || small.error); assert.ifError(small.error);
+  await until(() => original.done || original.error); assert.ifError(original.error);
+  assert.equal((await probe(small.file)).video.height, Math.min(info.video.height, 480));
+  assert.equal((await probe(original.file)).video.height, info.video.height);
+});

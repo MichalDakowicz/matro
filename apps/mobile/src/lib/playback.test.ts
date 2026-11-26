@@ -27,7 +27,7 @@ function harness(t: any, directPlay = false, savedAtOpen = false) {
     replaceAsync(source: any) { return new Promise<void>((resolve, reject) => pending.push({ source, resolve, reject })); },
     addListener(name: string, callback: Function) { listeners.set(name, callback); return { remove() {} }; },
   };
-  const info = { duration: 200, directPlay, audio: [{ index: 1 }], embedded: [], uploaded: [{ id: 1, name: 'English', language: 'en' }] };
+  const info = { duration: 200, directPlay, video: { codec: 'h264', height: 1080, width: 1920 }, audio: [{ index: 1 }], embedded: [], uploaded: [{ id: 1, name: 'English', language: 'en' }] };
   const data = { user: {}, preferences: { tracks: {} }, progress: {}, markers: {} };
   const localCopy = { uri: 'file:///saved.mp4', info, text: {} };
   let available = savedAtOpen, inspections = 0;
@@ -39,9 +39,11 @@ function harness(t: any, directPlay = false, savedAtOpen = false) {
       playbackState: async (_: string, session: string, playing: boolean) => activity.push({ session, playing }), stopPlayback: async () => {}, updateWatchOptions: async () => {} },
     '../../../../packages/core/client/library': { trackKey: () => 'movie', matchTrack: () => undefined },
     '../../../../packages/core/client/watch-progress.js': { isContinueDismissed },
+    '../../../../packages/core/client/quality.js': require('../../../../packages/core/client/quality.js'),
     '../../../../packages/core/client/subtitles': { parseVtt },
     './diskBuffer': { downloadPlayback: (_: any, __: any, ready: any) => { const job = { ready, cancelled: false }; downloads.push(job); return () => { job.cancelled = true; }; } },
-    '../lib/storage': { recoveryScope: () => 'test', progressRecovery: { write: async () => {} } },
+    '../lib/storage': { recoveryScope: () => 'test', progressRecovery: { write: async () => {} }, loadQuality: async () => 'original', saveQuality: async () => {} },
+    '../../../../packages/core/client/quality.js': { qualityOptions: () => [] },
     '../lib/offline': { savedTitle: async () => available ? localCopy : undefined },
   };
   const context = { exports: {} as any, require: (name: string) => { assert.ok(modules[name], name); return modules[name]; },
@@ -70,6 +72,17 @@ test('a completed download leaves the decoder running and is used on the next se
   assert.equal(h.downloads[0].cancelled, false, 'the cached file stays alive while in use');
   h.pending[1].resolve(); await flush();
   assert.equal(h.player.currentTime, 30);
+});
+
+test('changing quality replaces the source at the current position while paused', async t => {
+  const h = harness(t, true); await flush();
+  h.pending[0].resolve(); await flush();
+  h.hook.seek(40); h.emit('timeUpdate');
+  h.hook.toggle();
+  h.hook.chooseQuality('480p'); await flush();
+  assert.match(h.pending[1].source.uri, /\/transcode\?.*t=40.*quality=480p/);
+  h.pending[1].resolve(); await flush();
+  assert.equal(h.player.playing, false);
 });
 
 test('rapid seeks serialize native loads and skip superseded requests', async t => {

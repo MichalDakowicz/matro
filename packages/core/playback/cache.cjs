@@ -6,7 +6,7 @@ const { createHash } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { pipeline } = require('node:stream');
 const { once } = require('node:events');
-const { argumentsFor, selectEncoder, canCopyVideo, SOFTWARE } = require('./encoding.cjs');
+const { argumentsFor, selectEncoder, canCopyVideo, QUALITIES, SOFTWARE } = require('./encoding.cjs');
 
 // FFmpeg writes ahead to disk independently of the network/player. Slow clients, pauses and
 // disconnected requests never block encoding. Only complete files survive a process restart.
@@ -78,7 +78,9 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
       if (read) entry.readers++;
       return assign(owner, entry);
     };
-    const key = createHash('sha256').update(JSON.stringify([3, options.file, source.size, source.mtimeMs, options.offset, options.audio, options.burn, options.delay, options.info.video])).digest('hex');
+    const identity = [3, options.file, source.size, source.mtimeMs, options.offset, options.audio, options.burn, options.delay, options.info.video];
+    if (QUALITIES[options.quality]) identity.push(options.quality);
+    const key = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
     while (entries.has(key)) {
       const existing = entries.get(key);
       if (!existing.error) return use(existing);
@@ -99,7 +101,7 @@ function createPlaybackCache({ ffmpeg, dir = fs.mkdtempSync(path.join(os.tmpdir(
     const entry = { file: path.join(dir, key + '.part'), size: 0, done: false, readers: 0, used: Date.now(), error: null, child: null };
     entries.set(key, entry);
     const render = async () => {
-      const encoder = canCopyVideo(options.info, options.burn, options.offset) || !options.info.video || hardwareFailures.has(key) ? SOFTWARE : await selectEncoder(ffmpeg);
+      const encoder = canCopyVideo(options.info, options.burn, options.offset, options.quality) || !options.info.video || hardwareFailures.has(key) ? SOFTWARE : await selectEncoder(ffmpeg);
       if (closed || entry.error) return;
       async function attempt(selected) {
         await fsp.rm(entry.file, { force: true }); entry.size = 0; entry.preparedSeconds = 0;

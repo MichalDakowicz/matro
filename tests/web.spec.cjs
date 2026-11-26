@@ -623,6 +623,14 @@ test('Vite production UI signs in, plays through the HTTP adapter and saves prog
     await expect(y).toHaveValue('1');
     await expect(page.locator('#position')).toHaveText(at);
     await expect(page.locator('#subtitle-caption')).toHaveText('Subtitles after a seek.');
+
+    const tier = page.getByRole('button', { name: '480p', exact: true });
+    const switched = page.waitForResponse(response => response.url().includes('/transcode?') && new URL(response.url()).searchParams.get('quality') === '480p');
+    await tier.click();
+    expect((await switched).ok()).toBe(true);
+    await expect(tier).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#position')).toHaveText('0:06');
+    await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Close audio and subtitles' }).click();
     await page.keyboard.press('Escape');
     await expect(page.locator('video')).toHaveCount(0);

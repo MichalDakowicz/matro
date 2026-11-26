@@ -7,6 +7,8 @@ import { toVtt } from './offline-store.js';
 import { mountMovieRequests } from './movie-requests.js';
 import { dismissedProgress, isContinueDismissed } from '../../../packages/core/client/watch-progress.js';
 
+import { knownQuality, qualityOptions } from '../../../packages/core/client/quality.js';
+
 const FILE = 20000; // subtitle files found next to the video on the server get indexes from here up
 const SIDECAR = 10000; // uploaded subtitle tracks get indexes from here up, as sidecar files do on the desktop
 const KIND = { full: '', forced: ' (forced)', sdh: ' (SDH)' };
@@ -48,6 +50,7 @@ export function createAdapter(session) {
     return (value === undefined ? await get(url) : await post(url, value)).result;
   };
   const details = new Map();
+  let quality = knownQuality((() => { try { return localStorage.getItem('matro-quality'); } catch { return null; } })());
   let latest = null, offlineSync;
 
   async function load() {
@@ -122,7 +125,7 @@ export function createAdapter(session) {
   const savedPlayback = id => offline.playback(id).catch(() => null);
   async function inspect(id) {
     const saved = await savedPlayback(id);
-    if (saved) return saved.info;
+    if (saved) return { ...saved.info, qualities: [] };
     if (session.offline) throw new Error('This title is not saved on this device.');
     try { return await inspectRemote(id); }
     catch (error) {
@@ -133,7 +136,7 @@ export function createAdapter(session) {
   }
   async function inspectRemote(id, { signal } = {}) {
     const info = await api('GET', `/api/items/${id}/info`, undefined, { signal });
-    const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay,
+    const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay, qualities: qualityOptions(info.video),
       subtitles: [...info.embedded.map(({ forced: _f, ...t }) => t), ...info.uploaded.map(u => track(u)), ...(info.files || []).map(f => ({ index: FILE + f.id, language: f.language, title: f.title, codec: f.codec, text: true, bitmap: false, sidecar: true }))] };
     details.set(id, result);
     return result;
@@ -222,11 +225,13 @@ export function createAdapter(session) {
       throw error;
     }
     const first = d.audio[0];
+    const tier = d.video && quality !== 'original' ? quality : null;
     const q = new URLSearchParams({ session: playerSession });
     if (preload) q.set('preload', '1');
-    if (!forceTranscode && d.directPlay && bitmapSubtitle === null && (audio === null || !first || audio === first.index)) return { url: `/api/items/${id}/direct?${q}${offset > 0 ? `#t=${offset}` : ''}`, offset: 0 };
+    if (!tier && !forceTranscode && d.directPlay && bitmapSubtitle === null && (audio === null || !first || audio === first.index)) return { url: `/api/items/${id}/direct?${q}${offset > 0 ? `#t=${offset}` : ''}`, offset: 0 };
     q.set('t', String(Math.floor(offset * 10) / 10));
     if (audio !== null) q.set('audio', audio);
+    if (tier) q.set('quality', tier);
     if (bitmapSubtitle !== null) { q.set('burn', bitmapSubtitle); q.set('delay', subtitleDelay); }
     return { url: `/api/items/${id}/transcode?${q}`, offset };
   }
@@ -308,6 +313,7 @@ export function createAdapter(session) {
     chooseSource: window.matroDesktop?.chooseSource,
     recoveryScope: scope,
     load, inspect, prepare: inspect, savedPlayback, subtitles, loadSubtitle, stream,
+    quality: () => quality, setQuality: id => { quality = knownQuality(id); try { localStorage.setItem('matro-quality', quality); } catch { /* The choice only lasts for this visit. */ } },
     get subtitleSearchStatus() { return session.offline ? null : () => get('/api/subtitle-search'); },
     searchSubtitles: async ({ id, language }) => (await get(`/api/items/${id}/subtitle-search?${new URLSearchParams({ language })}`)).results,
     downloadSubtitle: async ({ id, token }) => {
