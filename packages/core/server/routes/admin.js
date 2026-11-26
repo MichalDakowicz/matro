@@ -78,15 +78,14 @@ function register(app) {
     const final = path.join(config.mediaDir, ...parts);
     if (!final.startsWith(config.mediaDir + path.sep)) throw new HttpError(400, 'Bad path.');
     await fsp.mkdir(path.dirname(final), { recursive: true });
+    const folder = await library.coveringFolder(config.mediaDir) || await library.addFolder(config.mediaDir);
     try { await fsp.access(final); throw new HttpError(409, 'A file with that name is already on the server.'); } catch (error) { if (error instanceof HttpError) throw error; }
     const temporary = `${final}.${randomBytes(6).toString('hex')}.part`;
     let size = 0;
     const limit = new Transform({ transform(chunk, _enc, done) { size += chunk.length; done(size > config.maxUploadBytes ? new HttpError(413, 'That file is larger than the upload limit.') : null, chunk); } });
     try { await pipeline(ctx.req, limit, fs.createWriteStream(temporary, { flags: 'wx' })); await fsp.rename(temporary, final); }
     catch (error) { await fsp.rm(temporary, { force: true }); throw error; }
-    let folder = library.byPath(config.mediaDir);
-    if (!folder) { await fsp.mkdir(config.mediaDir, { recursive: true }); await library.addFolder(config.mediaDir); folder = library.byPath(config.mediaDir); }
-    else await library.rescan(folder.id);
+    await library.rescan(folder.id);
     return { path: parts.join('/'), size };
   });
 }

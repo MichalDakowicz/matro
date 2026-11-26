@@ -240,7 +240,11 @@ export function createAdapter(session) {
     saveMarkers: async edits => (await post('/api/segments/manual', edits)).markers,
     removeMarker: async ({ id, marker }) => (await post(`/api/items/${id}/segments/remove`, { marker })).markers,
     scannerStatus: async () => (await get('/api/segments')).scanner,
-    rescan: async () => { if (session.user.role === 'admin') await post('/api/admin/rescan'); return load(); },
+    rescan: async () => {
+      if (session.user.role !== 'admin') return load();
+      const { results } = await post('/api/admin/rescan');
+      return { ...await load(), warnings: results.filter(result => !result.ok).map(({ folder, error }) => folder ? `${folder}: ${error}` : error) };
+    },
     addFolder: async () => { headOnly(); const path = await chooseFolder(); if (path) { const r = await post('/api/admin/folders', { path }); say(r.ok ? `Added. Found ${r.items} video${r.items === 1 ? '' : 's'}.` : r.error); } return load(); },
     openFiles: pickFiles, importDrop: files => upload(Array.from(files)),
     removeFolder: async root => { headOnly(); const { folders } = await get('/api/admin/folders'); const folder = folders.find(f => f.path === root); if (folder) await del(`/api/admin/folders/${folder.id}`); return load(); },
