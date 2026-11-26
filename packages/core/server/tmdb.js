@@ -20,7 +20,7 @@ function loadEnv(files) {
 const asItem = row => ({ folderId: row.folder_id, id: row.id, kind: row.kind, group: row.group_title, year: row.year, groupId: row.group_id, root: row.root, path: row.path, season: row.season });
 const keyOf = item => item.kind === 'show' ? item.groupId || item.group : item.id;
 
-function createTmdb(db, { dataDir = config.dataDir, fetchImpl = fetch, onLocalChange, env = loadEnv([path.join(dataDir, '.env'), path.join(__dirname, '../../../apps/server/.env'), path.join(__dirname, '../../../.env')]) } = {}) {
+function createTmdb(db, { dataDir = config.dataDir, fetchImpl = fetch, onLocalChange, onUpdate, env = loadEnv([path.join(dataDir, '.env'), path.join(__dirname, '../../../apps/server/.env'), path.join(__dirname, '../../../.env')]) } = {}) {
   const auth = vendor && vendor.credentials(env);
   const rows = db.prepare('SELECT i.id, i.folder_id, i.kind, i.group_id, i.group_title, i.year, i.path, i.season, f.path AS root FROM active_items i JOIN folders f ON f.id = i.folder_id');
   const items = () => rows.all().map(asItem);
@@ -31,7 +31,8 @@ function createTmdb(db, { dataDir = config.dataDir, fetchImpl = fetch, onLocalCh
   }
   const dir = path.join(dataDir, 'tmdb');
   fs.mkdirSync(dir, { recursive: true });
-  const meta = vendor.createMetadata({ dir, auth, fetch: (url, options) => fetchImpl(url, { signal: AbortSignal.timeout(20000), ...options }) });
+  const meta = vendor.createMetadata({ dir, auth, onUpdate, fetch: (url, options) => fetchImpl(url, { signal: AbortSignal.timeout(20000), ...options }) });
+  if (onUpdate) void meta.loaded.then(() => onUpdate(), () => {});
   const preview = meta.preview;
   // With a folder id only that folder's titles are read again (an id with no titles left just drops their local data).
   async function refreshLocal(folderId) {

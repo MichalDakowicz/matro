@@ -5,6 +5,7 @@ import { createProgressRecovery } from '../../../../packages/core/client/recover
 import type { Library, MatroUser, Progress } from '../../../../packages/core/client/server';
 import { activeOfflineAccountKey as active, migrateOfflineAccount, offlineAccount, offlineLibraryKey as libraryKey } from './offline-storage';
 export { recoveryScope } from './offline-storage';
+import { forgetFromHistory, rememberServer } from './server-history';
 
 const KEY = 'matro.server';
 

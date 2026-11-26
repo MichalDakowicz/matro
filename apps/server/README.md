@@ -213,14 +213,18 @@ Build Docker from the repository root: `docker build -f apps/server/Dockerfile .
 
 ## Movie requests
 
-Viewers use **Request a movie** to submit a title and an optional release year and see their own requests. The head account opens **Movie requests**, selects **Search releases** to open Downloads with the title filled in, and chooses a release to start a transfer. Use **Mark handled** when the request is resolved.
+Viewers use **Request a movie** to ask for a movie, a series or one season of a series, with an optional release year, and see the status of their own requests: Waiting, Ready to watch or Declined. When TMDB is configured on the server, typing a title offers exact TMDB matches to pick from; without TMDB, or when no match is picked, the text is sent as typed.
+
+The head account opens **Movie requests**, selects **Search releases** to open Downloads with the title filled in, and chooses a release to start a transfer. Use **Mark handled** when the request is resolved, or **Decline** to tell the requester it will not be added. When a library scan or a finished download brings in a title with the same name (and year, for movies), a matching pending request is linked to it and marked ready automatically. A series request is ready once any episode of the show appears. A season request needs that season in the library.
+
+The requester is told when a request becomes ready or is declined: a toast on the web app the next time it loads the library, and an Android notification when alerts are enabled on their phone.
 Viewers can remove their own requests. The head account can remove any request. Removal clears the request and its queued alerts.
 
 In desktop server mode, requests are in the dock. From the local desktop library, select **Movie requests** to open your server in a separate Matro window. Enter your Matro server address if prompted, then sign in with your server account.
 
 Android alerts use Firebase Cloud Messaging. Register the Android package in a Firebase project and place its `google-services.json` in `apps/mobile/` before generating the native Android project. Create a separate service account with the Firebase Cloud Messaging API Admin role. Set `MATRO_REQUEST_FCM_CREDENTIALS` to the path of that account’s private JSON key on the server. With Docker, mount the key read-only and use its path inside the container. Keep the private key out of the repository and Android build. [Firebase Android setup](https://firebase.google.com/docs/cloud-messaging/android/get-started) · [FCM server authorization](https://firebase.google.com/docs/cloud-messaging/send/v1-api)
 
-On Android, sign in as the head account and use **Movie requests → Enable phone alerts**. **Send test alert** shows sample request details. New request notifications include the movie title, release year when supplied, and requester’s username. Tapping a notification opens the inbox. Signing out revokes this phone’s registration.
+On Android, use **Movie requests** (head account) or **Request a movie** (viewers) and **Enable phone alerts**. **Send test alert** shows sample request details. The head account gets a notification for each new request with the title, release year when supplied, and requester’s username. Viewers get one when their request is ready or declined. Tapping a notification opens the requests screen. Signing out revokes this phone’s registration.
 
 ## NVIDIA streaming on the server
 

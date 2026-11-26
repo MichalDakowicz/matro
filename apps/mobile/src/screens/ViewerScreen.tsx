@@ -39,7 +39,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
   const [offline, setOffline] = useState(false), playRun = useRef(0);
   const [refreshing, setRefreshing] = useState(false), [account, setAccount] = useState(false);
   const revision = useRef<string | undefined>(undefined), loading = useRef(false);
-  const alerts = useMovieRequestAlerts(base, !offline && data?.user.role === 'admin' && data.movieRequestPushEnabled === true);
+  const alerts = useMovieRequestAlerts(base, !offline && data?.movieRequestPushEnabled === true, data?.user.role === 'admin');
   const openedAlerts = useRef(0);
   const insets = useSafeAreaInsets();
   const load = useCallback(async () => {
@@ -87,7 +87,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
         const next = await library(base, user.id);
         if (closed || revision.current !== before) return;
         revision.current = next.catalogRevision;
-        setData(current => current && { ...current, items: next.items, folders: next.folders, metadata: next.metadata, scanner: next.scanner, scanStatus: next.scanStatus, catalogRevision: next.catalogRevision });
+        setData(current => current && { ...current, items: next.items, folders: next.folders, metadata: next.metadata, scanner: next.scanner, scanStatus: next.scanStatus, requestUpdates: next.requestUpdates, catalogRevision: next.catalogRevision });
       } catch (error) {
         if (!closed && accountChanged(error)) onSignedOut();
       } finally { checking = false; }

@@ -15,12 +15,18 @@ function createMovieRequestPush(db, { env, fetch, send = createFcm(env, fetch) }
   const enqueue = db.prepare(`INSERT INTO movie_request_push (request_id, device_id, notify_after)
     SELECT ?, d.id, ? FROM movie_request_devices d JOIN sessions s ON s.token_hash = d.session_hash
     JOIN users u ON u.id = s.user_id WHERE s.expires >= ? AND u.role = 'admin'`);
+  // Requesters hear about the outcome of their own request on their own devices.
+  const enqueueFor = db.prepare(`INSERT OR IGNORE INTO movie_request_push (request_id, device_id, notify_after)
+    SELECT ?, d.id, ? FROM movie_request_devices d JOIN sessions s ON s.token_hash = d.session_hash
+    WHERE s.user_id = ? AND s.expires >= ?`);
   const clear = db.prepare('DELETE FROM movie_request_push WHERE request_id = ?');
-  const due = db.prepare(`SELECT q.request_id AS requestId, d.id, d.token, r.title, NULLIF(r.year, 0) AS year, requester.username AS requester
+  const due = db.prepare(`SELECT q.request_id AS requestId, d.id, d.token, r.title, NULLIF(r.year, 0) AS year, requester.username AS requester,
+    CASE WHEN r.status = 'pending' THEN NULL WHEN r.declined THEN 'declined' ELSE 'ready' END AS outcome
     FROM movie_request_push q JOIN movie_requests r ON r.id = q.request_id
     LEFT JOIN users requester ON requester.id = r.user_id
     JOIN movie_request_devices d ON d.id = q.device_id JOIN sessions s ON s.token_hash = d.session_hash
-    JOIN users u ON u.id = s.user_id WHERE q.notify_after <= ? AND s.expires >= ? AND u.role = 'admin'
+    JOIN users u ON u.id = s.user_id WHERE q.notify_after <= ? AND s.expires >= ?
+      AND CASE WHEN r.status = 'pending' THEN u.role = 'admin' ELSE u.id = r.user_id END
     ORDER BY q.notify_after, q.request_id LIMIT 1`);
   const delivered = db.prepare('DELETE FROM movie_request_push WHERE request_id = ? AND device_id = ?');
   const retry = db.prepare('UPDATE movie_request_push SET notify_after = ? WHERE request_id = ? AND device_id = ?');
@@ -79,6 +85,7 @@ function createMovieRequestPush(db, { env, fetch, send = createFcm(env, fetch) }
       }
     },
     enqueue(id, now) { if (send) enqueue.run(id, now, now); },
+    enqueueFor(id, userId, now) { if (send && userId != null) enqueueFor.run(id, now, userId, now); },
     clear(id) { clear.run(id); },
     notify,
     start() {

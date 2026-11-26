@@ -8,7 +8,7 @@ const config = require('./config');
 const { HttpError } = require('./http');
 
 // The head account manages qBittorrent on this same host (including a shared Docker mount).
-function createDownloads({ dataDir, library, tmdb, pathMap = JSON.parse(process.env.MATRO_DOWNLOAD_PATH_MAP || '{}'), hostConfig = {}, ...options }) {
+function createDownloads({ dataDir, library, tmdb, pathMap = JSON.parse(process.env.MATRO_DOWNLOAD_PATH_MAP || '{}'), hostConfig = {}, afterImport, ...options }) {
   const host = {
     url: process.env.MATRO_QBITTORRENT_URL || 'http://127.0.0.1:8080',
     movieRoot: process.env.MATRO_DOWNLOAD_MOVIES || path.join(config.mediaDir, 'Movies'),
@@ -81,6 +81,7 @@ function createDownloads({ dataDir, library, tmdb, pathMap = JSON.parse(process.
         if (!result.ok) throw new Error(result.error);
       }
       tmdb.sync();
+      afterImport?.();
     }
   });
   return {
