@@ -2,7 +2,7 @@
 // Everything here turns those calls into requests to the server.
 import { get, post, put, patch, del, api } from './http.js';
 import { h, say, dialog, languageSelect } from './dom.js';
-import { createOffline, networkLost } from './offline.js';
+import { accountScope, createOffline, networkLost } from './offline.js';
 import { toVtt } from './offline-store.js';
 import { mountMovieRequests } from './movie-requests.js';
 
@@ -16,7 +16,12 @@ const artwork = value => typeof value === 'string' ? (value.startsWith('artwork/
 export function createAdapter(session) {
   const noop = () => () => {};
   const watchers = new Set();
-  const offline = createOffline(session.user);
+  const scope = accountScope(session.user), offline = createOffline(session.user);
+  function checkAccount(data) {
+    if (accountScope(data.user) === scope) return;
+    location.reload();
+    throw new Error('The signed-in account changed.');
+  }
   let polling = 0;
   const unsupported = what => () => Promise.reject(new Error(`${what} is a desktop feature.`));
   const headOnly = (message = 'Only the head account can add or remove media.') => { if (session.user.role !== 'admin') throw new Error(message); };
@@ -38,7 +43,11 @@ export function createAdapter(session) {
       session.offline = true;
       return latest;
     }
-    if (await offline.sync(body => put('/api/state', body)).catch(() => false)) data = await get('/api/library').catch(() => data);
+    checkAccount(data);
+    if (await offline.sync(body => put('/api/state', body)).catch(() => false)) {
+      data = await get('/api/library').catch(() => data);
+      checkAccount(data);
+    }
     if (offlineSync) await offlineSync.catch(() => {});
     offlineSync = offline.flushSubtitles(({ id, query, body }) => api('POST', `/api/items/${id}/subtitles?${query}`, body)).catch(() => {});
     data.metadata = artwork(data.metadata);
@@ -61,8 +70,9 @@ export function createAdapter(session) {
         const { catalogRevision } = await get('/api/library/revision');
         if (closed || latest !== before || catalogRevision === before.catalogRevision) return;
         const data = await get('/api/library');
-        data.metadata = artwork(data.metadata);
         if (closed || latest !== before) return;
+        checkAccount(data);
+        data.metadata = artwork(data.metadata);
         acceptLibrary(data);
         void offline.remember(data).catch(() => {});
         callback({ items: data.items, folders: data.folders, metadata: data.metadata });
@@ -201,7 +211,7 @@ export function createAdapter(session) {
 
   const matro = {
     chooseSource: window.matroDesktop?.chooseSource,
-    recoveryScope: `account:${session.user.id}:${session.user.username}`,
+    recoveryScope: scope,
     load, inspect, prepare: inspect, subtitles, loadSubtitle, stream,
     offlineSave: session.offline ? null : async id => {
       const item = latest.items.find(item => item.id === id);
@@ -240,7 +250,11 @@ export function createAdapter(session) {
     saveMarkers: async edits => (await post('/api/segments/manual', edits)).markers,
     removeMarker: async ({ id, marker }) => (await post(`/api/items/${id}/segments/remove`, { marker })).markers,
     scannerStatus: async () => (await get('/api/segments')).scanner,
-    rescan: async () => { if (session.user.role === 'admin') await post('/api/admin/rescan'); return load(); },
+    rescan: async () => {
+      if (session.user.role !== 'admin') return load();
+      const { results } = await post('/api/admin/rescan');
+      return { ...await load(), warnings: results.filter(result => !result.ok).map(({ folder, error }) => folder ? `${folder}: ${error}` : error) };
+    },
     addFolder: async () => { headOnly(); const path = await chooseFolder(); if (path) { const r = await post('/api/admin/folders', { path }); say(r.ok ? `Added. Found ${r.items} video${r.items === 1 ? '' : 's'}.` : r.error); } return load(); },
     openFiles: pickFiles, importDrop: files => upload(Array.from(files)),
     removeFolder: async root => { headOnly(); const { folders } = await get('/api/admin/folders'); const folder = folders.find(f => f.path === root); if (folder) await del(`/api/admin/folders/${folder.id}`); return load(); },

@@ -38,7 +38,7 @@ test('the selected movie metadata language updates the grid title and poster', a
     app = await electron.launch(launch);
     const page = await app.firstWindow();
     await page.getByRole('button', { name: 'Movies 1', exact: true }).click();
-    const card = name => page.locator('.card').getByText(name, { exact: true });
+    const card = name => page.getByRole('button', { name: `Open ${name}`, exact: true }).and(page.locator('.card'));
     await card('Day of the Wacko').click();
     await page.getByRole('button', { name: 'TMDB settings' }).click();
     const dialog = page.getByRole('dialog', { name: 'TMDB settings' });
@@ -95,8 +95,8 @@ test('existing folder library migrates to two shows and one movie without losing
     await page.screenshot({ path: 'test-results/folder-library.png' });
     await page.getByRole('button', { name: 'Open Over The Garden Wall', exact: true }).click();
     await expect(page.locator('.episode-row')).toHaveCount(11);
-    await expect(page.locator('.episode-code').first()).toHaveText('S1 E0');
-    await expect(page.locator('.episode-code').last()).toHaveText('S1 E10');
+    await expect(page.locator('.episode-code').first()).toHaveText('S1 E1');
+    await expect(page.locator('.episode-code').last()).toHaveText('S1 E11');
     await page.getByRole('button', { name: 'Close details', exact: true }).click();
     const state = await page.evaluate(() => window.matro.load());
     expect(state.progress[watched].position).toBe(120); expect(state.queue).toEqual([watched]); expect(state.libraryVersion).toBe(2);

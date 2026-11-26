@@ -1,7 +1,7 @@
 // Portable native client. Sessions are supplied by the platform's secure storage;
 // media requests carry the same revocable bearer session as API requests.
 
-export type MatroUser = { id: number; username: string; role: string };
+export type MatroUser = { id: number; accountKey?: string; legacyScope?: true; username: string; role: string };
 export type Status = { setup: boolean; user: MatroUser | null };
 
 const PRIVATE_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|[^.]+$|.*\.(local|lan|home)$)/i;

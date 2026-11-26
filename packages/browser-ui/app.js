@@ -313,7 +313,7 @@ function foldersPage() {
     ${loose ? `<li class="source-row"><span class="source-icon">${icon('file')}</span><span><span class="source-name">Opened files</span><span class="source-path">Added one by one or dropped into the window</span></span><span class="source-count">${loose} items</span><span></span></li>` : ''}</ul>
     ${!library.folders.length && !loose ? '<p class="page-sub">No folders yet. Add one to build your library — mounted network drives work too.</p>' : ''}
     <div class="drop-hint">${icon('upload')}Drop folders or files anywhere to import · scanning is recursive</div>
-    <p class="note">Removing a folder never deletes files on disk. Progress, queue and skip markers are kept for when you add it back.</p>`;
+    <p class="note">Removing a folder keeps its media files, progress, queue entries and skip markers. Add the same path to see them in your library again.${library.user ? ' Uploaded subtitles are kept too.' : ''}</p>`;
 }
 function renderLibrary() {
   downloads.unmount();
