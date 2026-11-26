@@ -9,7 +9,7 @@ function TvPressable({ style, accessible, focusable, disabled, onFocus, onBlur, 
   const enabled = !disabled && focusable !== false && accessible !== false;
   return <Pressable
     {...props}
-    accessible={enabled}
+    accessible
     focusable={enabled}
     disabled={disabled}
     onFocus={event => { setFocused(true); onFocus?.(event); }}

@@ -25,7 +25,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onComplete, o
     <Text style={[t.dim, { marginTop: 12, lineHeight: 20 }]}>{facts}</Text>
     {m.overview ? <Text style={[t.muted, { fontSize: 14, lineHeight: 23, marginTop: 14 }]}>{m.overview}</Text> : null}
     <View style={[t.row, { marginTop: 20, flexWrap: 'wrap', gap: 8 }]}>
-      <Pill label={resume ? `Resume  ${formatTime(p.position)}` : 'Play now'} icon="play" primary onPress={() => onPlay(target)} style={{ flex: 1, minWidth: 150 }} />
+      <Pill label={resume ? `Resume  ${formatTime(p.position)}` : 'Play now'} icon="play" primary preferredFocus={isAndroidTv} onPress={() => onPlay(target)} style={{ flex: 1, minWidth: 150 }} />
       {resume && <View style={s.circleAction}><IconButton name="restart" label="Play from start" size={50} onPress={() => onPlay(target, 0)} /></View>}
       <View style={s.circleAction}><IconButton name="plus" label="Add to queue" size={50} onPress={() => onEnqueue(items)} /></View>
       <View style={s.circleAction}><IconButton name="check" label={data.progress[item.id]?.completed ? 'Mark incomplete' : 'Mark complete'} size={50} active={!!data.progress[item.id]?.completed} onPress={() => onComplete(item)} /></View>
@@ -51,7 +51,7 @@ export default function TitleScreen({ data, items, onBack, onPlay, onComplete, o
         </Pressable><Pressable onPress={() => onComplete(episode)} accessibilityLabel={`${done ? 'Mark incomplete' : 'Mark complete'} ${episodeName(data, episode)}`} style={[s.episodeCheck, isAndroidTv && { position: 'relative', left: undefined, top: undefined }, done && { backgroundColor: colors.primary }]}><Icon name="check" size={13} color={done ? colors.onPrimary : colors.text} /></Pressable></View>
         {onSave && <View style={{ alignSelf: 'flex-end', marginTop: 6 }}><Pill label={savedIds?.has(episode.id) ? 'Saved offline' : 'Save episode offline'} icon="download" compact disabled={savedIds?.has(episode.id)} onPress={() => onSave(episode)} /></View>}</View>;
       }} />
-    <View style={{ position: 'absolute', top: insets.top + 12, left: 14, borderRadius: 999, backgroundColor: '#171719aa', borderWidth: 1, borderColor: colors.hairline }}><IconButton name="back" label="Close details" preferredFocus={isAndroidTv} onPress={onBack} /></View>
+    <View style={{ position: 'absolute', top: insets.top + 12, left: 14, borderRadius: 999, backgroundColor: '#171719aa', borderWidth: 1, borderColor: colors.hairline }}><IconButton name="back" label="Close details" onPress={onBack} /></View>
   </View>;
 }
 const s = StyleSheet.create({
