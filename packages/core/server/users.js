@@ -1,4 +1,6 @@
 const { HttpError } = require('./http');
+const { tx } = require('./db');
+const { sessionHash } = require('./auth');
 
 const USERNAME = /^[A-Za-z0-9][A-Za-z0-9._-]{1,31}$/;
 const publicUser = user => ({ id: user.id, accountKey: user.account_key, username: user.username, role: user.role,
@@ -16,6 +18,7 @@ function createUsers(db, auth) {
   const setHash = db.prepare('UPDATE users SET hash = ? WHERE id = ?');
   const byName = db.prepare('SELECT id, username, role FROM users WHERE username = ?');
   const count = db.prepare('SELECT COUNT(*) AS n FROM users');
+  const moveDevice = db.prepare('UPDATE movie_request_devices SET session_hash = ? WHERE session_hash = ?');
   const insertHash = (username, hash, role) => {
     try { return Number(insert.run(username, hash, role, Date.now()).lastInsertRowid); }
     catch (error) { if (/UNIQUE/.test(error.message)) throw new HttpError(409, 'That username is taken.'); throw error; }
@@ -25,7 +28,19 @@ function createUsers(db, auth) {
     count: () => count.get().n,
     byName: name => byName.get(String(name)),
     async create(username, password, role) { return insertHash(username, await auth.hashPassword(password), role); },
-    async setPassword(userId, password) { setHash.run(await auth.hashPassword(password), userId); auth.destroyAll(userId); }
+    // With `current` (the caller's session) every other session ends and a replacement is returned; the phone's
+    // movie request alert registration moves to it, because deleting a session would otherwise delete the registration.
+    async setPassword(userId, password, current) {
+      const hash = await auth.hashPassword(password);
+      return tx(db, () => {
+        setHash.run(hash, userId);
+        if (!current) { auth.destroyAll(userId); return undefined; }
+        const token = auth.create(userId);
+        moveDevice.run(sessionHash(token), sessionHash(current));
+        auth.destroyOthers(userId, token);
+        return token;
+      });
+    }
   };
 }
 module.exports = { USERNAME, publicUser, validateCredentials, createUsers };

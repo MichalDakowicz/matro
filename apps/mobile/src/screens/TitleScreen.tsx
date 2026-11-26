@@ -2,27 +2,31 @@ import { useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import type { Item, Library } from '../lib/server';
+import { File } from 'expo-file-system';
+import type { Item, Library, Metadata } from '../lib/server';
 import { seasonLabel, seasonNumbers, seasonOf } from '../../../../packages/core/client/watch-progress.js';
 import { episodeName, formatTime, metadataFor, nameFor, resumeItem } from '../../../../packages/core/client/library';
 import { cleanEpisodeName, plural, runtimeText } from '../lib/text';
 import { Chip, Icon, IconButton, MediaArt, Pill, ProgressBar, Row, Sheet, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
 import { TopFade } from '../components/Shell';
+import { MetadataSheet, SubtitleSheet } from '../components/TitleSheets';
 import { colors, fonts, overArt, radius, themed } from '../theme';
 
 type Props = ArtProps & {
   data: Library; items: Item[]; onBack: () => void; onPlay: (item: Item, start?: number) => void; onEnqueue: (items: Item[]) => void;
   /** Marks every item watched (done) or unwatched; items already in that state are skipped. */
   onMark: (items: Item[], done: boolean) => void;
+  /** Present when the server can be reached: subtitle upload for everyone, TMDB fixes for the head account when the server has TMDB. */
+  online?: { admin: boolean; tmdb: boolean; notify: (text: string) => void; onMetadata: (metadata: Record<string, Metadata>) => void };
   onSave?: (item: Item) => void; onSaveMany?: (items: Item[]) => void; onRemoveSaved?: (items: Item[]) => void; savedIds?: Set<string>; savingIds?: Set<string>;
 };
-type Menu = null | 'save' | 'watched' | { episode: Item };
+type Menu = null | 'save' | 'watched' | 'metadata' | { episode: Item };
 
-export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, onMark, onSave, onSaveMany, onRemoveSaved, savedIds, savingIds, ...art }: Props) {
+export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, onMark, online, onSave, onSaveMany, onRemoveSaved, savedIds, savingIds, ...art }: Props) {
   const item = items[0], m = metadataFor(data, item), target = resumeItem(data, items), p = data.progress[target.id], name = nameFor(data, item);
   const insets = useSafeAreaInsets(), seasons = seasonNumbers(items);
-  const [season, setSeason] = useState(seasonOf(target)), [menu, setMenu] = useState<Menu>(null), [scrolled, setScrolled] = useState(false);
+  const [season, setSeason] = useState(seasonOf(target)), [menu, setMenu] = useState<Menu>(null), [scrolled, setScrolled] = useState(false), [picked, setPicked] = useState<{ item: Item; file: File } | null>(null);
   const editions = item.editionGroup && items.length > 1;
   const resume = p?.position > 0 && !p.completed, show = item.kind === 'show';
   const done = (list: Item[]) => list.length > 0 && list.every(i => data.progress[i.id]?.completed);
@@ -33,6 +37,12 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
   const state = (id: string) => savedIds?.has(id) ? 'saved' : savingIds?.has(id) ? 'saving' : 'idle';
   const saveLabel = (id: string) => ({ saved: 'Saved offline', saving: 'Saving…', idle: 'Save offline' })[state(id)];
   const close = (run: () => void) => { setMenu(null); run(); };
+  const pickSubtitles = async (target: Item) => {
+    try {
+      const result = await File.pickFileAsync({ mimeTypes: ['*/*'] });
+      if (!result.canceled) setPicked({ item: target, file: result.result });
+    } catch { online?.notify('Couldn’t open the file picker.'); }
+  };
   const episodeTitle = (episode: Item) => cleanEpisodeName(episodeName(data, episode), name, episode.episode);
 
   const header = <View>
@@ -53,6 +63,8 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
           : <Pill label={done([target]) ? 'Mark unwatched' : 'Mark watched'} icon="check" style={s.action} onPress={() => onMark([target], !done([target]))} />}
         {onSave && (show ? onSaveMany && <Pill label="Save offline" icon="download" style={s.action} onPress={() => setMenu('save')} />
           : <Pill label={saveLabel(target.id)} icon={state(target.id) === 'saved' ? 'check' : 'download'} style={s.action} disabled={state(target.id) !== 'idle'} onPress={() => onSave(target)} />)}
+        {online && !show && <Pill label="Add subtitles" icon="plus" style={s.action} onPress={() => void pickSubtitles(target)} />}
+        {online?.admin && online.tmdb && <Pill label="Fix metadata" icon="search" style={s.action} onPress={() => setMenu('metadata')} />}
         {onRemoveSaved && <Pill label="Remove from this device" icon="trash" style={s.action} onPress={() => onRemoveSaved(items)} />}
       </View>
       {m.rating ? <View style={s.ratings}><Text style={[t.mono, { marginBottom: 6 }]}>TMDB</Text><View style={[t.row, { alignItems: 'baseline', gap: 5 }]}><Text style={s.score}>{m.rating.toFixed(1)}</Text><Text style={t.dim}>/10{m.votes ? ` · ${m.votes.toLocaleString()} votes` : ''}</Text></View></View> : null}
@@ -99,12 +111,15 @@ export default function TitleScreen({ data, items, onBack, onPlay, onEnqueue, on
       <Row icon="download" label={seasonLabel(season)} detail={`${plural(inSeason.length, 'episode')} · saved two at a time`} last={rest.length <= 1} onPress={() => close(() => onSaveMany?.(inSeason))} />
       {rest.length > 1 && <Row icon="download" label={`From S${seasonOf(target)} E${target.episode} to season end`} detail={plural(rest.length, 'episode')} last onPress={() => close(() => onSaveMany?.(rest))} />}
     </Sheet>
+    {online && <SubtitleSheet base={art.base} picked={picked} onClose={() => setPicked(null)} onDone={online.notify} />}
+    {online?.admin && online.tmdb && <MetadataSheet {...art} visible={menu === 'metadata'} items={items} name={name} onClose={() => setMenu(null)} onChanged={(metadata, message) => { online.onMetadata(metadata); online.notify(message); }} />}
     <Sheet visible={!!episode} onClose={() => setMenu(null)} title={episode ? `${episode.episode}. ${episodeTitle(episode)}` : 'Episode'}>
       {episode && <>
         <Row icon="play" label="Play" onPress={() => close(() => onPlay(episode))} />
         <Row icon="check" label={data.progress[episode.id]?.completed ? 'Mark unwatched' : 'Mark watched'} onPress={() => close(() => onMark([episode], !data.progress[episode.id]?.completed))} />
         {earlier.length > 0 && <Row icon="check" label="Mark earlier episodes watched" detail={plural(earlier.length, 'episode')} onPress={() => close(() => onMark(earlier, true))} />}
         <Row icon="plus" label="Add to queue" onPress={() => close(() => onEnqueue([episode]))} />
+        {online && <Row icon="plus" label="Add subtitles" last={!onSave} onPress={() => close(() => void pickSubtitles(episode))} />}
         {onSave && <Row icon={state(episode.id) === 'saved' ? 'check' : 'download'} label={saveLabel(episode.id)} last onPress={() => state(episode.id) === 'idle' ? close(() => onSave(episode)) : setMenu(null)} />}
       </>}
     </Sheet>

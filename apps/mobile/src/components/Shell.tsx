@@ -138,6 +138,7 @@ export function AccountSheet({ visible, onClose, data, base, offline, requests, 
     <Row icon="network" label="Change server" detail={base.replace(/^https?:\/\//, '')} onPress={() => confirm('Change server?', 'Matro forgets this server address and asks for a new one. Titles saved on this device stay here.', 'Change server', onServer)} />
     <SectionLabel>Account</SectionLabel>
     <View style={{ marginVertical: 10 }}><ThemeRow /></View>
+    {!offline && <Row icon="check" label={admin ? 'Password, people and invites' : 'Change password'} chevron onPress={() => go('account')} />}
     <Row icon="file" label="About Matro" onPress={() => { onClose(); onAbout(); }} />
     <Row icon="close" label="Sign out" destructive last onPress={() => confirm('Sign out?', 'You will need your password to sign back in. Titles saved on this device stay here.', 'Sign out', onSignOut)} />
   </Sheet>;

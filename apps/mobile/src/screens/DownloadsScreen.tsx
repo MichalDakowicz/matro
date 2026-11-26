@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, KeyboardAvoidingView, Linking, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { request, type MovieRequest } from '../lib/server';
 import { releaseName, transferLabel } from '../lib/release-name';
+import { alternateTitles, discover as discoverReleases, previewTitles, type Discovery } from '../lib/admin';
+import { groupReleases, seedText, type ReleaseGroup } from '../lib/release-groups';
+import ReleaseCards from '../components/ReleaseCards';
 import { Icon, IconButton, MediaArt, Pill, ProgressBar, styles as t } from '../components/Matro';
 import type { ArtProps } from '../components/LibraryParts';
 import { colors, fonts, radius, overArt, themed } from '../theme';
@@ -12,7 +15,7 @@ import { colors, fonts, radius, overArt, themed } from '../theme';
 type Job = { id: string; hash: string; title: string; phase: string; season?: number; episode?: number; error?: string; banner?: string; finalRoot?: string };
 type Transfer = { hash: string; name: string; progress: number; state: string; speed: number; banner?: string; savePath: string };
 type Release = { hash: string | null; selectionId?: string; title?: string; quality: string; size: string; seeds?: number; codec?: string; season?: number; episode?: number; absoluteEpisode?: number; releaseTitle?: string; downloadKind?: string };
-type Title = { id: string; title: string; year: string; overview?: string; status?: string; poster?: string; torrents?: Release[]; indexed?: boolean };
+type Title = { id: string; title: string; year: string; overview?: string; status?: string; torrents?: Release[]; indexed?: boolean; /** Opened from a release group: the releases are already known, so there is no catalog id to look up. */ discovered?: boolean };
 type Config = { server?: { username: string; passwordSaved?: boolean; storage?: { movieRoot?: string; showRoot?: string } } };
 type SeasonDownload = { season: number; from: number | null; expected: number; coverage: number; nextPage: number | null; pack: Release | null; batch: { id: string; group: string; quality: string; count: number } | null };
 type Confirm = { title: string; detail: string; body: Record<string, unknown>; seasonKey: string };
@@ -31,11 +34,12 @@ function animeTitles(releases: (Release & { title: string; year: string })[]) {
 export default function DownloadsScreen({ base, headers, initialRequest }: ArtProps & { initialRequest?: MovieRequest | null }) {
   const insets = useSafeAreaInsets(), { width } = useWindowDimensions(), columns = Math.max(3, Math.floor((width - 24) / 108)), cardWidth = (width - 36 - (columns - 1) * 12) / columns;
   const [jobs, setJobs] = useState<Job[]>([]), [transfers, setTransfers] = useState<Transfer[]>([]), [titles, setTitles] = useState<Title[] | null>(null), [selected, setSelected] = useState<Title | null>(null), [releases, setReleases] = useState<Release[]>([]);
-  const [kind, setKind] = useState('movie'), [query, setQuery] = useState(initialRequest?.title || ''), [username, setUsername] = useState(''), [password, setPassword] = useState(''), [config, setConfig] = useState<Config>({});
+  const [kind, setKind] = useState(initialRequest?.kind === 'show' ? 'show' : 'movie'), [query, setQuery] = useState(initialRequest?.title || ''), [username, setUsername] = useState(''), [password, setPassword] = useState(''), [config, setConfig] = useState<Config>({});
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false), [settings, setSettings] = useState(false), [page, setPage] = useState(1), [total, setTotal] = useState(0), [nextPage, setNextPage] = useState<number | null>(null);
   const [season, setSeason] = useState(''), [episode, setEpisode] = useState(''), [quality, setQuality] = useState(''), [magnetOpen, setMagnetOpen] = useState(false), [magnet, setMagnet] = useState(''), [magnetTitle, setMagnetTitle] = useState('');
   const [seasonDownload, setSeasonDownload] = useState<SeasonDownload | null>(null), [seasonNotice, setSeasonNotice] = useState(''), [addedSeason, setAddedSeason] = useState('');
   const [confirm, setConfirm] = useState<Confirm | null>(null), [seed, setSeed] = useState(false), [showDone, setShowDone] = useState(false);
+  const [found, setFound] = useState<{ mode: 'browse' | 'search'; response: Discovery | null; pending: boolean; error: string; limit: number } | null>(null), [posters, setPosters] = useState<Record<string, string>>({}), previewsOff = useRef(false), discoverRun = useRef(0);
   const catalogLabel = kind === 'movie' ? 'Movies' : kind === 'anime' ? 'Anime' : 'Series';
   const searchRun = useRef(0), mounted = useRef(true);
   const call = async (route: string, body?: unknown) => (await request(base, '/api/admin/downloads/' + route, body === undefined ? {} : { method: 'POST', body }, route === 'series-releases' ? 55000 : 20000)).result;
@@ -51,8 +55,49 @@ export default function DownloadsScreen({ base, headers, initialRequest }: ArtPr
     return () => { mounted.current = false; searchRun.current++; clearInterval(timer); };
   }, [base]);
   const changeSeed = (value: boolean) => { setSeed(value); void AsyncStorage.setItem(SEED_KEY, value ? '1' : '0').catch(() => {}); };
+
+  /** Prowlarr and the anime sources, grouped by title. No query is the Most seeded view. */
+  const discover = async (value: string, aliases: string[] = []) => {
+    const tab = kind, id = ++discoverRun.current;
+    setFound(previous => ({ mode: value ? 'search' : 'browse', response: value && previous?.mode === 'search' ? previous.response : null, pending: true, error: '', limit: 24 }));
+    try {
+      const response = await discoverReleases(base, { kind: tab as 'movie' | 'show' | 'anime', ...(value ? { query: value } : {}), ...(aliases.length ? { aliases } : {}), ...(value && tab === 'movie' ? { additionalOnly: true } : {}) });
+      if (!mounted.current || id !== discoverRun.current) return;
+      setFound(previous => previous && { ...previous, response, pending: false });
+      void hydratePosters(response.results.slice(0, 24), id);
+    } catch (e) {
+      if (mounted.current && id === discoverRun.current) setFound(previous => previous && { ...previous, pending: false, error: e instanceof Error ? e.message : 'Could not load releases.' });
+    }
+  };
+  /** TMDB posters for the release cards. Without TMDB the generated cover stays. */
+  const hydratePosters = async (releases: Discovery['results'], id: number) => {
+    if (previewsOff.current || !releases.length) return;
+    const titles = groupReleases(releases).map(group => ({ key: group.key, kind: group.kind || kind, title: group.title, year: group.year, tmdbId: group.tmdbId, imdbId: group.imdbId }));
+    try {
+      const result = await previewTitles(base, titles);
+      if (result.enabled === false) previewsOff.current = true;
+      if (!mounted.current || id !== discoverRun.current) return;
+      setPosters(previous => ({ ...previous, ...Object.fromEntries((result.results || []).flatMap(row => row.metadata?.poster ? [[row.key, row.metadata.poster]] : [])) }));
+    } catch { /* The generated cover is enough. */ }
+  };
+  const alternates = () => void run(async () => {
+    const preview = await previewTitles(base, [{ key: 'alternate-titles', kind: 'anime', title: query }], true);
+    const aliases = alternateTitles(preview.results?.[0]?.metadata, query);
+    if (!aliases.length) { setNotice(preview.enabled === false ? 'TMDB title previews are unavailable.' : 'No alternate titles found. Try another spelling.'); return; }
+    const result = await call('discover', { kind: 'anime', query, aliases });
+    setTitles(animeTitles(result.results)); setTotal(result.results.length);
+  });
+  const openGroup = (group: ReleaseGroup) => {
+    setSeasonDownload(null); setSeasonNotice(''); setAddedSeason(''); setNextPage(null);
+    setReleases(group.releases as Release[]); setSelected({ id: group.key, title: group.title, year: String(group.year || ''), torrents: group.releases as Release[], discovered: true });
+  };
+  const groups = useMemo(() => {
+    const known = !found || found.mode === 'browse' || kind !== 'movie' ? [] : (titles || []).flatMap(title => (title.torrents || []).map(release => release.hash || ''));
+    return groupReleases(found?.response?.results || [], known.filter(Boolean));
+  }, [found?.response, found?.mode, kind, titles]);
   const search = (at = 1) => void run(async () => {
     const current = ++searchRun.current;
+    if (kind !== 'anime' && at === 1 && query.trim()) void discover(query.trim());
     const route = kind === 'anime' ? 'discover' : kind === 'movie' ? 'search' : 'series-search';
     const result = await call(route, { kind, query, page: at });
     if (current !== searchRun.current) return;
@@ -136,16 +181,17 @@ export default function DownloadsScreen({ base, headers, initialRequest }: ArtPr
   const header = <>
     <View style={[t.sectionHeading, { alignItems: 'flex-start' }]}><View><Text accessibilityRole="header" style={t.heading}>Downloads</Text><Text style={[t.dim, { marginTop: 8 }]}>Matro host</Text></View><View style={t.row}><IconButton name="plus" label="Add magnet link" onPress={() => setMagnetOpen(true)} /><IconButton name="wrench" label="Download settings" onPress={() => setSettings(true)} /></View></View>
     {error ? <Text accessibilityRole="alert" style={[t.muted, { color: colors.warn, marginBottom: 16 }]}>{error}</Text> : null}{notice ? <Pressable accessibilityHint="Dismiss" onPress={() => setNotice('')}><Text style={[t.muted, { marginBottom: 16 }]}>{notice}</Text></Pressable> : null}
-    <View style={[t.row, { marginTop: 6, marginBottom: 18, flexWrap: 'wrap' }]}>{[['movie', 'Movies'], ['show', 'Series'], ['anime', 'Anime']].map(([value, label]) => <Pill key={value} compact label={label} selected={kind === value} onPress={() => { searchRun.current++; setKind(value); setTitles(null); setSelected(null); setReleases([]); setSeason(''); setEpisode(''); setQuality(''); }} />)}</View>
+    <View style={[t.row, { marginTop: 6, marginBottom: 18, flexWrap: 'wrap' }]}>{[['movie', 'Movies'], ['show', 'Series'], ['anime', 'Anime']].map(([value, label]) => <Pill key={value} compact label={label}  selected={kind === value} onPress={() => { searchRun.current++; setKind(value); discoverRun.current++; setFound(null); setTitles(null); setSelected(null); setReleases([]); setSeason(''); setEpisode(''); setQuality(''); }} />)}<Pill compact label="Most seeded" icon="arrows" selected={found?.mode === 'browse'} onPress={() => { searchRun.current++; setTitles(null); void discover(''); }} /></View>
     <View style={s.search}><Icon name="search" /><TextInput accessibilityLabel={`Search ${catalogLabel.toLowerCase()}`} placeholder={`Search ${catalogLabel.toLowerCase()}`} placeholderTextColor={colors.dim} value={query} onChangeText={setQuery} onSubmitEditing={() => search()} returnKeyType="search" style={s.input} /><Pill label="Search" compact primary disabled={busy || !query.trim()} onPress={() => search()} /></View>
     {kind === 'movie' && initialRequest?.year ? <Text style={[t.dim, { marginTop: 12 }]}>Requested movie · {initialRequest.title} ({initialRequest.year})</Text> : null}
     {!config.server && <Pressable accessibilityRole="button" onPress={() => setSettings(true)} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={[t.dim, { lineHeight: 19 }]}>Connect your download client in Download settings before sending a release.</Text></Pressable>}
     <View style={[t.sectionHeading, { marginTop: 30 }]}><Text style={t.sectionTitle}>{catalogLabel}</Text><Text style={t.dim}>{titles ? `${total} results${kind === 'movie' ? ' · YTS' : kind === 'show' ? ' · TVmaze' : ''}` : ''}</Text></View>
-    {!titles ? <View style={s.empty}><Text style={t.sectionTitle}>Find your next {kind === 'movie' ? 'movie' : 'series'}.</Text><Text style={[t.muted, { textAlign: 'center', marginTop: 10 }]}>Search the catalog, choose a release, and send it to Matro host.</Text></View> : !titles.length ? <View style={s.empty}><Text style={t.sectionTitle}>No results found.</Text><Text style={t.muted}>Try another title or spelling.</Text></View> : null}
+    {!titles && found?.mode === 'browse' ? null : !titles ? <View style={s.empty}><Text style={t.sectionTitle}>Find your next {kind === 'movie' ? 'movie' : 'series'}.</Text><Text style={[t.muted, { textAlign: 'center', marginTop: 10 }]}>Search the catalog, choose a release, and send it to Matro host.</Text></View> : !titles.length ? <View style={s.empty}><Text style={t.sectionTitle}>No results found.</Text><Text style={t.muted}>Try another title or spelling.</Text></View> : null}
   </>;
   const sheetTitle = confirm ? 'Download to Matro host?' : settings ? 'Download settings' : magnetOpen ? 'Add magnet link' : selected?.title;
   return <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
-    <FlatList key={`${kind}:${columns}`} data={titles || []} numColumns={columns} keyExtractor={title => title.id} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: insets.bottom + 104 }} columnWrapperStyle={{ gap: 12 }} ListHeaderComponent={header} ListFooterComponent={<View>{titles && kind === 'movie' ? <View style={[t.row, { marginVertical: 18 }]}><Pill label="Previous page" compact disabled={page <= 1 || busy} onPress={() => search(page - 1)} /><Pill label="Next page" compact disabled={page * 20 >= total || busy} onPress={() => search(page + 1)} /></View> : null}{kind === 'show' && titles?.length ? <Text style={[t.dim, { marginBottom: 24 }]} onPress={() => void Linking.openURL('https://creativecommons.org/licenses/by-sa/4.0/')}>Metadata from TVmaze · CC BY-SA 4.0</Text> : null}{activity}</View>}
+    <FlatList key={`${kind}:${columns}`} data={titles || []} numColumns={columns} keyExtractor={title => title.id} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: insets.bottom + 104 }} columnWrapperStyle={{ gap: 12 }} ListHeaderComponent={header} ListFooterComponent={<View>{titles && kind === 'movie' ? <View style={[t.row, { marginVertical: 18 }]}><Pill label="Previous page" compact disabled={page <= 1 || busy} onPress={() => search(page - 1)} /><Pill label="Next page" compact disabled={page * 20 >= total || busy} onPress={() => search(page + 1)} /></View> : null}{kind === 'show' && titles?.length ? <Text style={[t.dim, { marginBottom: 24 }]} onPress={() => void Linking.openURL('https://creativecommons.org/licenses/by-sa/4.0/')}>Metadata from TVmaze · CC BY-SA 4.0</Text> : null}{kind === 'anime' && titles && query.trim() ? <Pill label="Try alternate titles" compact disabled={busy} onPress={alternates} style={{ alignSelf: 'flex-start', marginBottom: 18 }} /> : null}{found && kind !== 'anime' && (found.mode === 'browse' || found.pending || groups.length || found.error || found.response?.warnings?.length || found.response?.prowlarrEnabled) ? <ReleaseCards base={base} headers={headers} cardWidth={cardWidth} onOpen={openGroup} onRetry={() => void discover(found.mode === 'browse' ? '' : query.trim())} onMore={() => setFound(previous => previous && { ...previous, limit: previous.limit + 24 })}
+      view={{ heading: found.mode === 'browse' ? 'Most seeded' : 'Additional releases', groups, pending: found.pending, searched: !!found.response, warnings: found.response?.warnings || [], error: found.error, limit: found.limit, posters }} /> : null}{activity}</View>}
       renderItem={({ item: title }) => <Pressable onPress={() => { setReleases([]); void run(() => findReleases(title)); }} accessibilityLabel={`Open ${title.title}`} style={{ width: cardWidth, marginBottom: 22 }}><MediaArt base={base} headers={headers} path={title.poster} title={title.poster ? undefined : title.title} style={{ width: cardWidth, height: cardWidth * 1.5, borderRadius: 8 }} />{title.poster ? <Text numberOfLines={1} style={s.cardTitle}>{title.title}</Text> : null}<Text numberOfLines={1} style={[t.dim, { fontSize: 11, marginTop: title.poster ? 3 : 8 }]}>{[title.year, title.torrents ? `${title.torrents.length} releases` : title.status].filter(Boolean).join(' · ')}</Text></Pressable>} />
     <Modal visible={!!selected || settings || magnetOpen} transparent animationType="slide" presentationStyle="overFullScreen" onRequestClose={closeSheet}><KeyboardAvoidingView style={s.modalRoot} behavior="padding"><Pressable accessibilityLabel="Close download details" style={s.scrim} onPress={closeSheet} /><View style={[s.sheet, { paddingBottom: insets.bottom + 20 }]}><View style={t.sectionHeading}><Text accessibilityRole="header" style={[t.sectionTitle, { flex: 1 }]}>{sheetTitle}</Text><IconButton name="close" label="Close download details" onPress={closeSheet} /></View><ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
       {error ? <Text accessibilityRole="alert" style={[t.muted, { color: colors.warn, marginBottom: 14 }]}>{error}</Text> : null}
@@ -158,8 +204,8 @@ export default function DownloadsScreen({ base, headers, initialRequest }: ArtPr
         <View style={s.switchRow}><View style={{ flex: 1, gap: 2 }}><Text style={t.text}>Keep sharing after download</Text><Text style={[t.dim, { lineHeight: 18 }]}>Uploads the finished file to other people (seeding). Off stops as soon as it is complete.</Text></View><Switch accessibilityLabel="Keep sharing after download" value={seed} onValueChange={changeSeed} trackColor={{ false: colors.hairline, true: colors.primary }} thumbColor={colors.text} /></View>
         <Text style={[t.dim, { lineHeight: 20 }]}>Movies: {config.server?.storage?.movieRoot || 'Server library'}{"\n"}Shows: {config.server?.storage?.showRoot || 'Server library'}</Text></View> : magnetOpen ? <View style={{ gap: 14 }}><TextInput accessibilityLabel="Magnet title" value={magnetTitle} onChangeText={setMagnetTitle} placeholder="Title" placeholderTextColor={colors.dim} style={s.field} /><TextInput accessibilityLabel="Magnet link" value={magnet} onChangeText={setMagnet} placeholder="magnet:?xt=…" placeholderTextColor={colors.dim} autoCapitalize="none" style={s.field} /><Pill label="Download to Matro host" icon="download" primary disabled={busy || !magnetTitle.trim() || !magnet.trim()} onPress={() => send({ title: magnetTitle, detail: '', body: { magnet, title: magnetTitle, kind: kind === 'anime' ? 'show' : kind }, seasonKey: '' })} /></View> : <>
         <Text style={t.dim}>{selected?.year}</Text>{selected?.overview ? <Text style={[t.muted, { marginTop: 12, marginBottom: 18 }]}>{selected.overview}</Text> : null}
-        {kind === 'show' && <View style={{ gap: 12, marginVertical: 14 }}><View style={t.row}><TextInput accessibilityLabel="Season filter" value={season} onChangeText={setSeason} placeholder="All seasons" placeholderTextColor={colors.dim} keyboardType="number-pad" style={[s.field, { flex: 1 }]} /><TextInput accessibilityLabel="Episode filter" value={episode} onChangeText={setEpisode} placeholder="All episodes" placeholderTextColor={colors.dim} keyboardType="number-pad" style={[s.field, { flex: 1 }]} /></View><View accessibilityRole="radiogroup" accessibilityLabel="Resolution" style={[t.row, { flexWrap: 'wrap', gap: 8 }]}>{qualities.map(value => <Pill key={value || 'any'} compact label={value || 'Any'} selected={quality === value} onPress={() => setQuality(value)} />)}</View><Pill label="Apply filters" compact disabled={busy} style={{ alignSelf: 'flex-start' }} onPress={() => void run(() => findReleases(selected!))} /></View>}
-        {(kind === 'show' || kind === 'anime' && releases.some(item => item.downloadKind === 'show')) && <View style={{ gap: 12, marginBottom: 14 }}>
+        {kind === 'show' && !selected?.discovered && <View style={{ gap: 12, marginVertical: 14 }}><View style={t.row}><TextInput accessibilityLabel="Season filter" value={season} onChangeText={setSeason} placeholder="All seasons" placeholderTextColor={colors.dim} keyboardType="number-pad" style={[s.field, { flex: 1 }]} /><TextInput accessibilityLabel="Episode filter" value={episode} onChangeText={setEpisode} placeholder="All episodes" placeholderTextColor={colors.dim} keyboardType="number-pad" style={[s.field, { flex: 1 }]} /></View><View accessibilityRole="radiogroup" accessibilityLabel="Resolution" style={[t.row, { flexWrap: 'wrap', gap: 8 }]}>{qualities.map(value => <Pill key={value || 'any'} compact label={value || 'Any'} selected={quality === value} onPress={() => setQuality(value)} />)}</View><Pill label="Apply filters" compact disabled={busy} style={{ alignSelf: 'flex-start' }} onPress={() => void run(() => findReleases(selected!))} /></View>}
+        {(kind === 'show' && !selected?.discovered || kind === 'anime' && releases.some(item => item.downloadKind === 'show')) && <View style={{ gap: 12, marginBottom: 14 }}>
           {kind === 'anime' && <TextInput accessibilityLabel="Season" value={season} onChangeText={setSeason} placeholder="Season 1" placeholderTextColor={colors.dim} keyboardType="number-pad" style={s.field} />}
           <Pill label="Find season download" compact disabled={busy} onPress={() => findSeason()} />
           {seasonNotice ? <Text accessibilityLiveRegion="polite" style={t.muted}>{seasonNotice}</Text> : null}
@@ -177,7 +223,7 @@ export default function DownloadsScreen({ base, headers, initialRequest }: ArtPr
           {seasonDownload?.nextPage && <Pill label="Search older releases for this season" compact disabled={busy} onPress={() => findSeason(seasonDownload.nextPage!)} />}
         </View>}
         {busy && !releases.length && !seasonNotice ? <Text style={[t.muted, { marginVertical: 18 }]}>Finding releases…</Text> : null}{!busy && !releases.length ? <Text style={[t.muted, { marginVertical: 18 }]}>No matching releases. Try another filter.</Text> : null}
-        {releases.map(release => <View key={release.selectionId || release.hash} style={s.release}><View style={{ flex: 1 }}><Text style={[t.text, { fontFamily: fonts.medium }]}>{release.quality}{release.codec ? ' · ' + release.codec.toUpperCase() : ''}</Text><Text style={[t.dim, { marginTop: 5 }]}>{release.size} · {release.seeds || 0} seeds{release.episode ? ` · S${release.season ?? 1} E${release.episode}` : release.absoluteEpisode ? ` · Episode ${release.absoluteEpisode}` : ''}</Text>{release.releaseTitle ? <Text numberOfLines={2} style={t.dim}>{release.releaseTitle}</Text> : null}</View><Pill label="Download" compact disabled={busy || !config.server} onPress={() => setConfirm({ title: `${selected?.title}${selected?.year ? ` (${selected.year})` : ''}`, detail: [release.quality, release.size].filter(Boolean).join(' · '), body: release.selectionId ? { selectionId: release.selectionId } : { hash: release.hash }, seasonKey: '' })} /></View>)}
+        {releases.map(release => <View key={release.selectionId || release.hash} style={s.release}><View style={{ flex: 1 }}><Text style={[t.text, { fontFamily: fonts.medium }]}>{release.quality}{release.codec ? ' · ' + release.codec.toUpperCase() : ''}</Text><Text style={[t.dim, { marginTop: 5 }]}>{release.size} · {seedText(release.seeds)}{release.episode ? ` · S${release.season ?? 1} E${release.episode}` : release.absoluteEpisode ? ` · Episode ${release.absoluteEpisode}` : ''}</Text>{release.releaseTitle ? <Text numberOfLines={2} style={t.dim}>{release.releaseTitle}</Text> : null}</View><Pill label="Download" compact disabled={busy || !config.server} onPress={() => setConfirm({ title: `${selected?.title}${selected?.year ? ` (${selected.year})` : ''}`, detail: [release.quality, release.size].filter(Boolean).join(' · '), body: release.selectionId ? { selectionId: release.selectionId } : { hash: release.hash }, seasonKey: '' })} /></View>)}
         {nextPage && <Pill label="More releases" compact onPress={() => void run(() => findReleases(selected!, nextPage))} />}
       </>}
     </ScrollView></View></KeyboardAvoidingView></Modal>
