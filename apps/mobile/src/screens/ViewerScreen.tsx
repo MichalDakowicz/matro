@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, BackHandler, Platform, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { accountChanged, changeProgress, changeProgressMany, inspect, library, mediaHeaders, request, ServerError, syncDismissal, updateWatchOptions, type Item, type Library, type ListChange, type TitleList, type ScheduledEpisode, type TrackDefaults } from '../lib/server';
+import { accountChanged, changeProgress, changeProgressMany, inspect, library, mediaHeaders, request, ServerError, syncDismissal, updateWatchOptions, type Item, type Library, type ListChange, type TitleList, type ScheduledEpisode, type TrackDefaults, type TrackPreference } from '../lib/server';
 import { progressRecovery, recoveryScope, rememberProgress } from '../lib/storage';
 import { continueItems, groupLibrary, metadataFor, nameFor, savedServes, titleKey, trackKey } from '../../../../packages/core/client/library';
 import { markedProgress, normalizeProgress, queueChange } from '../../../../packages/core/client/watch-progress.js';
@@ -209,6 +209,12 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     setData(latest => latest?.user.id === data.user.id ? { ...latest, preferences: { ...latest.preferences, trackDefaults } } : latest);
     try { await updateWatchOptions(base, data.user, { preferences: { trackDefaults } }); }
     catch (error) { if (accountChanged(error)) onSignedOut(); else setError('Could not save this setting. Check the connection.'); }
+  };
+  // Tracks picked for a save become the title's choice, so streaming it later plays the same audio and subtitles.
+  const rememberSavedTracks = (key: string, patch: TrackPreference) => {
+    if (!data || offline) return;
+    setData(latest => latest?.user.id === data.user.id ? { ...latest, preferences: { ...latest.preferences, tracks: { ...latest.preferences.tracks, [key]: { ...latest.preferences.tracks?.[key], ...patch } } } } : latest);
+    void updateWatchOptions(base, data.user, { preferences: { tracks: { [key]: patch } } }).catch(error => { if (accountChanged(error)) onSignedOut(); });
   };
   const updateProgress = async (item: Item, dismiss: boolean) => {
     if (!data) return;
@@ -461,7 +467,7 @@ export default function ViewerScreen({ base, onSignedOut, onChangeServer }: Prop
     </View>
     {/* The title page is an overlay, so the list underneath stays mounted and keeps its scroll position. */}
     {detail && data && <View style={s.overlay}><TitleScreen key={selected} {...art} data={data} items={detail} onBack={() => setSelected(null)} onPlay={play} onDevices={offline || savedOnly ? undefined : openDevices} smart={offline || savedOnly || !smartReady ? undefined : { rule: smart.rules[titleKey(detail[0])], onChange: rule => keepRule(detail, rule) }} onFollow={!offline && !savedOnly && data.metadataEnabled && data.followed && metadataFor(data, detail[0]).tmdbId ? followShow : undefined} onSearchEpisode={admin ? searchEpisode : undefined} onEditLists={!offline && !savedOnly && data.lists ? editLists : undefined} onEnqueue={enqueue} onMark={(list, done) => void markMany(list, done)} online={offline || savedOnly ? undefined : { admin, tmdb: data.metadataEnabled === true, notify, onMetadata: metadata => setData(latest => latest && { ...latest, metadata }) }} onSave={offline || savedOnly ? undefined : item => openOfflineChoices([item])} onSaveMany={offline || savedOnly ? undefined : openOfflineChoices} onRemoveSaved={savedOnly ? removeSaved : undefined} savedIds={savedIds} savingIds={savingIds} /></View>}
-    {!offline && data && offlineChoices && <OfflineChoices base={base} items={offlineChoices} preferred={data.preferences.tracks?.[trackKey(offlineChoices[0])]} close={() => setOfflineChoices(null)}
+    {!offline && data && offlineChoices && <OfflineChoices base={base} items={offlineChoices} preferences={data.preferences} close={() => setOfflineChoices(null)} onTracks={rememberSavedTracks}
       save={async choices => {
         await saveOfflineBatch(base, data.user, offlineChoices, saveName, { choices });
         setOfflineChoices(null);

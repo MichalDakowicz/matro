@@ -1,39 +1,38 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { IconButton, Pill, styles as t } from '../components/Matro';
-import { inspect, type Info, type Item, type TrackPreference } from '../lib/server';
+import { inspect, type Info, type Item, type Preferences, type TrackPreference } from '../lib/server';
 import type { OfflineChoice } from '../lib/offline';
 import { colors } from '../theme';
-import { languageName } from '../../../../packages/core/client/library';
+import { languageName, offlineStart, offlineTrackPatch, trackKey } from '../../../../packages/core/client/library';
 import { matchOfflineTrack } from '../../../../packages/core/client/offline-rules.js';
 import { qualityOptions } from '../../../../packages/core/client/quality.js';
 
 const name = (track: { language: string; title?: string }) => [languageName(track.language), track.title].filter(Boolean).join(' · ');
 
-export default function OfflineChoices({ base, items, preferred, close, save }: {
-  base: string; items: Item[]; preferred?: TrackPreference; close: () => void; save: (choices: Map<string, OfflineChoice>) => Promise<void>;
+export default function OfflineChoices({ base, items, preferences, close, save, onTracks }: {
+  base: string; items: Item[]; preferences: Preferences; close: () => void; save: (choices: Map<string, OfflineChoice>) => Promise<void>;
+  onTracks: (key: string, patch: TrackPreference) => void;
 }) {
   const insets = useSafeAreaInsets();
   const [first, setFirst] = useState<Info | null>(null), [error, setError] = useState('');
   const [choice, setChoice] = useState<OfflineChoice>({ audio: null, burn: null, quality: 'original' });
-  const [saving, setSaving] = useState(false);
-  const firstId = items[0].id;
-  const preferredAudio = preferred?.audio, preferredSubtitle = preferred?.subtitle, subtitlesOff = preferred?.off;
+  const [saving, setSaving] = useState(false), [start, setStart] = useState<ReturnType<typeof offlineStart>>({ audio: null, burn: null });
+  const firstId = items[0].id, key = trackKey(items[0]);
+  // The starting tracks are read once per title, so a later library refresh does not undo the viewer's picks.
+  const startPreferences = useRef(preferences); startPreferences.current = preferences;
   useEffect(() => {
     const run = new AbortController();
     setFirst(null); setError('');
     void inspect(base, firstId, run.signal).then(info => {
       if (run.signal.aborted) return;
-      setChoice({
-        audio: (matchOfflineTrack(info.audio, preferredAudio) ?? info.audio[0])?.index ?? null,
-        burn: subtitlesOff ? null : matchOfflineTrack(info.embedded.filter(track => track.bitmap), preferredSubtitle)?.index ?? null,
-        quality: 'original',
-      });
+      const initial = offlineStart(info, startPreferences.current.tracks?.[key], startPreferences.current);
+      setStart(initial); setChoice({ ...initial, quality: 'original' });
       setFirst(info);
     }).catch(reason => { if (!run.signal.aborted) setError(reason.message); });
     return () => run.abort();
-  }, [base, firstId, preferredAudio, preferredSubtitle, subtitlesOff]);
+  }, [base, firstId, key]);
   const bitmaps = first?.embedded.filter(track => track.bitmap) ?? [];
   const text = first ? [...first.embedded.filter(track => track.text && !track.bitmap).map(name), ...first.uploaded.map(track => name({ ...track, title: track.name }))] : [];
   async function confirm() {
@@ -52,6 +51,8 @@ export default function OfflineChoices({ base, items, preferred, close, save }: 
         });
       }
       await save(choices);
+      const patch = offlineTrackPatch(first, start, choice);
+      if (patch) onTracks(key, patch);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Could not start the download.');
       setSaving(false);

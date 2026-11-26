@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dayLabel, markedProgress, seasonLabel, seasonNumbers, watchHistory } from '../../../../packages/core/client/watch-progress.js';
-import { continueItems, groupLibrary, matchTrack, metadataFor, resumeItem, savedServes, statusOf, trackKey } from '../../../../packages/core/client/library.ts';
+import { continueItems, groupLibrary, matchTrack, metadataFor, offlineStart, offlineTrackPatch, resumeItem, savedServes, statusOf, trackKey } from '../../../../packages/core/client/library.ts';
 import { parseVtt } from '../../../../packages/core/client/subtitles.ts';
 import { randomReelStart } from '../../../../packages/core/client/reel-start.js';
 import type { Item, Library } from '../../../../packages/core/client/server.ts';
@@ -105,6 +105,19 @@ test('a saved copy serves online playback only when its single audio track and t
   assert.equal(savedServes(saved, full, { audio: { language: 'jpn', title: '' }, subtitle: { language: 'eng', title: '' } }), true);
   assert.equal(savedServes(saved, full, { audio: { language: 'eng', title: '' } }), false);
   assert.equal(savedServes(saved, { ...full, embedded: [full.embedded[1]] }, { subtitle: { language: 'eng', title: '' } }), false);
+});
+
+test('a save starts with the tracks playback would open and remembers only tracks the viewer changed', () => {
+  const track = (index: number, language: string, extra = {}) => ({ index, language, title: '', ...extra });
+  const info = { duration: 5, directPlay: true, audio: [track(1, 'eng'), track(2, 'jpn', { default: true })], embedded: [track(3, 'eng', { text: true }), track(4, 'pol', { bitmap: true })], uploaded: [] };
+  assert.deepEqual(offlineStart(info), { audio: 2, burn: null });
+  assert.deepEqual(offlineStart(info, undefined, { trackDefaults: { audio: 'en', subtitles: 'always', subtitleLanguage: 'en' } }), { audio: 1, burn: null });
+  assert.deepEqual(offlineStart(info, undefined, { trackDefaults: { subtitles: 'always', subtitleLanguage: 'pl' } }), { audio: 2, burn: 4 });
+  assert.deepEqual(offlineStart(info, { audio: { language: 'eng', title: '' }, off: true }, { trackDefaults: { subtitles: 'always', subtitleLanguage: 'pl' } }), { audio: 1, burn: null });
+  const start = { audio: 2, burn: null };
+  assert.equal(offlineTrackPatch(info, start, { audio: 2, burn: null }), null);
+  assert.deepEqual(offlineTrackPatch(info, start, { audio: 1, burn: 4 }), { audio: { language: 'eng', title: '', codec: undefined, channels: undefined }, subtitle: { language: 'pol', title: '', codec: undefined, channels: undefined }, off: false });
+  assert.deepEqual(offlineTrackPatch(info, { audio: 2, burn: 4 }, { audio: 2, burn: null }), { off: true });
 });
 
 test('Season 0 stays its own season called Specials, and a missing season counts as season 1', () => {
