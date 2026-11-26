@@ -7,6 +7,7 @@ import { toVtt } from './offline-store.js';
 import { mountMovieRequests } from './movie-requests.js';
 import { dismissedProgress, isContinueDismissed } from '../../../packages/core/client/watch-progress.js';
 
+import { knownQuality, qualityOptions } from '../../../packages/core/client/quality.js';
 const SIDECAR = 10000; // uploaded subtitle tracks get indexes from here up, as sidecar files do on the desktop
 const KIND = { full: '', forced: ' (forced)', sdh: ' (SDH)' };
 const sizeText = bytes => bytes > 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
@@ -18,6 +19,12 @@ export function createAdapter(session) {
   const noop = () => () => {};
   const watchers = new Set();
   const offline = createOffline(session.user, { inspect: inspectRemote, subtitlePath, sendSubtitle });
+  const playerSession = Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16).padStart(8, '0')).join('');
+  const playbackState = value => {
+    if (session.offline) return;
+    const state = typeof value === 'object' ? value : { playing: !!value };
+    return api('POST', '/api/playback/state', { ...state, session: playerSession }, { keepalive: !state.playing }).catch(() => {});
+  };
   let polling = 0;
   const unsupported = what => () => Promise.reject(new Error(`${what} is a desktop feature.`));
   const headOnly = (message = 'Only the head account can add or remove media.') => { if (session.user.role !== 'admin') throw new Error(message); };
@@ -27,6 +34,7 @@ export function createAdapter(session) {
     return (value === undefined ? await get(url) : await post(url, value)).result;
   };
   const details = new Map();
+  let quality = knownQuality((() => { try { return localStorage.getItem('matro-quality'); } catch { return null; } })());
   let latest = null;
 
   async function load() {
@@ -101,7 +109,8 @@ export function createAdapter(session) {
   }
   async function inspectRemote(id, { signal, deadline } = {}) {
     const info = await api('GET', `/api/items/${id}/info`, undefined, { signal, deadline });
-    const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay,
+    const saved = await offline.store.meta(id).catch(() => null);
+    const result = { duration: info.duration, video: info.video, audio: info.audio, chapters: info.chapters, directPlay: info.directPlay, qualities: saved?.complete ? [] : qualityOptions(info.video),
       subtitles: [...info.embedded.map(({ forced: _f, ...t }) => t), ...info.uploaded.map(u => track(u))] };
     details.set(id, result);
     return result;
@@ -193,11 +202,14 @@ export function createAdapter(session) {
       throw error;
     }
     const first = d.audio[0];
-    if (!forceTranscode && d.directPlay && bitmapSubtitle === null && (audio === null || !first || audio === first.index)) return { url: `/api/items/${id}/direct${preload ? '?preload=1' : ''}${offset > 0 ? `#t=${offset}` : ''}`, offset: 0 };
-    const q = new URLSearchParams({ t: String(Math.floor(offset * 10) / 10) });
-    if (audio !== null) q.set('audio', audio);
-    if (bitmapSubtitle !== null) { q.set('burn', bitmapSubtitle); q.set('delay', subtitleDelay); }
+    const tier = d.video && quality !== 'original' ? quality : null;
+    const q = new URLSearchParams({ session: playerSession });
     if (preload) q.set('preload', '1');
+    if (!tier && !forceTranscode && d.directPlay && bitmapSubtitle === null && (audio === null || !first || audio === first.index)) return { url: `/api/items/${id}/direct?${q}${offset > 0 ? `#t=${offset}` : ''}`, offset: 0 };
+    q.set('t', String(Math.floor(offset * 10) / 10));
+    if (audio !== null) q.set('audio', audio);
+    if (tier) q.set('quality', tier);
+    if (bitmapSubtitle !== null) { q.set('burn', bitmapSubtitle); q.set('delay', subtitleDelay); }
     return { url: `/api/items/${id}/transcode?${q}`, offset };
   }
 
@@ -278,6 +290,7 @@ export function createAdapter(session) {
     chooseSource: window.matroDesktop?.chooseSource,
     recoveryScope: `account:${session.user.id}:${session.user.username}`,
     load, inspect, prepare: inspect, savedPlayback, subtitles, loadSubtitle, stream,
+    quality: () => quality, setQuality: id => { quality = knownQuality(id); try { localStorage.setItem('matro-quality', quality); } catch { /* The choice only lasts for this visit. */ } },
     get offlineSave() { return session.offline ? null : id => saveOffline([id]); },
     get offlineSaveMany() { return session.offline ? null : saveOffline; },
     dismissContinue: (id, progress) => changeProgress(id, { dismiss: true }, progress),
@@ -295,10 +308,10 @@ export function createAdapter(session) {
     stop: async (keepUrl, { background = false } = {}) => {
       offline.release(keepUrl);
       if (session.offline) return;
-      const stop = post('/api/playback/stop', { keepPreload: !!keepUrl && new URL(keepUrl, location.origin).searchParams.get('preload') === '1' });
+      const stop = post('/api/playback/stop', { session: playerSession, keepPreload: !!keepUrl && new URL(keepUrl, location.origin).searchParams.get('preload') === '1' });
       if (background) void stop.catch(() => {});
       else await stop.catch(error => { if (!networkLost(error)) throw error; });
-    }, playbackState: value => post('/api/playback/state', typeof value === 'object' ? value : { playing: !!value }).catch(() => {}),
+    }, playbackState, playbackHeartbeat: playbackState,
     preview: async ({ id, time, hover }) => `/api/items/${id}/frame?t=${Math.max(0, Number(time) || 0)}&w=${hover ? 320 : 480}`,
     segments: async ({ id, force }) => (await post(`/api/items/${id}/segments`, { force })).markers,
     saveMarkers: async edits => (await post('/api/segments/manual', edits)).markers,

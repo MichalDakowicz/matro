@@ -98,7 +98,7 @@ test('a growing preparation holds its response until eight seconds are ready, th
     child.kill = () => { child.stdout.end(); child.emit('close', 1); }; return child;
   } });
   const options = { file: 'buffer', input: 'buffer', info: { video: null }, offset: 0, burn: null };
-  const server = http.createServer((req, res) => void cache.serve(req, res, options));
+  const server = http.createServer((req, res) => void cache.serve(req, res, options, {}, 'player'));
   t.after(async () => { server.closeAllConnections(); await new Promise(r => server.close(r)); cache.close(); await new Promise(r => setTimeout(r, 50)); await fs.rm(dir, { recursive: true, force: true }); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   let received = false;
@@ -112,8 +112,44 @@ test('a growing preparation holds its response until eight seconds are ready, th
   const res = await response;
   assert.equal(res.status, 200);
   assert.equal((await cache.get(options)).done, false, 'startup does not wait for the whole movie');
+  cache.release('player');
   child.stdout.end(Buffer.from('last fragment')); child.emit('close', 0);
   assert.equal(await res.text(), 'first fragmentlast fragment');
+});
+
+test('pruning honors offline pins and keeps recently accessed preparations ahead of cold files', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-cache-prune-'));
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const cache = createPlaybackCache({
+    ffmpeg: 'fake', dir, maxBytes: 12, stat: async () => ({ size: 100, mtimeMs: 1 }),
+    spawnProcess: () => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      child.kill = () => {};
+      setImmediate(() => { child.stdout.end(Buffer.from('data')); child.emit('close', 0); });
+      return child;
+    }
+  });
+  t.after(async () => { cache.close(); await fs.rm(dir, { recursive: true, force: true }); });
+  const options = file => ({ file, input: file, info: { video: null }, offset: 0 });
+  const prepare = async (file, pinMs) => {
+    const entry = await cache.get(options(file), null, { pinMs });
+    await entry.finished;
+    assert.equal(entry.done, true);
+    now += 180000;
+    return entry;
+  };
+  const offline = await prepare('offline', 600000);
+  const used = await prepare('used');
+  const cold = await prepare('cold');
+  assert.equal(await cache.get(options('used')), used);
+  await prepare('new');
+  await fs.access(offline.file);
+  await fs.access(used.file);
+  await assert.rejects(fs.access(cold.file), { code: 'ENOENT' });
+  await prepare('after expiry');
+  await assert.rejects(fs.access(offline.file), { code: 'ENOENT' });
 });
 
 test('seeking replaces the same viewer’s preparation without exhausting capacity or killing another viewer’s shared job', async t => {
@@ -141,4 +177,38 @@ test('seeking replaces the same viewer’s preparation without exhausting capaci
     await until(() => entry.child);
     assert.equal(entry.error, null);
   }
+});
+
+test('a quality tier scales the picture down, caps the bitrate and is part of the cache key', async t => {
+  const options = { input: 'movie.mkv', info: { video: { codec: 'h264', pixelFormat: 'yuv420p' } } };
+  assert.ok(argumentsFor(options).includes('copy'));
+  const tier = argumentsFor({ ...options, quality: '480p' });
+  assert.equal(tier.includes('copy'), false);
+  assert.equal(tier[tier.indexOf('-vf') + 1], "scale=w='min(iw,854)':h='min(ih,480)':force_original_aspect_ratio=decrease:force_divisible_by=2");
+  assert.equal(tier[tier.indexOf('-maxrate') + 1], '1500k');
+  for (const name of ['h264_nvenc', 'h264_qsv', 'h264_vaapi']) {
+    const hw = argumentsFor({ ...options, quality: '480p' }, ['-c:v', name, '-global_quality', '21']);
+    assert.equal(hw[hw.indexOf('-c:v') + 1], name);
+    assert.equal(hw.includes('-global_quality'), false);
+    assert.equal(hw[hw.indexOf('-b:v') + 1], '1125k');
+    assert.equal(hw[hw.indexOf('-maxrate') + 1], '1500k');
+    assert.equal(hw[hw.indexOf('-bufsize') + 1], '3000k');
+  }
+  assert.equal(argumentsFor({ ...options, quality: 'bogus' }).includes('copy'), true);
+  const bitmap = argumentsFor({ ...options, quality: '720p', burn: 3 });
+  assert.match(bitmap[bitmap.indexOf('-filter_complex') + 1], /scale=w='min\(iw,1280\)':h='min\(ih,720\)':force_original_aspect_ratio=decrease:force_divisible_by=2\[video\]$/);
+
+  const encoder = process.env.MATRO_VIDEO_ENCODER; process.env.MATRO_VIDEO_ENCODER = 'software';
+  t.after(() => { if (encoder === undefined) delete process.env.MATRO_VIDEO_ENCODER; else process.env.MATRO_VIDEO_ENCODER = encoder; });
+  const f = await fixtures(), info = await probe(f.mkv), dir = await fs.mkdtemp(path.join(os.tmpdir(), 'matro-quality-'));
+  const cache = createPlaybackCache({ ffmpeg, dir });
+  t.after(async () => { cache.close(); await fs.rm(dir, { recursive: true, force: true }); });
+  const base = { file: f.mkv, input: f.mkv, info, offset: 0, audio: null, burn: null, delay: 0 };
+  const [original, small] = [await cache.get(base), await cache.get({ ...base, quality: '480p' })];
+  assert.notEqual(original, small);
+  assert.equal(await cache.get({ ...base, quality: 'original' }), original);
+  await until(() => small.done || small.error); assert.ifError(small.error);
+  await until(() => original.done || original.error); assert.ifError(original.error);
+  assert.equal((await probe(small.file)).video.height, Math.min(info.video.height, 480));
+  assert.equal((await probe(original.file)).video.height, info.video.height);
 });
