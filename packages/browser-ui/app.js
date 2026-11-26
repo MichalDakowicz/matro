@@ -321,9 +321,11 @@ function dock() {
   if (api.movieRequests || api.openMovieRequests) items.push(['movie-requests', api.movieRequests?.label || 'Movie requests', 'requests']);
   return `<div class="dock-wrap"><button class="dock-back" data-action="close-detail" aria-label="Close details" title="Back (Esc)">${icon('back')}</button><nav class="dock" aria-label="Library">${items.filter(([id]) => !api.hiddenTabs?.includes(id)).map(([id, label, glyph]) => `<button class="dock-item" data-tab="${id}" ${['downloads', 'movie-requests'].includes(id) ? `aria-label="${esc(label)}"` : ''} ${tab === id && !folderFilter ? `aria-current="page" title="Back to the landing page"` : ''}>${icon(glyph)}<span class="dock-label">${esc(label)}</span>${['movie', 'show', 'audio'].includes(id) ? `<span class="sr-only"> ${groups(id).length}</span>` : ''}</button>`).join('')}</nav></div>`;
 }
-let footerOpen = false;
+let footerOpen = false, savingUpdateChecks = false;
 function footer() {
-  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span><button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
+  const updatesEnabled = library.checkForUpdates === true;
+  const updates = api.setUpdateChecks ? `<span class="theme-setting"><span>Check for updates</span><button type="button" class="switch ${updatesEnabled ? 'on' : ''}" data-update-checks role="switch" aria-label="Check for updates" aria-checked="${updatesEnabled}"></button></span>` : '';
+  return `<button class="help-button" data-action="about" aria-label="About Matro and this library" aria-controls="library-footer" aria-expanded="${footerOpen}">?</button><footer id="library-footer" class="library-footer ${footerOpen ? 'open' : ''}"><span class="local-status"><span class="status-dot"></span>Media library</span><span class="dim">Local files and SSH media. No account, no uploads.</span><span id="scanner-status" class="scanner-status" role="status"></span>${metadataEnabled ? '<span class="dim">Metadata and artwork from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>' : ''}<span class="motion-setting" role="group" aria-label="Poster motion"><span>Motion</span>${[['system', `Match Windows${reduceMotion.matches ? ' (off)' : ' (on)'}`], ['on', 'On'], ['off', 'Off']].map(([id, label]) => `<button class="chip" data-motion="${id}" aria-pressed="${(library.preferences.motion || 'system') === id}">${label}</button>`).join('')}</span><span class="theme-setting" role="group" aria-label="Theme"><span>Theme</span>${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => `<button class="chip" data-theme-mode="${id}" aria-pressed="${window.matroTheme?.get() === id}">${label}</button>`).join('')}</span>${updates}<button class="text-button" data-action="shortcuts" aria-label="Keyboard shortcuts">Shortcuts</button></footer>`;
 }
 const sectionGrid = (title, items, count, more) => items.length ? `<section class="section"><div class="section-heading"><h2>${title}</h2><span>${count}${more ? ` · <button class="text-button" data-tab="${more}">See all</button>` : ''}</span></div><div class="grid">${items.map(poster).join('')}</div></section>` : '';
 const kinds = [['show', 'Shows', 'shows'], ['movie', 'Movies', 'titles'], ['audio', 'Music & audio', 'files']];
@@ -1474,6 +1476,20 @@ document.addEventListener('click', event => {
     if (btn.dataset.enqueueShow) return enqueue(btn.dataset.enqueueShow, true);
     if (btn.dataset.tab) return goTab(btn.dataset.tab);
     if (btn.dataset.themeMode) { window.matroTheme.set(btn.dataset.themeMode); return; }
+    if (btn.hasAttribute('data-update-checks') && api.setUpdateChecks) {
+      if (savingUpdateChecks) return;
+      savingUpdateChecks = true;
+      try {
+        const enabled = await api.setUpdateChecks(library.checkForUpdates !== true);
+        library.checkForUpdates = enabled;
+        const control = $('[data-update-checks]');
+        control?.classList.toggle('on', enabled);
+        control?.setAttribute('aria-checked', String(enabled));
+      } finally {
+        savingUpdateChecks = false;
+      }
+      return;
+    }
     if (btn.dataset.motion) {
       library.preferences.motion = btn.dataset.motion; applyMotion(); await savePreferences({ motion: library.preferences.motion });
       document.querySelectorAll('[data-motion]').forEach(chip => chip.setAttribute('aria-pressed', String(chip.dataset.motion === btn.dataset.motion)));

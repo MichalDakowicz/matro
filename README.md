@@ -40,6 +40,11 @@ npm run dist                     # Windows installer
 
 Tests generate isolated media and profiles under `.test-media/` and temporary directories. Download tests use mock clients and never download real releases. Set `MATRO_METADATA=off` to prevent metadata requests during local testing.
 
+In the standalone desktop library, open **?** and turn on **Check for updates** to check GitHub
+on launch and when you enable the setting. If a newer stable release is available, Matro offers
+to open its release page so you can download the installer. The setting starts off and stays
+off until you enable it.
+
 ### Posters and metadata (TMDB, optional)
 
 Matro can fill in posters, backdrops, director/creator, year, genres, overview, episode names and the TMDb rating from [TMDB](https://www.themoviedb.org/). It is off unless you provide credentials. Put them in a `.env` file — in the project folder for development, or in the user-data folder for a packaged app:

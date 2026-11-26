@@ -98,6 +98,10 @@ test('viewers request a movie and the owner searches for a release without start
     await signIn('viewer');
     await page.evaluate(() => window.matroTheme.set('light'));
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    await page.getByRole('button', { name: 'About Matro and this library' }).press('Enter');
+    await expect(page.locator('#library-footer')).toHaveClass(/\bopen\b/);
+    await expect(page.getByRole('switch', { name: 'Check for updates' })).toHaveCount(0);
+    await page.keyboard.press('Escape');
     await expect(page.getByRole('button', { name: 'Downloads', exact: true })).toHaveCount(0);
     const requestTab = page.getByRole('button', { name: 'Request a movie', exact: true });
     await requestTab.focus();

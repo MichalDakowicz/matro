@@ -37,6 +37,57 @@ test('the featured reel starts on a different title when reopened', async ({}, t
   } finally { await app.close(); }
 });
 
+test('desktop update checks require opt-in and remember the setting across launches', async ({}, testInfo) => {
+  test.skip(!!process.env.MATRO_EXECUTABLE, 'The update fixture launches the source app');
+  const profile = testInfo.outputPath('profile');
+  const endpoint = 'https://api.github.com/repos/MichalDakowicz/matro/releases/latest';
+  const releasePage = 'https://github.com/MichalDakowicz/matro/releases/tag/v999.0.0';
+  const options = { ...launchOptions(profile), args: [path.join(__dirname, 'update-check-host.cjs'), '--local'] };
+  await fs.mkdir(profile, { recursive: true });
+  let app;
+  const fixture = () => app.evaluate(() => globalThis.matroUpdateFixture);
+  async function openSettings(theme) {
+    app = await electron.launch(options);
+    const page = await app.firstWindow();
+    await page.getByRole('button', { name: 'About Matro and this library' }).press('Enter');
+    await page.getByRole('button', { name: theme, exact: true }).press('Enter');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme.toLowerCase());
+    return page.getByRole('switch', { name: 'Check for updates' });
+  }
+  try {
+    let toggle = await openSettings('Dark');
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect((await fixture()).requests).toEqual([]);
+    await toggle.press('Space');
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await expect(toggle).toBeFocused();
+    await expect.poll(async () => (await fixture()).opened).toEqual([releasePage]);
+    expect((await fixture()).requests).toEqual([{ url: endpoint, credentials: 'omit' }]);
+    expect((await fixture()).offers).toEqual(['Matro 999.0.0 is available.']);
+    await app.close();
+
+    toggle = await openSettings('Light');
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await expect.poll(async () => (await fixture()).opened).toEqual([releasePage]);
+    await toggle.press('Enter');
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await app.evaluate(() => { globalThis.matroUpdateFixture.status = 503; });
+    await toggle.press('Enter');
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await expect.poll(async () => (await fixture()).requests.length).toBe(2);
+    expect((await fixture()).offers).toHaveLength(1);
+    await toggle.press('Enter');
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await app.close();
+
+    toggle = await openSettings('Dark');
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect((await fixture()).requests).toEqual([]);
+  } finally {
+    await app?.close();
+  }
+});
+
 test('the selected movie metadata language updates the grid title and poster', async ({}, testInfo) => {
   test.skip(!!process.env.MATRO_EXECUTABLE, 'Packaged builds do not accept fixture TMDB endpoints');
   const profile = testInfo.outputPath('profile');
